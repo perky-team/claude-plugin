@@ -223,7 +223,7 @@ In-repo files used as sources are NOT modified by the plugin — they need no sp
 - Slug = kebab-case, ASCII or transliterated, 1–50 chars.
 - Conflict → suffix with date: `pods.md` taken → `pods-2026-05-11.md`.
 - Query pages: always `<date>-<slug>.md`.
-- The subdirectory = the type; mismatch between `type:` and the directory is a lint error.
+- The subdirectory holds pages of the corresponding `type`: `concept/` → `type: concept`, `person/` → `type: person`, `source/` → `type: source`, `queries/` → `type: query`. Any other combination is a lint error.
 
 ### 4.3 Link rules
 
