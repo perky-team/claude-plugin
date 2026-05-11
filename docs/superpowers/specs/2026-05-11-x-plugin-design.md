@@ -297,7 +297,25 @@ If the user asks a question that might be covered by accumulated project knowled
 prefer checking the wiki first — either grep/read `docs/wiki/pages/` directly,
 or invoke `/x:query "<question>"` for synthesized answer with citations.
 
-Maintenance commands (plugin `x`):
+## Ingesting superpowers artifacts
+
+After a `superpowers:brainstorming` or `superpowers:writing-plans` session writes a
+finalized artifact to `docs/superpowers/specs/` or `docs/superpowers/plans/`,
+consider ingesting it into the wiki:
+
+1. `/x:ingest docs/superpowers/specs/<file>.md` — copies into `raw/files/`
+2. `/x:compile docs/wiki/raw/files/<file>.md` — synthesizes concept pages
+
+This makes the design/plan knowledge searchable via `/x:query`.
+
+**Caveat:** design docs and plans date themselves. If the implementation later
+diverges from the doc, the derived concept pages become stale. Mitigate by
+re-running `/x:lint` (flags `status: active` pages older than 90 days) or
+re-ingesting the actual code/README/ADR after merge so the wiki reflects
+present-state, not the original intent.
+
+## Maintenance commands (plugin `x`)
+
 - `/x:ingest <path|url|->` — capture a source into raw/
 - `/x:compile [path]` — synthesize pages from raw/ sources
 - `/x:query "<question>"` — search wiki and answer with citations
