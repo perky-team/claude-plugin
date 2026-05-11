@@ -1,4 +1,4 @@
-# Design: `x` plugin — persistent knowledge wiki
+# Design: `wiki` plugin — persistent knowledge wiki
 
 **Date:** 2026-05-11
 **Status:** Approved (brainstorming)
@@ -17,30 +17,30 @@
 ### 2.1 Структура плагина
 
 ```
-x/                                  ← плагин (репо или ~/.claude/plugins/x/)
+wiki/                               ← плагин (репо или ~/.claude/plugins/wiki/)
 ├── .claude-plugin/
-│   └── plugin.json                 ← манифест (имя=x, версия, описание)
+│   └── plugin.json                 ← манифест (имя=wiki, версия, описание)
 ├── skills/
-│   ├── init/SKILL.md               → /x:init
-│   ├── ingest/SKILL.md             → /x:ingest <path|url|->
-│   ├── compile/SKILL.md            → /x:compile [<path>]
-│   ├── query/SKILL.md              → /x:query "<вопрос>"
-│   ├── lint/SKILL.md               → /x:lint
+│   ├── init/SKILL.md               → /wiki:init
+│   ├── ingest/SKILL.md             → /wiki:ingest <path|url|->
+│   ├── compile/SKILL.md            → /wiki:compile [<path>]
+│   ├── query/SKILL.md              → /wiki:query "<вопрос>"
+│   ├── lint/SKILL.md               → /wiki:lint
 │   └── _shared/                    ← reference-файлы (frontmatter-schemas.md, compile-guide.md)
 └── README.md
 ```
 
-**Skill-per-operation:** каждый `SKILL.md` автоматически даёт слэш-команду `/x:<name>` + автоактивацию по триггер-фразам из `description`. Файлы `commands/` не нужны (deprecated — merged into skills).
+**Skill-per-operation:** каждый `SKILL.md` автоматически даёт слэш-команду `/wiki:<name>` + автоактивацию по триггер-фразам из `description`. Файлы `commands/` не нужны (deprecated — merged into skills).
 
 **Никаких:** `commands/`, `hooks/`, `scripts/`, бинарных утилит, install-deps.
 
-**Координация скиллов** — через два файла, создаваемых при `/x:init`:
-1. `<repo>/.claude/rules/x-wiki.md` — короткое (~25 строк) глобальное правило БЕЗ `paths:`. Грузится при каждой сессии в репо. Уведомляет любого Claude/скилл о наличии вики и команд.
+**Координация скиллов** — через два файла, создаваемых при `/wiki:init`:
+1. `<repo>/.claude/rules/wiki.md` — короткое (~25 строк) глобальное правило БЕЗ `paths:`. Грузится при каждой сессии в репо. Уведомляет любого Claude/скилл о наличии вики и команд.
 2. `<repo>/docs/wiki/CLAUDE.md` — детальные frontmatter-схемы, naming, link rules, compile rules. Грузится автоматически когда Claude читает любой файл из `docs/wiki/**`.
 
 ### 2.2 Обнаружение wiki
 
-Все скиллы кроме `/x:init` идут от CWD вверх до первой папки, содержащей `docs/wiki/CLAUDE.md`, либо до корня git-репо (`.git`). Не нашёл — ошибка «`/x:init` сначала».
+Все скиллы кроме `/wiki:init` идут от CWD вверх до первой папки, содержащей `docs/wiki/CLAUDE.md`, либо до корня git-репо (`.git`). Не нашёл — ошибка «`/wiki:init` сначала».
 
 ### 2.3 Структура `docs/wiki/`
 
@@ -57,7 +57,7 @@ docs/wiki/
     ├── concept/
     ├── person/
     ├── source/         ← source-summary.md файлы
-    └── queries/        ← ответы /x:query (filed → promoted = перенос в concept/)
+    └── queries/        ← ответы /wiki:query (filed → promoted = перенос в concept/)
 ```
 
 **Подпапки по типу, а не плоско:** упрощает grep-фильтрацию, glob-патчи, навигацию глазами. Тип во frontmatter обязан совпадать с подпапкой.
@@ -66,7 +66,7 @@ docs/wiki/
 
 ## 3. Workflow скиллов
 
-### 3.1 `/x:init`
+### 3.1 `/wiki:init`
 
 **Триггер:** "init wiki", "create wiki", "setup knowledge base"
 **Аргументы:** нет
@@ -76,12 +76,12 @@ docs/wiki/
 2. Если `docs/wiki/` существует — ошибка «уже есть».
 3. Создать каркас `docs/wiki/{raw/{articles,files,pastes},pages/{concept,person,source,queries}}` + `.gitkeep` в пустых.
 4. Записать: `docs/wiki/CLAUDE.md`, `docs/wiki/README.md`, `docs/wiki/index.md`.
-5. Записать `<repo>/.claude/rules/x-wiki.md`. Если файл уже есть — не перезаписывать, предупредить.
+5. Записать `<repo>/.claude/rules/wiki.md`. Если файл уже есть — не перезаписывать, предупредить.
 6. Финальное сообщение пользователю.
 
 **Tools:** Bash, Write, Read.
 
-### 3.2 `/x:ingest`
+### 3.2 `/wiki:ingest`
 
 **Триггер:** "ingest", "сохрани в вики", "save source", "add to wiki"
 **Аргументы:** `<path|url|->` — путь, URL или `-` (inline-вставка)
@@ -94,12 +94,12 @@ docs/wiki/
    - `-` → последний крупный paste из контекста → `raw/pastes/<slug>-<date>.md`
 3. Slug из title/URL/filename, kebab-case. Конфликт → суффикс датой.
 4. Записать с frontmatter raw-файла (см. §4.1).
-5. Сообщить пользователю что записано и предложить `/x:compile`.
+5. Сообщить пользователю что записано и предложить `/wiki:compile`.
 
 **Tools:** Read, Write, WebFetch, Bash.
 **Edge:** URL-дубликат → предупредить, спросить overwrite. PDF → Read извлечёт текст.
 
-### 3.3 `/x:compile`
+### 3.3 `/wiki:compile`
 
 **Триггер:** "compile", "обработай источники", "synthesize pages"
 **Аргументы:** `[<path>]` — конкретный raw-файл; без аргумента → glob по `raw/**` с `compiled: false`
@@ -119,7 +119,7 @@ docs/wiki/
 **Tools:** Read, Write, Edit, Grep, Glob.
 **Edge:** конфликт фактов → callout-блок (см. §4.4).
 
-### 3.4 `/x:query`
+### 3.4 `/wiki:query`
 
 **Триггер:** "query wiki", "спроси вики", "что в вики про X"
 **Аргументы:** `<question>` — строка вопроса
@@ -137,7 +137,7 @@ docs/wiki/
 **Tools:** Read, Write, Grep, Glob.
 **Edge:** пустой grep → честно «нет данных, ничего не записал».
 
-### 3.5 `/x:lint`
+### 3.5 `/wiki:lint`
 
 **Триггер:** "lint wiki", "проверь вики", "wiki audit"
 **Аргументы:** нет
@@ -214,7 +214,7 @@ compiled-to: []
 
 - Только обычный markdown `[text](relative/path.md)`. Никаких `[[wikilinks]]`.
 - Пути относительные от файла где ссылка.
-- Concept-страница: ≥ 3 исходящих ссылок (правило `/x:lint`).
+- Concept-страница: ≥ 3 исходящих ссылок (правило `/wiki:lint`).
 - **Backlink audit при compile обязателен.**
 - Ссылка на `raw/` — только в `sources:` frontmatter, не в теле.
 
@@ -283,7 +283,7 @@ compiled-to: []
 
 ---
 
-## 5. Содержимое `<repo>/.claude/rules/x-wiki.md`
+## 5. Содержимое `<repo>/.claude/rules/wiki.md`
 
 ```markdown
 # Project knowledge wiki
@@ -295,7 +295,7 @@ This repository has an indexed knowledge wiki at `docs/wiki/`.
 
 If the user asks a question that might be covered by accumulated project knowledge,
 prefer checking the wiki first — either grep/read `docs/wiki/pages/` directly,
-or invoke `/x:query "<question>"` for synthesized answer with citations.
+or invoke `/wiki:query "<question>"` for synthesized answer with citations.
 
 ## Ingesting superpowers artifacts
 
@@ -303,23 +303,23 @@ After a `superpowers:brainstorming` or `superpowers:writing-plans` session write
 finalized artifact to `docs/superpowers/specs/` or `docs/superpowers/plans/`,
 consider ingesting it into the wiki:
 
-1. `/x:ingest docs/superpowers/specs/<file>.md` — copies into `raw/files/`
-2. `/x:compile docs/wiki/raw/files/<file>.md` — synthesizes concept pages
+1. `/wiki:ingest docs/superpowers/specs/<file>.md` — copies into `raw/files/`
+2. `/wiki:compile docs/wiki/raw/files/<file>.md` — synthesizes concept pages
 
-This makes the design/plan knowledge searchable via `/x:query`.
+This makes the design/plan knowledge searchable via `/wiki:query`.
 
 **Caveat:** design docs and plans date themselves. If the implementation later
 diverges from the doc, the derived concept pages become stale. Mitigate by
-re-running `/x:lint` (flags `status: active` pages older than 90 days) or
+re-running `/wiki:lint` (flags `status: active` pages older than 90 days) or
 re-ingesting the actual code/README/ADR after merge so the wiki reflects
 present-state, not the original intent.
 
-## Maintenance commands (plugin `x`)
+## Maintenance commands (plugin `wiki`)
 
-- `/x:ingest <path|url|->` — capture a source into raw/
-- `/x:compile [path]` — synthesize pages from raw/ sources
-- `/x:query "<question>"` — search wiki and answer with citations
-- `/x:lint` — audit links, orphan pages, stale frontmatter
+- `/wiki:ingest <path|url|->` — capture a source into raw/
+- `/wiki:compile [path]` — synthesize pages from raw/ sources
+- `/wiki:query "<question>"` — search wiki and answer with citations
+- `/wiki:lint` — audit links, orphan pages, stale frontmatter
 
 Detailed frontmatter schemas, naming conventions, and link rules are in
 `docs/wiki/CLAUDE.md`, which auto-loads when Claude works with files under `docs/wiki/`.
@@ -331,7 +331,7 @@ Detailed frontmatter schemas, naming conventions, and link rules are in
 
 | Не делаем | Почему |
 |---|---|
-| `commands/` директория | Skill автоматически даёт `/x:<name>`. Дублирование не нужно. |
+| `commands/` директория | Skill автоматически даёт `/wiki:<name>`. Дублирование не нужно. |
 | `hooks/` | Нет внешних зависимостей → нечего инсталлировать. |
 | `scripts/` | Встроенных тулзов Claude Code достаточно. Кросс-платформенность даром. |
 | `qmd` / embeddings | Grep + LLM-reasoning достаточно. |
@@ -339,9 +339,9 @@ Detailed frontmatter schemas, naming conventions, and link rules are in
 | Multi-wiki в одном репо | Одна вики на репо. Можно расширить позже без ломки. |
 | Git auto-commit | Пользователь коммитит сам. |
 | `log.md` | Состояние = файлы. Git history + frontmatter покрывают. |
-| `/x:remove` | Удаляешь руками. Опасная операция не в один клик. |
+| `/wiki:remove` | Удаляешь руками. Опасная операция не в один клик. |
 | Перевод языка | Compile сохраняет язык источника. |
-| Авто-исправление в `/x:lint` | Только отчёт, решение за пользователем. |
+| Авто-исправление в `/wiki:lint` | Только отчёт, решение за пользователем. |
 
 ---
 
