@@ -1,0 +1,71 @@
+---
+name: ingest
+description: |
+  Capture an external source into the wiki's raw/ folder. Accepts a URL, a path to a file OUTSIDE the repo, or `-` for the last paste from chat. For files already in the repo, refuse and point the user to `/x-wiki:compile <path>` (no copy needed). Use when the user says "ingest", "save to wiki", "add to wiki", or supplies a URL/file they want captured.
+argument-hint: <url|path|->
+allowed-tools: Bash(git rev-parse:*) Bash(test:*) Read Write Grep WebFetch
+---
+
+# /x-wiki:ingest
+
+You are capturing one external source into the `x-wiki` raw/ folder.
+
+`$ARGUMENTS` is one of:
+- A URL beginning with `http://` or `https://`.
+- An absolute or relative path to a file.
+- The literal `-` (meaning "use the last large paste from the conversation").
+
+## Step 1 — Find the wiki
+
+Run `git rev-parse --show-toplevel` to get `<root>`. Confirm `<root>/docs/wiki/CLAUDE.md` exists. If not, stop and tell the user to run `/x-wiki:init` first.
+
+## Step 2 — Classify the argument and reject in-repo paths
+
+- If `$ARGUMENTS` matches `^https?://` → it's a URL. Continue to Step 3 (URL branch).
+- Else if `$ARGUMENTS` == `-` → it's a paste. Continue to Step 3 (paste branch).
+- Else treat as a path. Resolve to an absolute path.
+  - If the resolved path is under `<root>/` → REFUSE. Tell the user: "That file is already in the repo. Use `/x-wiki:compile <path>` directly — no point copying." Stop here.
+  - Else continue to Step 3 (external file branch).
+
+## Step 3 — Capture
+
+### URL branch
+
+1. WebFetch the URL with a prompt like: "Convert this page to clean markdown, preserving headings, lists, code blocks. Return only the markdown content; no commentary."
+2. Pick a slug:
+   - Prefer a slug derived from the page's `<title>` if extractable.
+   - Else from the URL path's last segment.
+   - kebab-case, ASCII, 1–50 chars.
+3. If `<root>/docs/wiki/raw/articles/<slug>.md` exists or any file in that directory has the same `source-url` in its frontmatter, ask the user whether to overwrite. If declined, append `-YYYY-MM-DD` to the slug.
+4. Build the frontmatter (see §4.1 of the spec, raw-file schema). Set `type: raw-article`, `source-url:` to the URL, `source-type: article`, `ingested:` to today's ISO date, `compiled: false`, `compiled-to: []`.
+5. Write `<root>/docs/wiki/raw/articles/<slug>.md` with the frontmatter followed by the fetched markdown body.
+
+### External file branch
+
+1. Read the file. For PDFs, Claude Code's Read tool extracts text; rely on that. For binaries other than PDF, refuse with: "Can only ingest text-readable files. Convert it first."
+2. Slug from the file's base name (without extension), kebab-case. Conflict → suffix with date.
+3. Frontmatter: `type: raw-file`, `source-url: null`, `source-type:` pick one of `paper|transcript|code|doc` based on file extension/content, `ingested:` today, `compiled: false`, `compiled-to: []`.
+4. Write `<root>/docs/wiki/raw/files/<slug>.md` with frontmatter + content.
+
+### Paste branch
+
+1. Scan the conversation backward for the largest user-supplied text block that isn't already part of a prior tool result. If you can't find a clear candidate, ask the user to re-paste the content.
+2. Pick a 3–6 word title for the content via LLM reasoning. Slug = kebab-case of the title.
+3. File name: `<YYYY-MM-DD>-<slug>.md`.
+4. Frontmatter: `type: raw-paste`, `source-url: null`, `source-type: doc`, `ingested:` today, `compiled: false`, `compiled-to: []`.
+5. Write `<root>/docs/wiki/raw/pastes/<filename>` with frontmatter + paste body.
+
+## Step 4 — Report
+
+Tell the user:
+- What was saved and where (full path).
+- The slug and approximate word count.
+- The suggested next step: `/x-wiki:compile <that-path>`.
+
+Do not run compile automatically.
+
+## Edge cases
+
+- URL that returns non-text (image, binary) → refuse with the WebFetch error.
+- File path that does not exist → refuse with "file not found: …".
+- Paste branch when the conversation has no large paste → ask the user to paste the content as the next message and re-run.
