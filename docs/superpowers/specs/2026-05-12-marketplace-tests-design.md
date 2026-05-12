@@ -32,12 +32,18 @@ Tests are written in TypeScript (`.test.ts`) — Vitest handles transpilation, a
 
 ## helpers.ts
 
-Pure functions, no test state:
+Pure functions, no test state.
 
-- `repoRoot()` — resolves `__dirname/..` once.
+- `repoRoot()` — returns the absolute repo root. Because `package.json` sets `"type": "module"`, `__dirname` is undefined in ESM; derive the helpers' own directory from `import.meta.url` and resolve `..` from there:
+  ```ts
+  import { fileURLToPath } from 'node:url';
+  import { dirname, resolve } from 'node:path';
+  const here = dirname(fileURLToPath(import.meta.url));
+  export const repoRoot = () => resolve(here, '..');
+  ```
 - `readMarketplace()` — parses `.claude-plugin/marketplace.json` and returns the typed object.
 - `findPlugins()` — globs `plugins/*/.claude-plugin/plugin.json`, returns `{ dir, name, manifest }[]`.
-- `findSkills(pluginDir)` — globs `skills/*/SKILL.md` under the plugin, **excluding `skills/_shared/`**, returns `{ dir, name, frontmatter, body, raw }[]`.
+- `findSkills(pluginDir)` — returns the plugin's skills as `{ dir, name, frontmatter, body, raw }[]`. A "skill" is any directory directly under `<pluginDir>/skills/` **whose name does not start with `_`** and which contains a `SKILL.md`. The `_`-prefix convention reserves directories like `_shared/`, `_meta/`, etc. for non-skill assets.
 - `findTemplates(pluginDir)` — globs `skills/_shared/templates/*`.
 - `parseFrontmatter(path)` — wraps `gray-matter`, throws a readable error on YAML parse failure.
 
@@ -57,7 +63,7 @@ Reads `.claude-plugin/marketplace.json` once in a `beforeAll`. Then:
   - That directory contains `.claude-plugin/plugin.json`.
   - The plugin's `plugin.json` `name` matches `plugins[i].name`.
 - No duplicate `plugins[].name` values.
-- Repo-root `README.md` mentions each plugin name (case-sensitive substring match) — guards against rename drift.
+- Repo-root `README.md` lists every plugin in its plugins table. The check parses the markdown table whose header row contains `| Plugin |` and extracts the first column; each `plugins[].name` from the manifest must appear (substring match against the trimmed cell, since cells contain markdown like `` [`p-wiki`](./plugins/p-wiki/) ``). This narrows the original "mention anywhere in README" check, which had too many false-positive paths.
 
 ### plugin-manifests.test.ts
 
@@ -91,9 +97,11 @@ For each plugin:
 
 - Every file under `skills/_shared/templates/` is non-empty.
 - For each SKILL.md, regex-extract every `${CLAUDE_SKILL_DIR}/../_shared/templates/<filename>` reference and assert the file exists.
-- Inverse check: every template file is referenced by at least one SKILL.md. Failure = dead template. Hard assertion — drives cleanup.
+- Inverse check: every template file is referenced by at least one SKILL.md. Failure = dead template — hard assertion.
 
 The regex is tightened to: `\$\{CLAUDE_SKILL_DIR\}/\.\./_shared/templates/[^\s\`)]+`. Matches end at whitespace, backtick, or closing paren.
+
+**Workflow consequence.** Because the inverse check is a hard assertion, you cannot land a template file in one commit and the SKILL.md that references it in a separate, later commit — tests will fail between the two. Land them together. This is intentional: it prevents the templates directory from growing unused files, but it does constrain how PRs are split.
 
 ## package.json
 
@@ -139,5 +147,5 @@ node_modules/
 ## Risks / open questions
 
 - **Helper discovery is path-shaped.** If someone adds `plugins/foo/sub/bar/.claude-plugin/plugin.json` (nested), the glob `plugins/*/.claude-plugin/plugin.json` won't catch it. Acceptable — marketplace convention is one level deep.
-- **Cross-OS path separators.** All globs use forward slashes; Node's `path.posix` is used for portable comparisons. Tested on Windows.
+- **Cross-OS path separators.** All globs use forward slashes. String comparisons of paths go through `path.posix` (so `plugins/p-wiki` matches on both OSes); FS operations go through `path.join`. Must be verified on Windows and Linux during implementation — not yet validated.
 - **Dependency footprint.** Three small devDeps (`vitest`, `gray-matter`, `semver`). `node_modules` will be ~40 MB. The user already runs Node tooling, so this is fine.
