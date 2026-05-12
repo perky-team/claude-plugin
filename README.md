@@ -2,11 +2,33 @@
 
 A Claude Code plugin that turns any git repo into an indexed markdown knowledge wiki under `docs/wiki/`. Skills: `init`, `ingest`, `compile`, `query`, `lint`.
 
-## Install (local dev)
+## Install
 
-1. Clone this repo somewhere.
-2. Add it to Claude Code as a plugin via `/plugin` (or whatever the current install command is — see `https://code.claude.com/docs/en/plugins`).
-3. Open a project repo. Run `/x-wiki:init`.
+This repository is both the plugin and its own marketplace. The marketplace name is `andrey-plugins`.
+
+Once the repo is published at `<owner>/x-wiki` on GitHub, install with:
+
+```text
+/plugin marketplace add <owner>/x-wiki
+/plugin install x-wiki@andrey-plugins
+```
+
+From a non-GitHub git host, pass the full URL instead:
+
+```text
+/plugin marketplace add https://gitlab.com/<owner>/x-wiki.git
+/plugin install x-wiki@andrey-plugins
+```
+
+## Local development
+
+Clone the repo and load it without installing:
+
+```bash
+claude --plugin-dir C:/path/to/x-wiki
+```
+
+After edits, run `/reload-plugins` inside Claude Code to pick them up without restarting.
 
 ## Commands
 
@@ -20,4 +42,12 @@ A Claude Code plugin that turns any git repo into an indexed markdown knowledge 
 
 ## Design
 
-See `docs/superpowers/specs/2026-05-11-x-wiki-plugin-design.md` in this repo.
+See `docs/superpowers/specs/2026-05-11-x-wiki-plugin-design.md` and `docs/superpowers/plans/2026-05-11-x-wiki-plugin.md` in this repo.
+
+## Validate
+
+After cloning, validate the plugin and marketplace structure:
+
+```bash
+claude plugin validate .
+```

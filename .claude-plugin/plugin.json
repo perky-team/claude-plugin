@@ -1,5 +1,9 @@
 {
   "name": "x-wiki",
   "version": "0.1.0",
-  "description": "Persistent markdown knowledge wiki under docs/wiki/. Skills: init, ingest, compile, query, lint."
+  "description": "Persistent markdown knowledge wiki under docs/wiki/. Skills: init, ingest, compile, query, lint.",
+  "author": {
+    "name": "Andrey Sukharev",
+    "email": "andrey.sukharev@exinity.com"
+  }
 }

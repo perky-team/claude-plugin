@@ -1,0 +1,15 @@
+{
+  "name": "andrey-plugins",
+  "description": "Personal Claude Code plugins by Andrey Sukharev.",
+  "owner": {
+    "name": "Andrey Sukharev",
+    "email": "andrey.sukharev@exinity.com"
+  },
+  "plugins": [
+    {
+      "name": "x-wiki",
+      "source": "./",
+      "description": "Persistent markdown knowledge wiki under docs/wiki/. Skills: init, ingest, compile, query, lint."
+    }
+  ]
+}
