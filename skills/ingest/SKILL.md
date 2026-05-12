@@ -3,7 +3,7 @@ name: ingest
 description: |
   Capture an external source into the wiki's raw/ folder. Accepts a URL, a path to a file OUTSIDE the repo, or `-` for the last paste from chat. For files already in the repo, refuse and point the user to `/x-wiki:compile <path>` (no copy needed). Use when the user says "ingest", "save to wiki", "add to wiki", or supplies a URL/file they want captured.
 argument-hint: <url|path|->
-allowed-tools: Bash(git rev-parse:*) Bash(test:*) Read Write Grep WebFetch
+allowed-tools: Bash(git rev-parse:*) Bash(test:*) Bash(realpath:*) Read Write Grep WebFetch
 ---
 
 # /x-wiki:ingest
@@ -23,7 +23,7 @@ Run `git rev-parse --show-toplevel` to get `<root>`. Confirm `<root>/docs/wiki/C
 
 - If `$ARGUMENTS` matches `^https?://` → it's a URL. Continue to Step 3 (URL branch).
 - Else if `$ARGUMENTS` == `-` → it's a paste. Continue to Step 3 (paste branch).
-- Else treat as a path. Resolve to an absolute path.
+- Else treat as a path. Resolve to an absolute path via `realpath` (e.g. `realpath -- "<arg>"` via Bash). If `realpath` fails (path doesn't exist), report "file not found: <arg>" and stop.
   - If the resolved path is under `<root>/` → REFUSE. Tell the user: "That file is already in the repo. Use `/x-wiki:compile <path>` directly — no point copying." Stop here.
   - Else continue to Step 3 (external file branch).
 
@@ -36,7 +36,10 @@ Run `git rev-parse --show-toplevel` to get `<root>`. Confirm `<root>/docs/wiki/C
    - Prefer a slug derived from the page's `<title>` if extractable.
    - Else from the URL path's last segment.
    - kebab-case, ASCII, 1–50 chars.
-3. If `<root>/docs/wiki/raw/articles/<slug>.md` exists or any file in that directory has the same `source-url` in its frontmatter, ask the user whether to overwrite. If declined, append `-YYYY-MM-DD` to the slug.
+3. Check for conflicts in this order:
+   a. **Same URL already captured (potentially under a different slug):** Grep `<root>/docs/wiki/raw/articles/` for `^source-url: <url>$` (using the Grep tool). If a match is found, identify the existing file by name and ask: "this URL was already captured as `<existing-filename>` — replace it, or save the new copy under a dated slug?"
+   b. **Same slug exists with a different URL:** if `<root>/docs/wiki/raw/articles/<slug>.md` exists and its `source-url` is something else, ask: "filename `<slug>.md` is taken by an unrelated source — overwrite it, or use the dated slug `<slug>-YYYY-MM-DD.md`?"
+   If the user declines overwrite in either case, append `-YYYY-MM-DD` to the slug.
 4. Build the frontmatter (see §4.1 of the spec, raw-file schema). Set `type: raw-article`, `source-url:` to the URL, `source-type: article`, `ingested:` to today's ISO date, `compiled: false`, `compiled-to: []`.
 5. Write `<root>/docs/wiki/raw/articles/<slug>.md` with the frontmatter followed by the fetched markdown body.
 
