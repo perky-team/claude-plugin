@@ -51,7 +51,7 @@ For each page that isn't `index.md` and isn't in `pages/queries/`:
 
 For each page:
 - Required fields per type must be present: base fields always; type-specific fields per the schema in `docs/wiki/CLAUDE.md`.
-- `type:` must match the parent directory: `pages/concept/foo.md` must have `type: concept`. Mismatch → record `{file, expected, actual}`.
+- `type:` must match the parent directory using this mapping: `pages/concept/` → `concept`, `pages/person/` → `person`, `pages/source/` → `source`, `pages/queries/` → `query` (note: directory is plural, type is singular — this is the only asymmetric case). Mismatch → record `{file, expected, actual}`.
 
 ### Underlinked (warning)
 

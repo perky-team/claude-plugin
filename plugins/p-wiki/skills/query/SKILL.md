@@ -78,7 +78,7 @@ If the user agrees in the next turn (any affirmative reply — yes / sure / do i
    - `status: filed` → `status: active`
    - Drop `question:` and `informed-by:` fields.
    - Add `updated:` = today.
-   - Add `sources:` set to the same list that was in `informed-by:`.
+   - Add `sources:` derived as the deduplicated union of the `sources:` arrays of every page that was in `informed-by:`. Rationale: `sources:` must point at the underlying documents (raw/ files or in-repo docs) the page synthesizes from — NOT at other wiki pages. Cited wiki pages already appear as inline links in the body; re-listing them in `sources:` breaks the schema contract and the `/p-wiki:lint` dead-sources check.
 4. Optionally run a follow-up backlink audit for the new concept page (same algorithm as compile step 4f).
 
 ## Edge cases

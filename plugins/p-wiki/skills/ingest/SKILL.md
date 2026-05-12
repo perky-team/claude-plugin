@@ -40,14 +40,14 @@ Run `git rev-parse --show-toplevel` to get `<root>`. Confirm `<root>/docs/wiki/C
    a. **Same URL already captured (potentially under a different slug):** Grep `<root>/docs/wiki/raw/articles/` for `^source-url: <url>$` (using the Grep tool). If a match is found, identify the existing file by name and ask: "this URL was already captured as `<existing-filename>` — replace it, or save the new copy under a dated slug?"
    b. **Same slug exists with a different URL:** if `<root>/docs/wiki/raw/articles/<slug>.md` exists and its `source-url` is something else, ask: "filename `<slug>.md` is taken by an unrelated source — overwrite it, or use the dated slug `<slug>-YYYY-MM-DD.md`?"
    If the user declines overwrite in either case, append `-YYYY-MM-DD` to the slug.
-4. Build the frontmatter (see §4.1 of the spec, raw-file schema). Set `type: raw-article`, `source-url:` to the URL, `source-type: article`, `ingested:` to today's ISO date, `compiled: false`, `compiled-to: []`.
+4. Build the frontmatter per the raw-file schema in `docs/wiki/CLAUDE.md` (auto-loaded). Set: `id: <slug>`, `type: raw-article`, `title:` extracted from the page's `<title>` (or first H1 if no title tag), `source-url:` the URL, `source-type: article`, `ingested:` today's ISO date, `compiled: false`, `compiled-to: []`.
 5. Write `<root>/docs/wiki/raw/articles/<slug>.md` with the frontmatter followed by the fetched markdown body.
 
 ### External file branch
 
 1. Read the file. For PDFs, Claude Code's Read tool extracts text; rely on that. For binaries other than PDF, refuse with: "Can only ingest text-readable files. Convert it first."
 2. Slug from the file's base name (without extension), kebab-case. Conflict → suffix with date.
-3. Frontmatter: `type: raw-file`, `source-url: null`, `source-type:` pick one of `paper|transcript|code|doc` based on file extension/content, `ingested:` today, `compiled: false`, `compiled-to: []`.
+3. Frontmatter per the raw-file schema in `docs/wiki/CLAUDE.md`: `id: <slug>`, `type: raw-file`, `title:` the file's base name (without extension) in human-readable form, `source-url: null`, `source-type:` pick one of `paper|transcript|code|doc` based on file extension/content, `ingested:` today, `compiled: false`, `compiled-to: []`.
 4. Write `<root>/docs/wiki/raw/files/<slug>.md` with frontmatter + content.
 
 ### Paste branch
@@ -55,7 +55,7 @@ Run `git rev-parse --show-toplevel` to get `<root>`. Confirm `<root>/docs/wiki/C
 1. Scan the conversation backward for the largest user-supplied text block that isn't already part of a prior tool result. If you can't find a clear candidate, ask the user to re-paste the content.
 2. Pick a 3–6 word title for the content via LLM reasoning. Slug = kebab-case of the title.
 3. File name: `<YYYY-MM-DD>-<slug>.md`.
-4. Frontmatter: `type: raw-paste`, `source-url: null`, `source-type: doc`, `ingested:` today, `compiled: false`, `compiled-to: []`.
+4. Frontmatter per the raw-file schema in `docs/wiki/CLAUDE.md`: `id: <YYYY-MM-DD>-<slug>` (same as filename without `.md`), `type: raw-paste`, `title:` the 3–6 word title chosen in step 2, `source-url: null`, `source-type: doc`, `ingested:` today, `compiled: false`, `compiled-to: []`.
 5. Write `<root>/docs/wiki/raw/pastes/<filename>` with frontmatter + paste body.
 
 ## Step 4 — Report
