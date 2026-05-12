@@ -7,16 +7,16 @@ Distributed via the [`perky.team`](../../) marketplace (see the repo root for th
 ## Install
 
 ```text
-/plugin marketplace add <owner>/x
+/plugin marketplace add perky-team/claude-plugin
 /plugin install p-wiki@perky.team
 ```
 
-(Replace `<owner>/x` with whatever GitHub path the marketplace lives at — the marketplace.json sits at the repo root, not inside this plugin's folder.)
+The marketplace.json sits at the repo root, not inside this plugin's folder — so the `add` URL points at the repo, not at this subdirectory.
 
 From a non-GitHub git host:
 
 ```text
-/plugin marketplace add https://gitlab.com/<owner>/x.git
+/plugin marketplace add https://gitlab.com/perky-team/claude-plugin.git
 /plugin install p-wiki@perky.team
 ```
 

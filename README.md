@@ -10,17 +10,17 @@ A Claude Code plugin marketplace. Currently ships one plugin; more can land alon
 
 ## Install
 
-After this repo is published at `<owner>/x` (or wherever) on GitHub:
+After this repo is published at `perky-team/claude-plugin` (or wherever) on GitHub:
 
 ```text
-/plugin marketplace add <owner>/x
+/plugin marketplace add perky-team/claude-plugin
 /plugin install p-wiki@perky.team
 ```
 
 From a non-GitHub git host:
 
 ```text
-/plugin marketplace add https://gitlab.com/<owner>/x.git
+/plugin marketplace add https://gitlab.com/perky-team/claude-plugin.git
 /plugin install p-wiki@perky.team
 ```
 
