@@ -3,7 +3,7 @@ name: init
 description: |
   Initialize a markdown knowledge wiki at `docs/wiki/` of the current git repo and a global rule at `.claude/rules/x-wiki.md`. Use when the user says "init wiki", "create wiki", "setup knowledge base", or asks to start a new x-wiki.
 argument-hint: (no arguments)
-allowed-tools: Bash(git rev-parse:*) Bash(mkdir:*) Bash(ls:*) Read Write
+allowed-tools: Bash(git rev-parse:*) Bash(mkdir:*) Bash(ls:*) Bash(test:*) Read Write
 ---
 
 # /x-wiki:init
@@ -35,7 +35,7 @@ Create these directories (use `mkdir -p` via Bash):
 <root>/docs/wiki/pages/queries/
 ```
 
-Put a `.gitkeep` file in each leaf directory (8 files) so git tracks empty dirs.
+Put a `.gitkeep` file in each leaf directory (7 files) so git tracks empty dirs.
 
 ## Step 4 — Write the wiki content files
 
