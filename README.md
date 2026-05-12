@@ -24,6 +24,17 @@ From a non-GitHub git host:
 /plugin install p-wiki@perky.team
 ```
 
+## Tests
+
+Static validation of `marketplace.json`, every `plugin.json`, every `SKILL.md`, and template references.
+
+```bash
+npm install   # first time only
+npm test
+```
+
+Tests are static — no network, no `claude` CLI, no fixtures. See [`docs/superpowers/specs/2026-05-12-marketplace-tests-design.md`](./docs/superpowers/specs/2026-05-12-marketplace-tests-design.md) for the rationale.
+
 ## Repository layout
 
 ```
