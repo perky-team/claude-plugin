@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "vitest run",
+    "test": "vitest run tests",
     "test:watch": "vitest"
   },
   "devDependencies": {
