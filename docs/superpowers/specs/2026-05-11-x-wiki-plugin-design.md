@@ -200,7 +200,7 @@ source-type: article      # article | paper | transcript | code | doc
 question: "<verbatim original>"
 informed-by:
   - pages/concept/foo.md
-status: filed             # filed | promoted
+status: filed             # only value; promotion mutates type to concept
 ```
 (base: only `id`, `type`, `title`, `created`, `status`, `tags`)
 

@@ -3,7 +3,7 @@ name: ingest
 description: |
   Capture an external source into the wiki's raw/ folder. Accepts a URL, a path to a file OUTSIDE the repo, or `-` for the last paste from chat. For files already in the repo, refuse and point the user to `/x-wiki:compile <path>` (no copy needed). Use when the user says "ingest", "save to wiki", "add to wiki", or supplies a URL/file they want captured.
 argument-hint: <url|path|->
-allowed-tools: Bash(git rev-parse:*) Bash(test:*) Bash(realpath:*) Read Write Grep WebFetch
+allowed-tools: Bash(git rev-parse:*) Bash(realpath:*) Read Write Grep WebFetch
 ---
 
 # /x-wiki:ingest
