@@ -1,0 +1,17 @@
+{
+  "name": "perky-team-claude-plugin-tests",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/semver": "^7.5.0",
+    "gray-matter": "^4.0.3",
+    "semver": "^7.6.0",
+    "typescript": "^5.4.0",
+    "vitest": "^3.0.0"
+  }
+}
