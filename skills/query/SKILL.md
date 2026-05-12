@@ -67,16 +67,18 @@ Then stop. Do NOT pre-emptively promote.
 
 ## Step 8 — Handle promotion (only on user agreement)
 
-If the user agrees in the next turn:
+If the user agrees in the next turn (any affirmative reply — yes / sure / do it / promote — counts as agreement; anything else counts as decline):
 
-1. Move the file using Bash: `mv <src> <dst>`. Works on POSIX and on Windows via Git Bash (the Bash tool's default backend on Windows).
-2. Edit the moved file's frontmatter:
+1. Compute the target path: `<root>/docs/wiki/pages/concept/<slug>.md` (drop the `<YYYY-MM-DD>-` prefix from the query file's name). Check whether the target already exists.
+   - If it exists, refuse promotion and tell the user: `A concept page already exists at \`pages/concept/<slug>.md\`. Compile or earlier promotion created it. Merge by hand or pick a different slug — I won't overwrite it.` Then stop.
+   - Otherwise continue.
+2. Move the file in one step: `mv <root>/docs/wiki/pages/queries/<YYYY-MM-DD>-<slug>.md <root>/docs/wiki/pages/concept/<slug>.md`. Works on POSIX and on Windows via Git Bash.
+3. Edit the moved file's frontmatter:
    - `type: query` → `type: concept`
    - `status: filed` → `status: active`
    - Drop `question:` and `informed-by:` fields.
    - Add `updated:` = today.
    - Add `sources:` set to the same list that was in `informed-by:`.
-3. Rename the file to `pages/concept/<slug>.md` (drop the date prefix).
 4. Optionally run a follow-up backlink audit for the new concept page (same algorithm as compile step 4f).
 
 ## Edge cases
