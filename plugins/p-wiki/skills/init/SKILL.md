@@ -1,14 +1,14 @@
 ---
 name: init
 description: |
-  Initialize a markdown knowledge wiki at `docs/wiki/` of the current git repo and a global rule at `.claude/rules/x-wiki.md`. Use when the user says "init wiki", "create wiki", "setup knowledge base", or asks to start a new x-wiki.
+  Initialize a markdown knowledge wiki at `docs/wiki/` of the current git repo and a global rule at `.claude/rules/p-wiki.md`. Use when the user says "init wiki", "create wiki", "setup knowledge base", or asks to start a new p-wiki.
 argument-hint: (no arguments)
 allowed-tools: Bash(git rev-parse:*) Bash(mkdir:*) Bash(test:*) Read Write
 ---
 
-# /x-wiki:init
+# /p-wiki:init
 
-You are scaffolding the `x-wiki` knowledge base inside the current repo.
+You are scaffolding the `p-wiki` knowledge base inside the current repo.
 
 ## Step 1 — Find the repo root
 
@@ -53,18 +53,18 @@ Copy verbatim — no transformations.
 
 Ensure `<root>/.claude/rules/` exists (`mkdir -p`). Then:
 
-- If `<root>/.claude/rules/x-wiki.md` already exists, do NOT overwrite. Tell the user the file is present and they should review it before proceeding.
-- Otherwise, copy `${CLAUDE_SKILL_DIR}/../_shared/templates/x-wiki-rule.template.md` to `<root>/.claude/rules/x-wiki.md` verbatim.
+- If `<root>/.claude/rules/p-wiki.md` already exists, do NOT overwrite. Tell the user the file is present and they should review it before proceeding.
+- Otherwise, copy `${CLAUDE_SKILL_DIR}/../_shared/templates/p-wiki-rule.template.md` to `<root>/.claude/rules/p-wiki.md` verbatim.
 
 ## Step 6 — Final message
 
 Tell the user, in order:
 
 1. Where the wiki was created (`<root>/docs/wiki/`).
-2. That the global rule was created (or already existed) at `<root>/.claude/rules/x-wiki.md`.
+2. That the global rule was created (or already existed) at `<root>/.claude/rules/p-wiki.md`.
 3. Suggest next steps:
-   - For an external source: `/x-wiki:ingest <url-or-path>`.
-   - For a doc already in the repo (spec, README, ADR, etc.): `/x-wiki:compile <path>`.
+   - For an external source: `/p-wiki:ingest <url-or-path>`.
+   - For a doc already in the repo (spec, README, ADR, etc.): `/p-wiki:compile <path>`.
 4. Remind them this is just a scaffold — they're free to commit it or not.
 
 ## Edge cases

@@ -1,14 +1,14 @@
 ---
 name: ingest
 description: |
-  Capture an external source into the wiki's raw/ folder. Accepts a URL, a path to a file OUTSIDE the repo, or `-` for the last paste from chat. For files already in the repo, refuse and point the user to `/x-wiki:compile <path>` (no copy needed). Use when the user says "ingest", "save to wiki", "add to wiki", or supplies a URL/file they want captured.
+  Capture an external source into the wiki's raw/ folder. Accepts a URL, a path to a file OUTSIDE the repo, or `-` for the last paste from chat. For files already in the repo, refuse and point the user to `/p-wiki:compile <path>` (no copy needed). Use when the user says "ingest", "save to wiki", "add to wiki", or supplies a URL/file they want captured.
 argument-hint: <url|path|->
 allowed-tools: Bash(git rev-parse:*) Bash(realpath:*) Read Write Grep WebFetch
 ---
 
-# /x-wiki:ingest
+# /p-wiki:ingest
 
-You are capturing one external source into the `x-wiki` raw/ folder.
+You are capturing one external source into the `p-wiki` raw/ folder.
 
 `$ARGUMENTS` is one of:
 - A URL beginning with `http://` or `https://`.
@@ -17,14 +17,14 @@ You are capturing one external source into the `x-wiki` raw/ folder.
 
 ## Step 1 — Find the wiki
 
-Run `git rev-parse --show-toplevel` to get `<root>`. Confirm `<root>/docs/wiki/CLAUDE.md` exists. If not, stop and tell the user to run `/x-wiki:init` first.
+Run `git rev-parse --show-toplevel` to get `<root>`. Confirm `<root>/docs/wiki/CLAUDE.md` exists. If not, stop and tell the user to run `/p-wiki:init` first.
 
 ## Step 2 — Classify the argument and reject in-repo paths
 
 - If `$ARGUMENTS` matches `^https?://` → it's a URL. Continue to Step 3 (URL branch).
 - Else if `$ARGUMENTS` == `-` → it's a paste. Continue to Step 3 (paste branch).
 - Else treat as a path. Resolve to an absolute path via `realpath` (e.g. `realpath -- "<arg>"` via Bash). If `realpath` fails (path doesn't exist), report "file not found: <arg>" and stop.
-  - If the resolved path is under `<root>/` → REFUSE. Tell the user: "That file is already in the repo. Use `/x-wiki:compile <path>` directly — no point copying." Stop here.
+  - If the resolved path is under `<root>/` → REFUSE. Tell the user: "That file is already in the repo. Use `/p-wiki:compile <path>` directly — no point copying." Stop here.
   - Else continue to Step 3 (external file branch).
 
 ## Step 3 — Capture
@@ -63,7 +63,7 @@ Run `git rev-parse --show-toplevel` to get `<root>`. Confirm `<root>/docs/wiki/C
 Tell the user:
 - What was saved and where (full path).
 - The slug and approximate word count.
-- The suggested next step: `/x-wiki:compile <that-path>`.
+- The suggested next step: `/p-wiki:compile <that-path>`.
 
 Do not run compile automatically.
 

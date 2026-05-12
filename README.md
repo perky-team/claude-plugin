@@ -1,52 +1,56 @@
-# x-wiki
+# perky.team plugins
 
-A Claude Code plugin that turns any git repo into an indexed markdown knowledge wiki under `docs/wiki/`. Skills: `init`, `ingest`, `compile`, `query`, `lint`.
+A Claude Code plugin marketplace. Currently ships one plugin; more can land alongside it under `plugins/<name>/`.
+
+## Plugins
+
+| Plugin | What it does |
+|---|---|
+| [`p-wiki`](./plugins/p-wiki/) | Persistent markdown knowledge wiki under `docs/wiki/`. Skills: `init`, `ingest`, `compile`, `query`, `lint`. |
 
 ## Install
 
-This repository is both the plugin and its own marketplace. The marketplace name is `andrey-plugins`.
-
-Once the repo is published at `<owner>/x-wiki` on GitHub, install with:
+After this repo is published at `<owner>/x` (or wherever) on GitHub:
 
 ```text
-/plugin marketplace add <owner>/x-wiki
-/plugin install x-wiki@andrey-plugins
+/plugin marketplace add <owner>/x
+/plugin install p-wiki@perky.team
 ```
 
-From a non-GitHub git host, pass the full URL instead:
+From a non-GitHub git host:
 
 ```text
-/plugin marketplace add https://gitlab.com/<owner>/x-wiki.git
-/plugin install x-wiki@andrey-plugins
+/plugin marketplace add https://gitlab.com/<owner>/x.git
+/plugin install p-wiki@perky.team
 ```
+
+## Repository layout
+
+```
+.
+├── .claude-plugin/
+│   └── marketplace.json     ← catalog of plugins in this marketplace
+├── plugins/
+│   └── p-wiki/              ← one directory per plugin
+│       ├── .claude-plugin/
+│       │   └── plugin.json
+│       ├── README.md
+│       ├── docs/superpowers/  ← per-plugin design spec + implementation plan
+│       └── skills/
+└── README.md                ← this file
+```
+
+To add a new plugin: create `plugins/<new-plugin>/` with its own `.claude-plugin/plugin.json` and skills, then add a new entry to `.claude-plugin/marketplace.json`.
 
 ## Local development
 
-Clone the repo and load it without installing:
-
 ```bash
-claude --plugin-dir C:/path/to/x-wiki
+claude --plugin-dir C:/path/to/x/plugins/p-wiki
 ```
 
-After edits, run `/reload-plugins` inside Claude Code to pick them up without restarting.
-
-## Commands
-
-| Command | What it does |
-|---|---|
-| `/x-wiki:init` | Scaffolds `docs/wiki/` and a global rule at `.claude/rules/x-wiki.md`. |
-| `/x-wiki:ingest <url\|path\|->` | Captures an external source (URL, outside-repo file, or inline paste) into `docs/wiki/raw/`. For files already in the repo, use `/x-wiki:compile <path>` directly. |
-| `/x-wiki:compile [path]` | Synthesizes pages from a source file (raw/ or anywhere in the repo). Without an argument, processes all `raw/**` items with `compiled: false`. |
-| `/x-wiki:query "<question>"` | Searches the wiki and writes a query-output page with citations. |
-| `/x-wiki:lint` | Audits links, orphan pages, frontmatter, staleness. Reports only — does not auto-fix. |
-
-## Design
-
-See `docs/superpowers/specs/2026-05-11-x-wiki-plugin-design.md` and `docs/superpowers/plans/2026-05-11-x-wiki-plugin.md` in this repo.
+Each plugin can be loaded standalone for development with `--plugin-dir`.
 
 ## Validate
-
-After cloning, validate the plugin and marketplace structure:
 
 ```bash
 claude plugin validate .

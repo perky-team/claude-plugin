@@ -1,4 +1,4 @@
-# Design: `x-wiki` plugin — persistent knowledge wiki
+# Design: `p-wiki` plugin — persistent knowledge wiki
 
 **Date:** 2026-05-11
 **Status:** Approved (brainstorming)
@@ -17,32 +17,32 @@ A Claude Code plugin that turns any git repository into a growing knowledge base
 ### 2.1 Plugin layout
 
 ```
-x-wiki/                              ← plugin (a repo or ~/.claude/plugins/x-wiki/)
+p-wiki/                              ← plugin (a repo or ~/.claude/plugins/p-wiki/)
 ├── .claude-plugin/
-│   └── plugin.json                  ← manifest (name=x-wiki, version, description)
+│   └── plugin.json                  ← manifest (name=p-wiki, version, description)
 ├── skills/
-│   ├── init/SKILL.md                → /x-wiki:init
-│   ├── ingest/SKILL.md              → /x-wiki:ingest <url|path|->
-│   ├── compile/SKILL.md             → /x-wiki:compile [<path>]
-│   ├── query/SKILL.md               → /x-wiki:query "<question>"
-│   ├── lint/SKILL.md                → /x-wiki:lint
+│   ├── init/SKILL.md                → /p-wiki:init
+│   ├── ingest/SKILL.md              → /p-wiki:ingest <url|path|->
+│   ├── compile/SKILL.md             → /p-wiki:compile [<path>]
+│   ├── query/SKILL.md               → /p-wiki:query "<question>"
+│   ├── lint/SKILL.md                → /p-wiki:lint
 │   └── _shared/                     ← reference files (frontmatter-schemas.md, compile-guide.md)
 └── README.md
 ```
 
-**Skill-per-operation:** each `SKILL.md` automatically becomes `/x-wiki:<name>` plus auto-activation based on `description` triggers. No `commands/` files (deprecated — merged into skills).
+**Skill-per-operation:** each `SKILL.md` automatically becomes `/p-wiki:<name>` plus auto-activation based on `description` triggers. No `commands/` files (deprecated — merged into skills).
 
 **No** `commands/`, `hooks/`, `scripts/`, binaries, or install-deps.
 
-**Skill coordination** — two files created by `/x-wiki:init`:
-1. `<repo>/.claude/rules/x-wiki.md` — short (~30 lines) global rule WITHOUT `paths:`. Loads every session in the repo. Tells any Claude/skill that the wiki and its commands exist.
+**Skill coordination** — two files created by `/p-wiki:init`:
+1. `<repo>/.claude/rules/p-wiki.md` — short (~30 lines) global rule WITHOUT `paths:`. Loads every session in the repo. Tells any Claude/skill that the wiki and its commands exist.
 2. `<repo>/docs/wiki/CLAUDE.md` — detailed frontmatter schemas, naming rules, link rules, compile rules. Auto-loads when Claude reads any file under `docs/wiki/**`.
 
 ### 2.2 Repo root and wiki discovery
 
 All skills resolve the **repo root** the same way: `git rev-parse --show-toplevel`. Everything below is anchored to this root, not to CWD.
 
-The **wiki root** is always `<repo-root>/docs/wiki/`. Skills check that `<repo-root>/docs/wiki/CLAUDE.md` exists; if not, they error: "run `/x-wiki:init` first" (except `/x-wiki:init` itself, which uses the absence to confirm it can scaffold).
+The **wiki root** is always `<repo-root>/docs/wiki/`. Skills check that `<repo-root>/docs/wiki/CLAUDE.md` exists; if not, they error: "run `/p-wiki:init` first" (except `/p-wiki:init` itself, which uses the absence to confirm it can scaffold).
 
 Outside a git repo, `git rev-parse` fails; the skill falls back to CWD as the repo root and warns the user.
 
@@ -61,18 +61,18 @@ docs/wiki/
     ├── concept/
     ├── person/
     ├── source/         ← source-summary files
-    └── queries/        ← /x-wiki:query results (filed → promoted = moved into concept/)
+    └── queries/        ← /p-wiki:query results (filed → promoted = moved into concept/)
 ```
 
 **Subdirs by type, not flat:** simpler grep filters, cleaner glob patterns, easier visual navigation. The `type:` in frontmatter must match the subdirectory.
 
-**In-repo sources are NOT copied into `raw/`.** They stay where they are; `sources:` in pages points to the original path. Use `/x-wiki:compile <path>` directly for any in-repo file. Only external sources (URL, paste, file outside the repo) go through `/x-wiki:ingest` into `raw/`.
+**In-repo sources are NOT copied into `raw/`.** They stay where they are; `sources:` in pages points to the original path. Use `/p-wiki:compile <path>` directly for any in-repo file. Only external sources (URL, paste, file outside the repo) go through `/p-wiki:ingest` into `raw/`.
 
 ---
 
 ## 3. Skill workflows
 
-### 3.1 `/x-wiki:init`
+### 3.1 `/p-wiki:init`
 
 **Triggers:** "init wiki", "create wiki", "setup knowledge base"
 **Args:** none
@@ -82,14 +82,14 @@ docs/wiki/
 2. If `<repo-root>/docs/wiki/` exists → error "already initialized".
 3. Create the layout under `<repo-root>/`: `docs/wiki/{raw/{articles,files,pastes},pages/{concept,person,source,queries}}` + `.gitkeep` in empty dirs.
 4. Write `<repo-root>/docs/wiki/CLAUDE.md`, `<repo-root>/docs/wiki/README.md`, `<repo-root>/docs/wiki/index.md`.
-5. Ensure `<repo-root>/.claude/rules/` exists (mkdir -p). Write `<repo-root>/.claude/rules/x-wiki.md`. If the file already exists — do not overwrite, warn the user.
-6. Final message: tell the user where the wiki was created and suggest first steps (`/x-wiki:ingest <url>` for an external source, `/x-wiki:compile <path>` for a doc already in the repo).
+5. Ensure `<repo-root>/.claude/rules/` exists (mkdir -p). Write `<repo-root>/.claude/rules/p-wiki.md`. If the file already exists — do not overwrite, warn the user.
+6. Final message: tell the user where the wiki was created and suggest first steps (`/p-wiki:ingest <url>` for an external source, `/p-wiki:compile <path>` for a doc already in the repo).
 
 **Tools:** Bash, Write, Read.
 
-### 3.2 `/x-wiki:ingest`
+### 3.2 `/p-wiki:ingest`
 
-External sources only. For files already in the repo → use `/x-wiki:compile <path>` directly (no copy).
+External sources only. For files already in the repo → use `/p-wiki:compile <path>` directly (no copy).
 
 **Triggers:** "ingest", "save to wiki", "save source", "add to wiki"
 **Args:** `<url|path|->` — URL, path to a file **outside the repo**, or `-` (inline paste)
@@ -98,16 +98,16 @@ External sources only. For files already in the repo → use `/x-wiki:compile <p
 1. Resolve repo root and confirm wiki exists (see §2.2).
 2. Classify the argument:
    - `^https?://` → URL. WebFetch → `raw/articles/<slug>.md`.
-   - Path argument → resolve to absolute path. If it resolves under `<repo-root>/` → refuse with hint: "this file is already in the repo, use `/x-wiki:compile <path>` directly — no point copying". Otherwise (file outside the repo) → Read → `raw/files/<basename>.md`.
+   - Path argument → resolve to absolute path. If it resolves under `<repo-root>/` → refuse with hint: "this file is already in the repo, use `/p-wiki:compile <path>` directly — no point copying". Otherwise (file outside the repo) → Read → `raw/files/<basename>.md`.
    - `-` → use the last large paste from chat context. The skill picks a title from the content via LLM. → `raw/pastes/<date>-<slug>.md`.
 3. Slug from title/URL/filename, kebab-case. Conflict → suffix with date.
 4. Write with raw-file frontmatter (see §4.1).
-5. Tell the user what was saved and suggest `/x-wiki:compile`.
+5. Tell the user what was saved and suggest `/p-wiki:compile`.
 
 **Tools:** Read, Write, WebFetch, Bash.
 **Edge:** URL duplicate (same `source-url` already in raw/) → warn, ask whether to overwrite. PDF → Read extracts text.
 
-### 3.3 `/x-wiki:compile`
+### 3.3 `/p-wiki:compile`
 
 Accepts any file path — both `raw/` items and arbitrary in-repo files (spec, README, ADR, code).
 
@@ -133,7 +133,7 @@ Accepts any file path — both `raw/` items and arbitrary in-repo files (spec, R
 **Tools:** Read, Write, Edit, Grep, Glob.
 **Edge:** factual conflict between sources → callout block (see §4.4).
 
-### 3.4 `/x-wiki:query`
+### 3.4 `/p-wiki:query`
 
 **Triggers:** "query wiki", "ask the wiki", "what does the wiki say about X"
 **Args:** `<question>`
@@ -150,7 +150,7 @@ Accepts any file path — both `raw/` items and arbitrary in-repo files (spec, R
 **Tools:** Read, Write, Grep, Glob, Bash (for the optional promotion move).
 **Edge:** empty grep → say honestly "no data; nothing written".
 
-### 3.5 `/x-wiki:lint`
+### 3.5 `/p-wiki:lint`
 
 **Triggers:** "lint wiki", "audit wiki", "check the wiki"
 **Args:** none
@@ -229,7 +229,7 @@ In-repo files used as sources are NOT modified by the plugin — they need no sp
 
 - Plain markdown `[text](relative/path.md)`. No `[[wikilinks]]`.
 - Paths relative to the file containing the link.
-- A concept page must have ≥3 outgoing links (enforced by `/x-wiki:lint`).
+- A concept page must have ≥3 outgoing links (enforced by `/p-wiki:lint`).
 - **Backlink audit during compile is mandatory.**
 - Links to `raw/` are allowed only in the `sources:` frontmatter field, never in body text.
 
@@ -306,7 +306,7 @@ See `sources:` in frontmatter.
 
 ---
 
-## 5. Contents of `<repo>/.claude/rules/x-wiki.md`
+## 5. Contents of `<repo>/.claude/rules/p-wiki.md`
 
 ```markdown
 # Project knowledge wiki
@@ -318,7 +318,7 @@ This repository has an indexed knowledge wiki at `docs/wiki/`.
 
 If the user asks a question that might be covered by accumulated project knowledge,
 prefer the wiki first: grep/read `docs/wiki/pages/` directly, or invoke
-`/x-wiki:query "<question>"` for a synthesized answer with citations.
+`/p-wiki:query "<question>"` for a synthesized answer with citations.
 
 ## Adding repository docs to the wiki
 
@@ -326,25 +326,25 @@ When you (or another skill) finalize a document anywhere in this repo that
 captures durable knowledge worth searching later — a design spec, plan, ADR,
 README, architecture note, postmortem, or similar — run:
 
-    /x-wiki:compile <path-to-doc>
+    /p-wiki:compile <path-to-doc>
 
 This reads the file in place (no copy into `raw/`) and synthesizes concept
 pages with `sources: [<path-to-doc>]`. Re-running on the same path updates the
 derived pages instead of duplicating them.
 
-Use `/x-wiki:ingest` only for external sources — URLs, pastes, or files from
-outside the repo. In-repo files should go through `/x-wiki:compile` directly.
+Use `/p-wiki:ingest` only for external sources — URLs, pastes, or files from
+outside the repo. In-repo files should go through `/p-wiki:compile` directly.
 
 Caveat: derived pages can become stale if the source doc later diverges from
-the implementation. `/x-wiki:lint` flags `status: active` pages older than 90
-days; re-run `/x-wiki:compile <path>` after major edits to the source.
+the implementation. `/p-wiki:lint` flags `status: active` pages older than 90
+days; re-run `/p-wiki:compile <path>` after major edits to the source.
 
-## Maintenance commands (plugin `x-wiki`)
+## Maintenance commands (plugin `p-wiki`)
 
-- `/x-wiki:ingest <url|path|->` — capture an external source (URL, paste, or file from outside the repo) into raw/
-- `/x-wiki:compile [path]` — synthesize pages from any source file in the repo, or from unprocessed raw/ items if no argument is given
-- `/x-wiki:query "<question>"` — search the wiki and answer with citations
-- `/x-wiki:lint` — audit links, orphan pages, stale frontmatter
+- `/p-wiki:ingest <url|path|->` — capture an external source (URL, paste, or file from outside the repo) into raw/
+- `/p-wiki:compile [path]` — synthesize pages from any source file in the repo, or from unprocessed raw/ items if no argument is given
+- `/p-wiki:query "<question>"` — search the wiki and answer with citations
+- `/p-wiki:lint` — audit links, orphan pages, stale frontmatter
 
 Detailed frontmatter schemas, naming conventions, and link rules are in
 `docs/wiki/CLAUDE.md`, which auto-loads when Claude works with files under `docs/wiki/`.
@@ -356,7 +356,7 @@ Detailed frontmatter schemas, naming conventions, and link rules are in
 
 | Don't do | Why |
 |---|---|
-| `commands/` directory | Skill auto-publishes `/x-wiki:<name>`. Duplicating is pointless. |
+| `commands/` directory | Skill auto-publishes `/p-wiki:<name>`. Duplicating is pointless. |
 | `hooks/` | No external dependencies → nothing to install. |
 | `scripts/` | Built-in Claude Code tools (Read/Write/Edit/Grep/Glob/WebFetch/Bash) cover everything. Cross-platform for free. |
 | `qmd` / embeddings / sqlite-vec | Grep + LLM reasoning is enough. No binaries. |
@@ -364,9 +364,9 @@ Detailed frontmatter schemas, naming conventions, and link rules are in
 | Multi-wiki per repo | One wiki per repo. Can extend later without breaking. |
 | Git auto-commit | The wiki lives in the user's repo; auto-commits trash staging during parallel work. |
 | `log.md` | State = files. Git history + frontmatter cover it. |
-| `/x-wiki:remove` | Remove by hand. A destructive op should not be one click. |
+| `/p-wiki:remove` | Remove by hand. A destructive op should not be one click. |
 | Translation between languages | Compile preserves source language. |
-| Auto-fix in `/x-wiki:lint` | Lint only reports; fixing is the user's call. |
+| Auto-fix in `/p-wiki:lint` | Lint only reports; fixing is the user's call. |
 | Copying in-repo files into `raw/` | Creates duplicates that drift from the original. `sources:` references the original path instead. |
 | Coupling to any specific other plugin in the global rule | The rule speaks in terms of "any document worth searching later", not "after superpowers:brainstorming". |
 
@@ -379,7 +379,7 @@ Detailed frontmatter schemas, naming conventions, and link rules are in
 - Page body templates — inline in compile's SKILL.md, or extract to `_shared/templates/`.
 - Inline-paste detection (`-` argument) — how the skill identifies "the last large paste from chat". May simplify by requiring an explicit second argument.
 - Cross-platform: walk-up to `docs/wiki/` — Git Bash, PowerShell, plain Linux — likely all work via Glob/Read, but verify.
-- Cross-platform file move for promotion (`/x-wiki:query` step 7) — `mv` on POSIX vs `Move-Item` on PowerShell vs `git mv`. The skill should pick the right Bash invocation based on the active shell.
+- Cross-platform file move for promotion (`/p-wiki:query` step 7) — `mv` on POSIX vs `Move-Item` on PowerShell vs `git mv`. The skill should pick the right Bash invocation based on the active shell.
 - Backlink audit safety — beyond the constraints listed in §3.3 step 3, consider also a maximum links-added-per-compile threshold to avoid runaway changes when a new page title happens to be a common word.
 - Idempotency of slug generation across compile runs. Two compiles of the same source could pick slightly different titles for the same concept ("Kubernetes Pods" vs "Kubernetes pods") and generate different slugs, defeating dedup. Mitigation: before creating a new page, normalise the candidate title (lowercase, strip punctuation, collapse spaces) and check `pages/<type>/*` for an existing page whose normalised title matches. Match → Edit it; no match → Write new. Decide whether to encode this in CLAUDE.md or only in the compile skill.
 - Subagent execution (`context: fork`) for heavier skills. Sequential pipeline of skills is fine; the question is whether to isolate any of them into a forked context to keep the parent conversation lean. Current thinking:

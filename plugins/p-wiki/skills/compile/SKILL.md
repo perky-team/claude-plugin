@@ -6,7 +6,7 @@ argument-hint: "[<path>]"
 allowed-tools: Bash(git rev-parse:*) Read Write Edit Grep Glob
 ---
 
-# /x-wiki:compile
+# /p-wiki:compile
 
 You are synthesizing wiki pages from one or more source files.
 
@@ -14,7 +14,7 @@ You are synthesizing wiki pages from one or more source files.
 
 ## Step 1 — Find the wiki
 
-`<root>` = `git rev-parse --show-toplevel`. Confirm `<root>/docs/wiki/CLAUDE.md` exists; it auto-loads now. If not, stop and ask user to run `/x-wiki:init` first.
+`<root>` = `git rev-parse --show-toplevel`. Confirm `<root>/docs/wiki/CLAUDE.md` exists; it auto-loads now. If not, stop and ask user to run `/p-wiki:init` first.
 
 ## Step 2 — Build the source list
 

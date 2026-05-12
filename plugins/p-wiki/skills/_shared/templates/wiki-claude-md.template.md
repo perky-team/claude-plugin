@@ -1,6 +1,6 @@
 # Wiki rules and schemas
 
-This file is auto-loaded by Claude Code whenever it reads files under `docs/wiki/`. It defines the schemas, naming rules, link rules, and compile rules every skill in plugin `x-wiki` follows.
+This file is auto-loaded by Claude Code whenever it reads files under `docs/wiki/`. It defines the schemas, naming rules, link rules, and compile rules every skill in plugin `p-wiki` follows.
 
 ## Frontmatter
 
@@ -64,7 +64,7 @@ In-repo files used as sources are NOT modified by the plugin. They appear in `so
 
 - Plain markdown `[text](relative/path.md)`. No `[[wikilinks]]`.
 - Paths relative to the file containing the link.
-- A concept page must have ≥3 outgoing links to other pages (enforced by `/x-wiki:lint`; `status: draft` exempt).
+- A concept page must have ≥3 outgoing links to other pages (enforced by `/p-wiki:lint`; `status: draft` exempt).
 - **Backlink audit during compile is mandatory.**
 - Links to `raw/` are allowed only in the `sources:` frontmatter field, never in body text.
 

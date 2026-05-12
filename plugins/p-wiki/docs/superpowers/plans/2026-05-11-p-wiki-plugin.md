@@ -1,16 +1,16 @@
-# x-wiki Plugin Implementation Plan
+# p-wiki Plugin Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build a Claude Code plugin called `x-wiki` that turns any git repo into an indexed markdown knowledge base under `docs/wiki/`, driven by five skills (`init`, `ingest`, `compile`, `query`, `lint`).
+**Goal:** Build a Claude Code plugin called `p-wiki` that turns any git repo into an indexed markdown knowledge base under `docs/wiki/`, driven by five skills (`init`, `ingest`, `compile`, `query`, `lint`).
 
-**Architecture:** Five `SKILL.md` files under `skills/<name>/SKILL.md` — each becomes a slash command (`/x-wiki:<name>`) plus an auto-activated skill. Shared content (the `docs/wiki/CLAUDE.md` body, the rule body, README/index stubs) lives in `skills/_shared/templates/` and is read at runtime by the `init` skill via `${CLAUDE_SKILL_DIR}/../_shared/templates/<file>`. No `commands/`, no `hooks/`, no `scripts/`, no external deps.
+**Architecture:** Five `SKILL.md` files under `skills/<name>/SKILL.md` — each becomes a slash command (`/p-wiki:<name>`) plus an auto-activated skill. Shared content (the `docs/wiki/CLAUDE.md` body, the rule body, README/index stubs) lives in `skills/_shared/templates/` and is read at runtime by the `init` skill via `${CLAUDE_SKILL_DIR}/../_shared/templates/<file>`. No `commands/`, no `hooks/`, no `scripts/`, no external deps.
 
 **Tech Stack:** Markdown + YAML frontmatter. Built-in Claude Code tools only (Read/Write/Edit/Grep/Glob/WebFetch/Bash). Plugin manifest in `.claude-plugin/plugin.json`.
 
-**Source of truth for design decisions:** [docs/superpowers/specs/2026-05-11-x-wiki-plugin-design.md](../specs/2026-05-11-x-wiki-plugin-design.md). Read this once before starting.
+**Source of truth for design decisions:** [docs/superpowers/specs/2026-05-11-p-wiki-plugin-design.md](../specs/2026-05-11-p-wiki-plugin-design.md). Read this once before starting.
 
-**Working directory:** `C:\projects\tssd\x` — the plugin lives in this repo. The repo's existing files (only `docs/` so far) are untouched by the plan apart from new commits.
+**Working directory (historical):** This plan was written when the plugin sat at the repo root of `C:\projects\tssd\x`. After the marketplace restructure, the plugin lives at `C:\projects\tssd\x\plugins\p-wiki\`. All file paths in this plan are relative to the **plugin root** (`plugins/p-wiki/` inside the marketplace repo). Treat the plan as a recipe for building the plugin in isolation; commit instructions and the marketplace.json wiring are not represented here.
 
 ---
 
@@ -24,7 +24,7 @@
 | `skills/_shared/templates/wiki-claude-md.template.md` | Body of `docs/wiki/CLAUDE.md` written out by `init` | 2 |
 | `skills/_shared/templates/wiki-readme.template.md` | Body of `docs/wiki/README.md` written out by `init` | 2 |
 | `skills/_shared/templates/wiki-index.template.md` | Initial empty body of `docs/wiki/index.md` | 2 |
-| `skills/_shared/templates/x-wiki-rule.template.md` | Body of `<repo>/.claude/rules/x-wiki.md` written out by `init` | 2 |
+| `skills/_shared/templates/p-wiki-rule.template.md` | Body of `<repo>/.claude/rules/p-wiki.md` written out by `init` | 2 |
 | `skills/init/SKILL.md` | Scaffold the wiki under `docs/wiki/` and the global rule | 3 |
 | `skills/ingest/SKILL.md` | Capture external sources (URL / outside-repo file / paste) into `raw/` | 4 |
 | `skills/compile/SKILL.md` | Synthesize pages from raw/ items or in-repo files | 5 |
@@ -37,7 +37,7 @@
 
 Before starting:
 
-1. Read the spec end-to-end: `docs/superpowers/specs/2026-05-11-x-wiki-plugin-design.md`.
+1. Read the spec end-to-end: `docs/superpowers/specs/2026-05-11-p-wiki-plugin-design.md`.
 2. Skim the live skills doc to confirm the frontmatter fields are still current. WebFetch `https://code.claude.com/docs/en/skills` and check:
    - `name`, `description`, `argument-hint`, `allowed-tools` are still the recommended fields.
    - `${CLAUDE_SKILL_DIR}` substitution is still supported.
@@ -65,7 +65,7 @@ Write this content (adjust if Step 1 surfaced new required fields):
 
 ```json
 {
-  "name": "x-wiki",
+  "name": "p-wiki",
   "version": "0.1.0",
   "description": "Persistent markdown knowledge wiki under docs/wiki/. Skills: init, ingest, compile, query, lint."
 }
@@ -74,7 +74,7 @@ Write this content (adjust if Step 1 surfaced new required fields):
 - [ ] **Step 3: Create `README.md`**
 
 ```markdown
-# x-wiki
+# p-wiki
 
 A Claude Code plugin that turns any git repo into an indexed markdown knowledge wiki under `docs/wiki/`. Skills: `init`, `ingest`, `compile`, `query`, `lint`.
 
@@ -82,21 +82,21 @@ A Claude Code plugin that turns any git repo into an indexed markdown knowledge 
 
 1. Clone this repo somewhere.
 2. Add it to Claude Code as a plugin via `/plugin` (or whatever the current install command is — see `https://code.claude.com/docs/en/plugins`).
-3. Open a project repo. Run `/x-wiki:init`.
+3. Open a project repo. Run `/p-wiki:init`.
 
 ## Commands
 
 | Command | What it does |
 |---|---|
-| `/x-wiki:init` | Scaffolds `docs/wiki/` and a global rule at `.claude/rules/x-wiki.md`. |
-| `/x-wiki:ingest <url\|path\|->` | Captures an external source (URL, outside-repo file, or inline paste) into `docs/wiki/raw/`. For files already in the repo, use `/x-wiki:compile <path>` directly. |
-| `/x-wiki:compile [path]` | Synthesizes pages from a source file (raw/ or anywhere in the repo). Without an argument, processes all `raw/**` items with `compiled: false`. |
-| `/x-wiki:query "<question>"` | Searches the wiki and writes a query-output page with citations. |
-| `/x-wiki:lint` | Audits links, orphan pages, frontmatter, staleness. Reports only — does not auto-fix. |
+| `/p-wiki:init` | Scaffolds `docs/wiki/` and a global rule at `.claude/rules/p-wiki.md`. |
+| `/p-wiki:ingest <url\|path\|->` | Captures an external source (URL, outside-repo file, or inline paste) into `docs/wiki/raw/`. For files already in the repo, use `/p-wiki:compile <path>` directly. |
+| `/p-wiki:compile [path]` | Synthesizes pages from a source file (raw/ or anywhere in the repo). Without an argument, processes all `raw/**` items with `compiled: false`. |
+| `/p-wiki:query "<question>"` | Searches the wiki and writes a query-output page with citations. |
+| `/p-wiki:lint` | Audits links, orphan pages, frontmatter, staleness. Reports only — does not auto-fix. |
 
 ## Design
 
-See `docs/superpowers/specs/2026-05-11-x-wiki-plugin-design.md` in this repo.
+See `docs/superpowers/specs/2026-05-11-p-wiki-plugin-design.md` in this repo.
 ```
 
 - [ ] **Step 4: Create `.gitignore`**
@@ -132,13 +132,13 @@ git commit -m "feat: plugin scaffold (manifest, README, gitignore)"
 
 ## Task 2: Template files
 
-Templates are the bodies of files that `/x-wiki:init` writes into the user's project. Putting them in standalone files (not inline in the init SKILL.md) keeps the init skill short and makes the templates editable on their own.
+Templates are the bodies of files that `/p-wiki:init` writes into the user's project. Putting them in standalone files (not inline in the init SKILL.md) keeps the init skill short and makes the templates editable on their own.
 
 **Files:**
 - Create: `skills/_shared/templates/wiki-claude-md.template.md`
 - Create: `skills/_shared/templates/wiki-readme.template.md`
 - Create: `skills/_shared/templates/wiki-index.template.md`
-- Create: `skills/_shared/templates/x-wiki-rule.template.md`
+- Create: `skills/_shared/templates/p-wiki-rule.template.md`
 
 - [ ] **Step 1: Create `wiki-claude-md.template.md`**
 
@@ -149,7 +149,7 @@ Content (full, ~150 lines):
 ````markdown
 # Wiki rules and schemas
 
-This file is auto-loaded by Claude Code whenever it reads files under `docs/wiki/`. It defines the schemas, naming rules, link rules, and compile rules every skill in plugin `x-wiki` follows.
+This file is auto-loaded by Claude Code whenever it reads files under `docs/wiki/`. It defines the schemas, naming rules, link rules, and compile rules every skill in plugin `p-wiki` follows.
 
 ## Frontmatter
 
@@ -213,7 +213,7 @@ In-repo files used as sources are NOT modified by the plugin. They appear in `so
 
 - Plain markdown `[text](relative/path.md)`. No `[[wikilinks]]`.
 - Paths relative to the file containing the link.
-- A concept page must have ≥3 outgoing links to other pages (enforced by `/x-wiki:lint`; `status: draft` exempt).
+- A concept page must have ≥3 outgoing links to other pages (enforced by `/p-wiki:lint`; `status: draft` exempt).
 - **Backlink audit during compile is mandatory.**
 - Links to `raw/` are allowed only in the `sources:` frontmatter field, never in body text.
 
@@ -299,7 +299,7 @@ See `sources:` in frontmatter.
 ```markdown
 # Knowledge wiki
 
-This is an indexed markdown knowledge base maintained by the `x-wiki` Claude Code plugin.
+This is an indexed markdown knowledge base maintained by the `p-wiki` Claude Code plugin.
 
 ## Layout
 
@@ -307,7 +307,7 @@ This is an indexed markdown knowledge base maintained by the `x-wiki` Claude Cod
   - `concept/` — ideas, technologies, patterns
   - `person/` — people
   - `source/` — summaries of external sources
-  - `queries/` — answers to `/x-wiki:query` calls
+  - `queries/` — answers to `/p-wiki:query` calls
 - `raw/` — captured external sources (the originals, untouched)
   - `articles/` — downloaded URLs
   - `files/` — copies of files from outside the repo
@@ -317,10 +317,10 @@ This is an indexed markdown knowledge base maintained by the `x-wiki` Claude Cod
 
 ## How to use
 
-- Add a source: `/x-wiki:ingest <url>` or, for files already in the repo, `/x-wiki:compile <path-to-doc>`.
-- Build pages from sources: `/x-wiki:compile [path]`.
-- Ask a question: `/x-wiki:query "<question>"`.
-- Audit: `/x-wiki:lint`.
+- Add a source: `/p-wiki:ingest <url>` or, for files already in the repo, `/p-wiki:compile <path-to-doc>`.
+- Build pages from sources: `/p-wiki:compile [path]`.
+- Ask a question: `/p-wiki:query "<question>"`.
+- Audit: `/p-wiki:lint`.
 
 See the plugin's design spec for full conventions: it should be in `docs/superpowers/specs/` of the plugin repo.
 ```
@@ -330,7 +330,7 @@ See the plugin's design spec for full conventions: it should be in `docs/superpo
 ```markdown
 # Wiki index
 
-This file is regenerated by `/x-wiki:compile` and `/x-wiki:lint`. Don't edit by hand.
+This file is regenerated by `/p-wiki:compile` and `/p-wiki:lint`. Don't edit by hand.
 
 ## Concepts
 _(none yet)_
@@ -345,7 +345,7 @@ _(none yet)_
 _(none yet)_
 ```
 
-- [ ] **Step 4: Create `x-wiki-rule.template.md`**
+- [ ] **Step 4: Create `p-wiki-rule.template.md`**
 
 Copy the rule body from §5 of the spec verbatim. Content:
 
@@ -357,26 +357,26 @@ This repository has an indexed knowledge wiki at `docs/wiki/`.
 - Captured external sources: `docs/wiki/raw/` (articles/, files/, pastes/)
 - Entry point for humans: `docs/wiki/index.md`
 
-If the user asks a question that might be covered by accumulated project knowledge, prefer the wiki first: grep/read `docs/wiki/pages/` directly, or invoke `/x-wiki:query "<question>"` for a synthesized answer with citations.
+If the user asks a question that might be covered by accumulated project knowledge, prefer the wiki first: grep/read `docs/wiki/pages/` directly, or invoke `/p-wiki:query "<question>"` for a synthesized answer with citations.
 
 ## Adding repository docs to the wiki
 
 When you (or another skill) finalize a document anywhere in this repo that captures durable knowledge worth searching later — a design spec, plan, ADR, README, architecture note, postmortem, or similar — run:
 
-    /x-wiki:compile <path-to-doc>
+    /p-wiki:compile <path-to-doc>
 
 This reads the file in place (no copy into `raw/`) and synthesizes concept pages with `sources: [<path-to-doc>]`. Re-running on the same path updates the derived pages instead of duplicating them.
 
-Use `/x-wiki:ingest` only for external sources — URLs, pastes, or files from outside the repo. In-repo files should go through `/x-wiki:compile` directly.
+Use `/p-wiki:ingest` only for external sources — URLs, pastes, or files from outside the repo. In-repo files should go through `/p-wiki:compile` directly.
 
-Caveat: derived pages can become stale if the source doc later diverges from the implementation. `/x-wiki:lint` flags `status: active` pages older than 90 days; re-run `/x-wiki:compile <path>` after major edits to the source.
+Caveat: derived pages can become stale if the source doc later diverges from the implementation. `/p-wiki:lint` flags `status: active` pages older than 90 days; re-run `/p-wiki:compile <path>` after major edits to the source.
 
-## Maintenance commands (plugin `x-wiki`)
+## Maintenance commands (plugin `p-wiki`)
 
-- `/x-wiki:ingest <url|path|->` — capture an external source (URL, paste, or file from outside the repo) into raw/
-- `/x-wiki:compile [path]` — synthesize pages from any source file in the repo, or from unprocessed raw/ items if no argument is given
-- `/x-wiki:query "<question>"` — search the wiki and answer with citations
-- `/x-wiki:lint` — audit links, orphan pages, stale frontmatter
+- `/p-wiki:ingest <url|path|->` — capture an external source (URL, paste, or file from outside the repo) into raw/
+- `/p-wiki:compile [path]` — synthesize pages from any source file in the repo, or from unprocessed raw/ items if no argument is given
+- `/p-wiki:query "<question>"` — search the wiki and answer with citations
+- `/p-wiki:lint` — audit links, orphan pages, stale frontmatter
 
 Detailed frontmatter schemas, naming conventions, and link rules are in `docs/wiki/CLAUDE.md`, which auto-loads when Claude works with files under `docs/wiki/`.
 ````
@@ -394,7 +394,7 @@ git commit -m "feat: wiki templates (CLAUDE.md body, readme, index, global rule)
 
 ---
 
-## Task 3: `/x-wiki:init` skill
+## Task 3: `/p-wiki:init` skill
 
 **Files:**
 - Create: `skills/init/SKILL.md`
@@ -407,14 +407,14 @@ The init skill scaffolds `docs/wiki/` and the global rule. Per §3.1 of the spec
 ---
 name: init
 description: |
-  Initialize a markdown knowledge wiki at `docs/wiki/` of the current git repo and a global rule at `.claude/rules/x-wiki.md`. Use when the user says "init wiki", "create wiki", "setup knowledge base", or asks to start a new x-wiki.
+  Initialize a markdown knowledge wiki at `docs/wiki/` of the current git repo and a global rule at `.claude/rules/p-wiki.md`. Use when the user says "init wiki", "create wiki", "setup knowledge base", or asks to start a new p-wiki.
 argument-hint: (no arguments)
 allowed-tools: Bash(git rev-parse:*) Bash(mkdir:*) Bash(ls:*) Read Write
 ---
 
-# /x-wiki:init
+# /p-wiki:init
 
-You are scaffolding the `x-wiki` knowledge base inside the current repo.
+You are scaffolding the `p-wiki` knowledge base inside the current repo.
 
 ## Step 1 — Find the repo root
 
@@ -459,18 +459,18 @@ Copy verbatim — no transformations.
 
 Ensure `<root>/.claude/rules/` exists (`mkdir -p`). Then:
 
-- If `<root>/.claude/rules/x-wiki.md` already exists, do NOT overwrite. Tell the user the file is present and they should review it before proceeding.
-- Otherwise, copy `${CLAUDE_SKILL_DIR}/../_shared/templates/x-wiki-rule.template.md` to `<root>/.claude/rules/x-wiki.md` verbatim.
+- If `<root>/.claude/rules/p-wiki.md` already exists, do NOT overwrite. Tell the user the file is present and they should review it before proceeding.
+- Otherwise, copy `${CLAUDE_SKILL_DIR}/../_shared/templates/p-wiki-rule.template.md` to `<root>/.claude/rules/p-wiki.md` verbatim.
 
 ## Step 6 — Final message
 
 Tell the user, in order:
 
 1. Where the wiki was created (`<root>/docs/wiki/`).
-2. That the global rule was created (or already existed) at `<root>/.claude/rules/x-wiki.md`.
+2. That the global rule was created (or already existed) at `<root>/.claude/rules/p-wiki.md`.
 3. Suggest next steps:
-   - For an external source: `/x-wiki:ingest <url-or-path>`.
-   - For a doc already in the repo (spec, README, ADR, etc.): `/x-wiki:compile <path>`.
+   - For an external source: `/p-wiki:ingest <url-or-path>`.
+   - For a doc already in the repo (spec, README, ADR, etc.): `/p-wiki:compile <path>`.
 4. Remind them this is just a scaffold — they're free to commit it or not.
 
 ## Edge cases
@@ -492,17 +492,17 @@ If a YAML parser is available locally, run it (e.g. `python -c "import yaml; pri
 
 ```bash
 git add skills/init/SKILL.md
-git commit -m "feat: /x-wiki:init skill"
+git commit -m "feat: /p-wiki:init skill"
 ```
 
 ---
 
-## Task 4: `/x-wiki:ingest` skill
+## Task 4: `/p-wiki:ingest` skill
 
 **Files:**
 - Create: `skills/ingest/SKILL.md`
 
-Per §3.2 of the spec. Captures external sources only — files already in the repo are refused with a pointer to `/x-wiki:compile`.
+Per §3.2 of the spec. Captures external sources only — files already in the repo are refused with a pointer to `/p-wiki:compile`.
 
 - [ ] **Step 1: Write `skills/ingest/SKILL.md`**
 
@@ -510,14 +510,14 @@ Per §3.2 of the spec. Captures external sources only — files already in the r
 ---
 name: ingest
 description: |
-  Capture an external source into the wiki's raw/ folder. Accepts a URL, a path to a file OUTSIDE the repo, or `-` for the last paste from chat. For files already in the repo, refuse and point the user to `/x-wiki:compile <path>` (no copy needed). Use when the user says "ingest", "save to wiki", "add to wiki", or supplies a URL/file they want captured.
+  Capture an external source into the wiki's raw/ folder. Accepts a URL, a path to a file OUTSIDE the repo, or `-` for the last paste from chat. For files already in the repo, refuse and point the user to `/p-wiki:compile <path>` (no copy needed). Use when the user says "ingest", "save to wiki", "add to wiki", or supplies a URL/file they want captured.
 argument-hint: <url|path|->
 allowed-tools: Bash(git rev-parse:*) Bash(test:*) Read Write Grep WebFetch
 ---
 
-# /x-wiki:ingest
+# /p-wiki:ingest
 
-You are capturing one external source into the `x-wiki` raw/ folder.
+You are capturing one external source into the `p-wiki` raw/ folder.
 
 `$ARGUMENTS` is one of:
 - A URL beginning with `http://` or `https://`.
@@ -526,14 +526,14 @@ You are capturing one external source into the `x-wiki` raw/ folder.
 
 ## Step 1 — Find the wiki
 
-Run `git rev-parse --show-toplevel` to get `<root>`. Confirm `<root>/docs/wiki/CLAUDE.md` exists. If not, stop and tell the user to run `/x-wiki:init` first.
+Run `git rev-parse --show-toplevel` to get `<root>`. Confirm `<root>/docs/wiki/CLAUDE.md` exists. If not, stop and tell the user to run `/p-wiki:init` first.
 
 ## Step 2 — Classify the argument and reject in-repo paths
 
 - If `$ARGUMENTS` matches `^https?://` → it's a URL. Continue to Step 3 (URL branch).
 - Else if `$ARGUMENTS` == `-` → it's a paste. Continue to Step 3 (paste branch).
 - Else treat as a path. Resolve to an absolute path.
-  - If the resolved path is under `<root>/` → REFUSE. Tell the user: "That file is already in the repo. Use `/x-wiki:compile <path>` directly — no point copying." Stop here.
+  - If the resolved path is under `<root>/` → REFUSE. Tell the user: "That file is already in the repo. Use `/p-wiki:compile <path>` directly — no point copying." Stop here.
   - Else continue to Step 3 (external file branch).
 
 ## Step 3 — Capture
@@ -569,7 +569,7 @@ Run `git rev-parse --show-toplevel` to get `<root>`. Confirm `<root>/docs/wiki/C
 Tell the user:
 - What was saved and where (full path).
 - The slug and approximate word count.
-- The suggested next step: `/x-wiki:compile <that-path>`.
+- The suggested next step: `/p-wiki:compile <that-path>`.
 
 Do not run compile automatically.
 
@@ -588,12 +588,12 @@ Same eyeball check as Task 3 Step 2.
 
 ```bash
 git add skills/ingest/SKILL.md
-git commit -m "feat: /x-wiki:ingest skill (URL / external file / paste)"
+git commit -m "feat: /p-wiki:ingest skill (URL / external file / paste)"
 ```
 
 ---
 
-## Task 5: `/x-wiki:compile` skill
+## Task 5: `/p-wiki:compile` skill
 
 **Files:**
 - Create: `skills/compile/SKILL.md`
@@ -611,7 +611,7 @@ argument-hint: "[<path>]"
 allowed-tools: Bash(git rev-parse:*) Bash(test:*) Read Write Edit Grep Glob
 ---
 
-# /x-wiki:compile
+# /p-wiki:compile
 
 You are synthesizing wiki pages from one or more source files.
 
@@ -619,7 +619,7 @@ You are synthesizing wiki pages from one or more source files.
 
 ## Step 1 — Find the wiki
 
-`<root>` = `git rev-parse --show-toplevel`. Confirm `<root>/docs/wiki/CLAUDE.md` exists; it auto-loads now. If not, stop and ask user to run `/x-wiki:init` first.
+`<root>` = `git rev-parse --show-toplevel`. Confirm `<root>/docs/wiki/CLAUDE.md` exists; it auto-loads now. If not, stop and ask user to run `/p-wiki:init` first.
 
 ## Step 2 — Build the source list
 
@@ -734,12 +734,12 @@ If a YAML parser is available locally, run it (e.g. `python -c "import yaml; pri
 
 ```bash
 git add skills/compile/SKILL.md
-git commit -m "feat: /x-wiki:compile skill (raw and in-repo sources, idempotent)"
+git commit -m "feat: /p-wiki:compile skill (raw and in-repo sources, idempotent)"
 ```
 
 ---
 
-## Task 6: `/x-wiki:query` skill
+## Task 6: `/p-wiki:query` skill
 
 **Files:**
 - Create: `skills/query/SKILL.md`
@@ -757,7 +757,7 @@ argument-hint: "<question>"
 allowed-tools: Bash(git rev-parse:*) Bash(mv:*) Read Write Edit Grep Glob
 ---
 
-# /x-wiki:query
+# /p-wiki:query
 
 You are answering one question using the wiki's pages and saving the answer.
 
@@ -765,7 +765,7 @@ You are answering one question using the wiki's pages and saving the answer.
 
 ## Step 1 — Find the wiki
 
-`<root>` = `git rev-parse --show-toplevel`. Confirm `<root>/docs/wiki/CLAUDE.md` exists. If not, stop with "run `/x-wiki:init` first".
+`<root>` = `git rev-parse --show-toplevel`. Confirm `<root>/docs/wiki/CLAUDE.md` exists. If not, stop with "run `/p-wiki:init` first".
 
 ## Step 2 — Extract terms
 
@@ -850,12 +850,12 @@ If a YAML parser is available locally, run it (e.g. `python -c "import yaml; pri
 
 ```bash
 git add skills/query/SKILL.md
-git commit -m "feat: /x-wiki:query skill (search, synthesize, optional promote)"
+git commit -m "feat: /p-wiki:query skill (search, synthesize, optional promote)"
 ```
 
 ---
 
-## Task 7: `/x-wiki:lint` skill
+## Task 7: `/p-wiki:lint` skill
 
 **Files:**
 - Create: `skills/lint/SKILL.md`
@@ -873,7 +873,7 @@ argument-hint: (no arguments)
 allowed-tools: Bash(git rev-parse:*) Read Grep Glob
 ---
 
-# /x-wiki:lint
+# /p-wiki:lint
 
 You are auditing the wiki and producing a report. You do NOT modify any wiki files.
 
@@ -955,7 +955,7 @@ Stale (warnings): 0
 Total: 3 errors, 4 warnings.
 ```
 
-End with: "Run `/x-wiki:compile` after fixes, then re-lint."
+End with: "Run `/p-wiki:compile` after fixes, then re-lint."
 
 Do not propose fixes inline — let the user decide.
 
@@ -979,7 +979,7 @@ If a YAML parser is available locally, run it (e.g. `python -c "import yaml; pri
 
 ```bash
 git add skills/lint/SKILL.md
-git commit -m "feat: /x-wiki:lint skill (read-only audit, errors vs warnings)"
+git commit -m "feat: /p-wiki:lint skill (read-only audit, errors vs warnings)"
 ```
 
 ---
@@ -997,43 +997,43 @@ The exact install command depends on the current Claude Code plugin tooling. Try
 1. `/plugin` slash command — see if there's an "Add local plugin" option pointing to this repo's directory.
 2. Otherwise, follow `https://code.claude.com/docs/en/plugins` for the current local-install procedure.
 
-Verify install by listing skills: type `/` in Claude Code and confirm `/x-wiki:init`, `/x-wiki:ingest`, `/x-wiki:compile`, `/x-wiki:query`, `/x-wiki:lint` appear in the menu.
+Verify install by listing skills: type `/` in Claude Code and confirm `/p-wiki:init`, `/p-wiki:ingest`, `/p-wiki:compile`, `/p-wiki:query`, `/p-wiki:lint` appear in the menu.
 
 - [ ] **Step 2: Set up a clean test repo**
 
 ```bash
-mkdir /tmp/x-wiki-smoke && cd /tmp/x-wiki-smoke
+mkdir /tmp/p-wiki-smoke && cd /tmp/p-wiki-smoke
 git init
 echo "# smoke" > README.md
 git add . && git commit -m "init"
 ```
 
-(On Windows: use `mkdir $env:TEMP\x-wiki-smoke; cd $env:TEMP\x-wiki-smoke; git init; ...`)
+(On Windows: use `mkdir $env:TEMP\p-wiki-smoke; cd $env:TEMP\p-wiki-smoke; git init; ...`)
 
-- [ ] **Step 3: Run `/x-wiki:init`**
+- [ ] **Step 3: Run `/p-wiki:init`**
 
 Expected:
 - `docs/wiki/{raw,pages}/...` created.
 - `docs/wiki/CLAUDE.md`, `README.md`, `index.md` present.
-- `.claude/rules/x-wiki.md` present.
+- `.claude/rules/p-wiki.md` present.
 
 If the rule file is not created, re-check Task 3 step 5.
 
-- [ ] **Step 4: Run `/x-wiki:ingest <a-public-url>`**
+- [ ] **Step 4: Run `/p-wiki:ingest <a-public-url>`**
 
 Pick a small public article. Expected: `docs/wiki/raw/articles/<slug>.md` with frontmatter and the article's markdown.
 
-Also try `/x-wiki:ingest /tmp/x-wiki-smoke/README.md` — expected: refusal with "use `/x-wiki:compile` instead" message.
+Also try `/p-wiki:ingest /tmp/p-wiki-smoke/README.md` — expected: refusal with "use `/p-wiki:compile` instead" message.
 
-- [ ] **Step 5: Run `/x-wiki:compile`**
+- [ ] **Step 5: Run `/p-wiki:compile`**
 
 Expected: at least one page in `pages/concept/`, one in `pages/source/`. `raw/articles/<slug>.md` frontmatter now has `compiled: true` and `compiled-to:` populated. `index.md` lists the new pages.
 
-- [ ] **Step 6: Run `/x-wiki:compile docs/wiki/README.md`**
+- [ ] **Step 6: Run `/p-wiki:compile docs/wiki/README.md`**
 
 (Or any other in-repo file.) Expected: pages created, sources entries point to the in-repo path (relative to repo root), README.md itself is unchanged.
 
-- [ ] **Step 7: Run `/x-wiki:query "what is <a topic from the ingested article>"`**
+- [ ] **Step 7: Run `/p-wiki:query "what is <a topic from the ingested article>"`**
 
 Expected: an answer with at least one citation; a new file in `pages/queries/<date>-<slug>.md`; the reply ends with the promotion offer.
 
@@ -1041,11 +1041,11 @@ Expected: an answer with at least one citation; a new file in `pages/queries/<da
 
 In the next message, say "no, leave it." Expected: query file stays where it is.
 
-- [ ] **Step 9: Run `/x-wiki:query` again with a different question, accept promotion**
+- [ ] **Step 9: Run `/p-wiki:query` again with a different question, accept promotion**
 
 Expected: the query file moves to `pages/concept/<slug>.md`; frontmatter updated to `type: concept`, `status: active`, `sources:` populated from former `informed-by`, `question:` and `informed-by:` removed.
 
-- [ ] **Step 10: Run `/x-wiki:lint`**
+- [ ] **Step 10: Run `/p-wiki:lint`**
 
 Expected: probably 0 errors. Maybe some warnings about underlinked pages (the smoke test has very few pages). If errors, fix the underlying skill, re-test.
 
@@ -1056,7 +1056,7 @@ Add a "Known limitations" section to the plugin's `README.md` capturing any roug
 - [ ] **Step 12: Commit**
 
 ```bash
-cd /path/to/x-wiki/plugin/repo  # back to C:\projects\tssd\x
+cd /path/to/p-wiki/plugin/repo  # back to C:\projects\tssd\x
 git add README.md
 git commit -m "docs: known limitations from smoke test"
 ```
@@ -1067,6 +1067,6 @@ git commit -m "docs: known limitations from smoke test"
 
 After Task 8 commits, the plugin is functional end-to-end. Consider as follow-up (NOT part of this plan):
 
-- Convert `/x-wiki:lint` to `context: fork, agent: Explore` (see §7 of the spec).
+- Convert `/p-wiki:lint` to `context: fork, agent: Explore` (see §7 of the spec).
 - Add a marketplace.json for easier sharing.
 - Set up CI to lint the plugin's own skill frontmatter on commit.

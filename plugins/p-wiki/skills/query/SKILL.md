@@ -6,7 +6,7 @@ argument-hint: "<question>"
 allowed-tools: Bash(git rev-parse:*) Bash(mv:*) Read Write Edit Grep Glob
 ---
 
-# /x-wiki:query
+# /p-wiki:query
 
 You are answering one question using the wiki's pages and saving the answer.
 
@@ -14,7 +14,7 @@ You are answering one question using the wiki's pages and saving the answer.
 
 ## Step 1 — Find the wiki
 
-`<root>` = `git rev-parse --show-toplevel`. Confirm `<root>/docs/wiki/CLAUDE.md` exists. If not, stop with "run `/x-wiki:init` first".
+`<root>` = `git rev-parse --show-toplevel`. Confirm `<root>/docs/wiki/CLAUDE.md` exists. If not, stop with "run `/p-wiki:init` first".
 
 ## Step 2 — Extract terms
 

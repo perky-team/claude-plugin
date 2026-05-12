@@ -6,7 +6,7 @@ argument-hint: (no arguments)
 allowed-tools: Bash(git rev-parse:*) Read Grep Glob
 ---
 
-# /x-wiki:lint
+# /p-wiki:lint
 
 You are auditing the wiki and producing a report. You do NOT modify any wiki files.
 
@@ -88,7 +88,7 @@ Stale (warnings): 0
 Total: 3 errors, 4 warnings.
 ```
 
-End with: "Run `/x-wiki:compile` after fixes, then re-lint."
+End with: "Run `/p-wiki:compile` after fixes, then re-lint."
 
 Do not propose fixes inline — let the user decide.
 
