@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "test": "vitest run tests",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "validate": "node scripts/validate.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

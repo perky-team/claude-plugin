@@ -35,6 +35,16 @@ npm test
 
 Tests are static — no network, no `claude` CLI, no fixtures. See [`docs/superpowers/specs/2026-05-12-marketplace-tests-design.md`](./docs/superpowers/specs/2026-05-12-marketplace-tests-design.md) for the rationale.
 
+## Validate
+
+Run Claude Code's own validator on the marketplace and every plugin. Requires the `claude` CLI on PATH.
+
+```bash
+npm run validate
+```
+
+Complements `npm test`: tests catch structural drift in our manifests/skills, `validate` catches whatever the `claude` CLI itself rejects.
+
 ## Repository layout
 
 ```
@@ -60,9 +70,3 @@ claude --plugin-dir C:/path/to/x/plugins/p-wiki
 ```
 
 Each plugin can be loaded standalone for development with `--plugin-dir`.
-
-## Validate
-
-```bash
-claude plugin validate .
-```
