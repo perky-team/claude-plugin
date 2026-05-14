@@ -3,7 +3,7 @@
 import { readFileSync } from 'node:fs';
 import { resolveDestination } from './lib/destination.mjs';
 import { TYPES, templateBody, isRawType } from './lib/schema.mjs';
-import { kebab } from './lib/slug.mjs';
+import { kebab, stripDatePrefix } from './lib/slug.mjs';
 import { today } from './lib/paths.mjs';
 
 const VERSION = '1.0.0';
@@ -168,8 +168,47 @@ function parseFieldValue(s) {
   return s;
 }
 
-// Other commands (promote, search, lint) and unknown handler land in later tasks.
-if (!['new', 'set'].includes(command)) {
+if (command === 'promote') {
+  const path = args._[0];
+  if (!path) die(`promote: <path> required`, 1);
+  if (args.to !== 'concept') die(`promote: only --to=concept supported in v1`, 1);
+  const dest = resolveDestination({ cwd: process.cwd() });
+  if (!dest) die(`not inside a p-wiki repo`, 1);
+
+  let source;
+  try { source = dest.readPage(path); } catch (e) { die(e.message, 1); }
+  if (source.frontmatter.type !== 'query') die(`promote: source must be type=query`, 1);
+
+  const informedBy = source.frontmatter['informed-by'] ?? [];
+  const slug = stripDatePrefix(source.frontmatter.id);
+  const targetPath = `docs/wiki/pages/concept/${slug}.md`;
+  if (dest.pageExists({ type: 'concept', slug })) {
+    emitJson({ 'existing-path': targetPath }, 2);
+  }
+
+  // Union sources from informed-by pages
+  const collected = new Set();
+  for (const ibPath of informedBy) {
+    try {
+      const ibAbs = ibPath.startsWith('docs/wiki/') ? ibPath : `docs/wiki/${ibPath}`;
+      const p = dest.readPage(ibAbs);
+      for (const s of (p.frontmatter.sources ?? [])) collected.add(s);
+    } catch { /* skip missing — lint will surface */ }
+  }
+  const sourcesArr = [...collected].sort();
+
+  dest.movePage(path, targetPath);
+  const mutations = {
+    setFields: { type: 'concept', status: 'active', sources: sourcesArr },
+    removeFields: ['question', 'informed-by'],
+    bumpUpdated: true,
+  };
+  dest.mutatePage(targetPath, mutations);
+  emitJson({ from: path, to: targetPath, sources: sourcesArr }, 0);
+}
+
+// Other commands (search, lint) and unknown handler land in later tasks.
+if (!['new', 'set', 'promote'].includes(command)) {
   const KNOWN = ['new', 'set', 'promote', 'search', 'lint'];
   if (!KNOWN.includes(command)) die(`unknown command: ${command}`, 1);
   process.stderr.write(`pwiki: command '${command}' not yet implemented\n`);
