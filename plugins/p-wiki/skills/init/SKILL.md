@@ -3,12 +3,16 @@ name: init
 description: |
   Initialize a markdown knowledge wiki at `docs/wiki/` of the current git repo and a global rule at `.claude/rules/p-wiki.md`. Use when the user says "init wiki", "create wiki", "setup knowledge base", or asks to start a new p-wiki.
 argument-hint: (no arguments)
-allowed-tools: Bash(git rev-parse:*) Bash(mkdir:*) Bash(test:*) Read Write
+allowed-tools: Bash(git rev-parse:*) Bash(mkdir:*) Bash(test:*) Bash(node:*) Read Write
 ---
 
 # /p-wiki:init
 
 You are scaffolding the `p-wiki` knowledge base inside the current repo.
+
+## Step 0 — Verify Node 18+ is available
+
+Run `node --version` via Bash. If it fails or returns a major version <18, stop and tell the user: "p-wiki requires Node ≥ 18 in PATH for the bundled CLI. Install or update Node, then re-run /p-wiki:init." Do not proceed with scaffolding.
 
 ## Step 1 — Find the repo root
 
