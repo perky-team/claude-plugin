@@ -207,8 +207,26 @@ if (command === 'promote') {
   emitJson({ from: path, to: targetPath, sources: sourcesArr }, 0);
 }
 
-// Other commands (search, lint) and unknown handler land in later tasks.
-if (!['new', 'set', 'promote'].includes(command)) {
+if (command === 'search') {
+  const query = args._[0];
+  if (!query) die(`search: <query> required`, 1);
+  const dest = resolveDestination({ cwd: process.cwd() });
+  if (!dest) die(`not inside a p-wiki repo`, 1);
+
+  const opts = {
+    type: typeof args.type === 'string' ? args.type.split(',').map(s => s.trim()).filter(Boolean) : [],
+    tags: typeof args.tags === 'string' ? args.tags.split(',').map(s => s.trim()).filter(Boolean) : [],
+    in: args.in ?? 'pages',
+    limit: args.limit ? Number(args.limit) : 10,
+    snippet: args.snippet === 'false' ? false : true,
+  };
+
+  const r = dest.search(query, opts);
+  emitJson({ query, total: r.total, results: r.results }, 0);
+}
+
+// Other commands (lint) and unknown handler land in later tasks.
+if (!['new', 'set', 'promote', 'search'].includes(command)) {
   const KNOWN = ['new', 'set', 'promote', 'search', 'lint'];
   if (!KNOWN.includes(command)) die(`unknown command: ${command}`, 1);
   process.stderr.write(`pwiki: command '${command}' not yet implemented\n`);
