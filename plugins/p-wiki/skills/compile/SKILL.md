@@ -3,7 +3,7 @@ name: compile
 description: |
   Synthesize wiki pages from a source file. Accepts a path to any file in the repo (raw/ item, design spec, README, ADR, code doc). Without arguments, processes all `raw/**` items with `compiled: false`. Re-running on the same path is idempotent — derived pages get updated, not duplicated. Use when the user says "compile", "synthesize pages", "process the source", or names a doc to extract knowledge from.
 argument-hint: "[<path>]"
-allowed-tools: Bash(git rev-parse:*) Read Write Edit Grep Glob
+allowed-tools: Bash(git rev-parse:*) Bash(node:*) Read Write Edit Grep Glob
 ---
 
 # /p-wiki:compile
@@ -56,19 +56,28 @@ Else slug = kebab-case(title). If `pages/<type>/<slug>.md` already exists for an
 
 ### 4d. Write or Edit each page
 
-For each entity, target path is `<root>/docs/wiki/pages/<type>/<slug>.md`.
+For each entity, the target path is `<root>/docs/wiki/pages/<type>/<slug>.md`.
 
-If the file doesn't exist:
-- Write a new page using the template from `docs/wiki/CLAUDE.md` for that type.
-- Frontmatter: `id`, `type`, `title`, `created` = today, `updated` = today, `status: active`, `tags: [...]` extracted from the source, `sources: [<repo-root-relative path to the source>]`. For type `source`, add `source-url`, `source-type`.
+**If the page does NOT exist** (your normalised-title search in 4c found no match):
 
-If the file exists:
-- Edit the body to add new facts in the appropriate sections (Key facts / Main ideas / Related concepts).
-- Bump `updated` to today.
-- Add the source path to `sources:` if not already there.
-- Do not remove existing content.
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/tools/pwiki.mjs" new <type> \
+  --title "<title>" --tags "<csv>" \
+  --source "<source-path>" --format=json
+```
 
-If two sources disagree on a fact, insert a callout block (see `docs/wiki/CLAUDE.md` compile rules) in both affected pages — never silently overwrite.
+This handles the frontmatter (id, type, created, updated, status, sources) and slug-conflict resolution. On exit 2, follow the conflict prompts (overwrite vs. date-suffix). After CLI success, **Edit the body** of the newly created file to add the synthesized facts in the appropriate sections (Key facts / Main ideas / Related concepts) using the templates in `docs/wiki/CLAUDE.md`.
+
+**If the page exists** (4c match):
+
+1. Mutate frontmatter via CLI:
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/tools/pwiki.mjs" set <existing-path> \
+     --bump-updated --add-source "<source-path>" --format=json
+   ```
+2. Edit the body to add new facts in the appropriate sections. Do not remove existing content.
+
+For conflict callouts when two sources disagree on a fact, edit both affected page bodies directly (the CLI does not handle this; it's an LLM-judged content concern).
 
 Apply [Markdown sanitization](#markdown-sanitization) to all body content before writing.
 
@@ -79,6 +88,8 @@ For raw sources, additionally create `<root>/docs/wiki/pages/source/<source-slug
 Skip this step for in-repo sources — the original is already discoverable in the repo.
 
 ### 4f. Backlink audit
+
+> Note: backlink audit is still in the skill in v1 (CLI `pwiki backlinks` lands in v2).
 
 For each page created or updated in this pass:
 
@@ -93,11 +104,18 @@ Stop early if a single page would produce more than 20 backlink additions across
 
 ### 4g. Stamp the raw frontmatter
 
-If the source was a raw file (not in-repo): Edit its frontmatter — set `compiled: true` and `compiled-to:` to the list of pages just created/updated for it.
+If the source was a raw file (not in-repo), run:
 
-Do not touch in-repo source files.
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/tools/pwiki.mjs" set <raw-path> \
+  --mark-compiled --add-compiled-to <new-page-path1> --add-compiled-to <new-page-path2> --format=json
+```
+
+For in-repo sources, do nothing — the original file is never modified.
 
 ## Step 5 — Regenerate `index.md`
+
+> Note: index regeneration is still in the skill in v1 (CLI `pwiki index` lands in v2). Continue using Read/Write as documented below.
 
 Glob `<root>/docs/wiki/pages/**/*.md`. Group by type, using these exact section headings (matching the template):
 
