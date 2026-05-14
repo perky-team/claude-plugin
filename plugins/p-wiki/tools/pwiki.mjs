@@ -56,7 +56,8 @@ if (command === 'new') {
   const dest = resolveDestination({ cwd: process.cwd() });
   if (!dest) die(`not inside a p-wiki repo`, 1);
 
-  const slug = args.slug ?? kebab(args.title);
+  let slug = args.slug ?? kebab(args.title);
+  if (type === 'query') slug = `${today()}-${slug}`;
   const tags = typeof args.tags === 'string' ? args.tags.split(',').map(t => t.trim()).filter(Boolean) : [];
 
   // Build per-type frontmatter
