@@ -5,10 +5,9 @@ import { directoryFor } from '../schema.mjs';
 import { withDateSuffix } from '../slug.mjs';
 import { toRepoRelative, today } from '../paths.mjs';
 import { rankDocuments } from '../search.mjs';
+import { runChecks } from '../lint.mjs';
 
 export function createFsDestination({ rootPath }) {
-  const notImpl = () => { throw new Error('not implemented yet'); };
-
   const absFor = (type, slug) => join(rootPath, 'docs', 'wiki', directoryFor(type), `${slug}.md`);
   const repoRel = (abs) => toRepoRelative(rootPath, abs);
 
@@ -183,6 +182,18 @@ export function createFsDestination({ rootPath }) {
     return { total: results.length, results };
   }
 
+  function lint(opts = {}) {
+    const docs = [];
+    for (const { path } of listPages({ in: 'all' })) {
+      try {
+        const text = readFileSync(join(rootPath, path), 'utf-8');
+        const { frontmatter, body } = parseFrontmatter(text);
+        docs.push({ path, frontmatter, body });
+      } catch { /* skip unparseable */ }
+    }
+    return runChecks(docs, { repoRoot: rootPath, existsFn: existsSync });
+  }
+
   return {
     kind: 'fs',
     rootPath,
@@ -193,6 +204,6 @@ export function createFsDestination({ rootPath }) {
     movePage,
     listPages,
     search,
-    lint: notImpl,
+    lint,
   };
 }
