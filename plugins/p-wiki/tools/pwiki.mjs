@@ -45,6 +45,9 @@ if (process.argv.slice(2)[0] === '--version') {
 const command = process.argv[2];
 const args = parseArgs(process.argv.slice(3));
 
+const KNOWN = ['new', 'set', 'promote', 'search', 'lint'];
+if (!KNOWN.includes(command)) die(`unknown command: ${command}`, 1);
+
 if (command === 'new') {
   const type = args._[0];
   if (!TYPES.includes(type)) die(`unknown type: ${type}`, 1);
@@ -225,10 +228,34 @@ if (command === 'search') {
   emitJson({ query, total: r.total, results: r.results }, 0);
 }
 
-// Other commands (lint) and unknown handler land in later tasks.
-if (!['new', 'set', 'promote', 'search'].includes(command)) {
-  const KNOWN = ['new', 'set', 'promote', 'search', 'lint'];
-  if (!KNOWN.includes(command)) die(`unknown command: ${command}`, 1);
-  process.stderr.write(`pwiki: command '${command}' not yet implemented\n`);
-  process.exit(3);
+if (command === 'lint') {
+  const dest = resolveDestination({ cwd: process.cwd() });
+  if (!dest) die(`not inside a p-wiki repo`, 1);
+  const r = dest.lint({});
+  const format = args.format ?? 'text';
+  if (format === 'json') {
+    emitJson(r, 0);
+  } else {
+    process.stdout.write(formatLintReport(r));
+    process.exit(0);
+  }
+}
+
+function formatLintReport(r) {
+  const out = [];
+  const sections = [
+    ['Dead links (errors)', r.errors['dead-links'], (e) => `  - ${e.file} → ${e.target}`],
+    ['Dead sources (errors)', r.errors['dead-sources'], (e) => `  - ${e.file} → ${e.source}`],
+    ['Frontmatter (errors)', r.errors.frontmatter, (e) => `  - ${e.file} — ${e.error ?? `type mismatch: expected ${e.expected}, actual ${e.actual}`}`],
+    ['Orphan pages (warnings)', r.warnings['orphan-pages'], (e) => `  - ${e.file}`],
+    ['Underlinked (warnings)', r.warnings.underlinked, (e) => `  - ${e.file} — ${e.count} outgoing link${e.count === 1 ? '' : 's'}`],
+    ['Stale (warnings)', r.warnings.stale, (e) => `  - ${e.file} — updated ${e.updated} (${e.days} days)`],
+  ];
+  for (const [title, items, fmt] of sections) {
+    out.push(`${title}: ${items.length}`);
+    for (const it of items) out.push(fmt(it));
+    out.push('');
+  }
+  out.push(`Total: ${r.totals.errors} errors, ${r.totals.warnings} warnings.`);
+  return out.join('\n') + '\n';
 }
