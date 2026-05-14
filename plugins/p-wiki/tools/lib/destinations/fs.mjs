@@ -114,15 +114,61 @@ export function createFsDestination({ rootPath }) {
     return { path: repoRelPath, changed: [...new Set(changed)], noop: false };
   }
 
+  function movePage(fromRel, toRel) {
+    const fromAbs = join(rootPath, fromRel);
+    const toAbs = join(rootPath, toRel);
+    if (!existsSync(fromAbs)) throw new Error(`page not found: ${fromRel}`);
+    if (existsSync(toAbs)) throw new Error(`target exists: ${toRel}`);
+    mkdirSync(dirname(toAbs), { recursive: true });
+    renameSync(fromAbs, toAbs);
+  }
+
+  function walkDir(start, out) {
+    if (!existsSync(start)) return;
+    const stack = [start];
+    while (stack.length) {
+      const cur = stack.pop();
+      for (const entry of readdirSync(cur, { withFileTypes: true })) {
+        const p = join(cur, entry.name);
+        if (entry.isDirectory()) stack.push(p);
+        else if (entry.isFile() && p.endsWith('.md')) {
+          try {
+            const text = readFileSync(p, 'utf-8');
+            const { frontmatter } = parseFrontmatter(text);
+            out.push({ path: repoRel(p), frontmatter });
+          } catch { /* skip unparseable */ }
+        }
+      }
+    }
+  }
+
+  function listPages(opts) {
+    const where = opts?.in ?? 'pages';
+    const subdirs = where === 'raw' ? ['raw'] : where === 'all' ? ['pages', 'raw'] : ['pages'];
+    const out = [];
+    for (const sub of subdirs) {
+      walkDir(join(rootPath, 'docs', 'wiki', sub), out);
+    }
+    let filtered = out;
+    if (opts?.types?.length) {
+      filtered = filtered.filter(p => opts.types.includes(p.frontmatter.type));
+    }
+    return filtered;
+  }
+
+  function pageExists({ type, slug }) {
+    return existsSync(absFor(type, slug));
+  }
+
   return {
     kind: 'fs',
     rootPath,
-    pageExists: notImpl,
+    pageExists,
     readPage,
     writePage,
     mutatePage,
-    movePage: notImpl,
-    listPages: notImpl,
+    movePage,
+    listPages,
     search: notImpl,
     lint: notImpl,
   };
