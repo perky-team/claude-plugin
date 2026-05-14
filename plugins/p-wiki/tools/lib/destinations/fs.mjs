@@ -39,13 +39,88 @@ export function createFsDestination({ rootPath }) {
     return { path: repoRel(abs), id: useSlug, slug: useSlug, created: true };
   }
 
+  function readPage(repoRelPath) {
+    const abs = join(rootPath, repoRelPath);
+    if (!existsSync(abs)) throw new Error(`page not found: ${repoRelPath}`);
+    const text = readFileSync(abs, 'utf-8');
+    const { frontmatter, body } = parseFrontmatter(text);
+    return { frontmatter, body, path: repoRelPath };
+  }
+
+  function mutatePage(repoRelPath, mutations) {
+    const { frontmatter, body } = readPage(repoRelPath);
+    const changed = [];
+    const newFm = { ...frontmatter };
+
+    if (mutations.setFields) {
+      for (const [k, v] of Object.entries(mutations.setFields)) {
+        if (newFm[k] !== v) { newFm[k] = v; changed.push(k); }
+      }
+    }
+    if (mutations.addTag) {
+      const tags = newFm.tags ?? [];
+      if (!tags.includes(mutations.addTag)) {
+        newFm.tags = [...tags, mutations.addTag];
+        changed.push('tags');
+      }
+    }
+    if (mutations.removeTag) {
+      const tags = newFm.tags ?? [];
+      if (tags.includes(mutations.removeTag)) {
+        newFm.tags = tags.filter(t => t !== mutations.removeTag);
+        changed.push('tags');
+      }
+    }
+    if (mutations.addSources) {
+      const src = newFm.sources ?? [];
+      const added = mutations.addSources.filter(s => !src.includes(s));
+      if (added.length) {
+        newFm.sources = [...src, ...added];
+        changed.push('sources');
+      }
+    }
+    if (mutations.addInformedBy) {
+      const ib = newFm['informed-by'] ?? [];
+      const added = mutations.addInformedBy.filter(s => !ib.includes(s));
+      if (added.length) {
+        newFm['informed-by'] = [...ib, ...added];
+        changed.push('informed-by');
+      }
+    }
+    if (mutations.addCompiledTo) {
+      const ct = newFm['compiled-to'] ?? [];
+      const added = mutations.addCompiledTo.filter(s => !ct.includes(s));
+      if (added.length) {
+        newFm['compiled-to'] = [...ct, ...added];
+        changed.push('compiled-to');
+      }
+    }
+    if (mutations.bumpUpdated) {
+      const t = today();
+      if (newFm.updated !== t) { newFm.updated = t; changed.push('updated'); }
+    }
+    if (mutations.markCompiled) {
+      if (newFm.compiled !== true) { newFm.compiled = true; changed.push('compiled'); }
+    }
+    if (mutations.removeFields) {
+      for (const k of mutations.removeFields) {
+        if (k in newFm) { delete newFm[k]; changed.push(k); }
+      }
+    }
+
+    if (changed.length === 0) return { path: repoRelPath, changed: [], noop: true };
+
+    writeFileSync(join(rootPath, repoRelPath), serializeFrontmatter(newFm, body), 'utf-8');
+    return { path: repoRelPath, changed: [...new Set(changed)], noop: false };
+  }
+
   return {
     kind: 'fs',
     rootPath,
     pageExists: notImpl,
-    readPage: notImpl,
+    readPage,
     writePage,
-    mutatePage: notImpl,
+    mutatePage,
     movePage: notImpl,
     listPages: notImpl,
     search: notImpl,
