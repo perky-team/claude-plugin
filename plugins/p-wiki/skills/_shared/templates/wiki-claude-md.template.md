@@ -143,3 +143,19 @@ See `sources:` in frontmatter.
 - [Concept A](../concept/a.md) — what was used
 - [Source B summary](../source/b-summary.md)
 ````
+
+## CLI tool
+
+A bundled Node CLI `pwiki` lives in the plugin (`${CLAUDE_PLUGIN_ROOT}/tools/pwiki.mjs`). Skills use it for mechanical operations; you should prefer it over generic Read/Write/Grep for:
+
+- **Creating any new page** — `pwiki new <type> --title=... [--source=... --tags=...]` (handles slug, frontmatter, conflicts).
+- **Mutating frontmatter** — `pwiki set <path> --bump-updated --add-source=... --add-tag=...`.
+- **Promoting query → concept** — `pwiki promote <path> --to=concept`.
+- **Ranked search** — `pwiki search "<question>" --format=json --limit=10`.
+- **Lint** — `pwiki lint` (text) or `pwiki lint --format=json`.
+
+Generic Read/Write/Edit remain for **body editing** (adding facts to sections, conflict-callouts, synthesizing answers). The CLI never touches body text.
+
+All CLI commands accept `--format=json` for machine-parseable output. Exit codes: 0 success, 1 user/env error, 2 conflict/schema violation (JSON body carries detail), 3 internal CLI bug.
+
+Requires Node 18+ in `PATH`.
