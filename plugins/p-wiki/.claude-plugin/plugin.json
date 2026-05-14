@@ -1,7 +1,7 @@
 {
   "name": "p-wiki",
-  "version": "0.1.0",
-  "description": "Persistent markdown knowledge wiki under docs/wiki/. Skills: init, ingest, compile, query, lint.",
+  "version": "1.0.0",
+  "description": "Persistent markdown knowledge wiki under docs/wiki/, with bundled pwiki CLI. Skills: init, ingest, compile, query, lint.",
   "author": {
     "name": "Andrey Sukharev",
     "email": "andrey.sukharev@exinity.com"
