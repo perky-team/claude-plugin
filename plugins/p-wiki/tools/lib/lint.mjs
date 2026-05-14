@@ -78,6 +78,8 @@ export function runChecks(docs, { repoRoot, existsFn }) {
   for (const d of docs) {
     if (d.path.endsWith('/index.md')) continue;
     if (d.path.includes('/pages/queries/')) continue;
+    // Raw pages live in sources: arrays of other pages, not as link targets in bodies.
+    if (d.path.includes('/raw/')) continue;
     if ((incoming.get(d.path) ?? []).length === 0) {
       warnings['orphan-pages'].push({ file: d.path });
     }

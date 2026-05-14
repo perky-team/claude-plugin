@@ -57,6 +57,22 @@ describe('lint.runChecks', () => {
     expect(r.warnings.stale.length).toBeGreaterThan(0);
   });
 
+  it('does not flag raw/ pages as orphans', () => {
+    // Raw pages are never linked from body — they appear only in `sources:` frontmatter.
+    // Including them in orphan-pages would generate a noisy warning for every raw ingest.
+    const raw = {
+      path: 'docs/wiki/raw/articles/foo.md',
+      frontmatter: {
+        id: 'foo', type: 'raw-article', title: 'Foo',
+        'source-url': 'https://x.test', 'source-type': 'article',
+        ingested: TODAY, compiled: false, 'compiled-to': [],
+      },
+      body: '# Foo\n',
+    };
+    const r = runChecks([raw as any], { repoRoot: '/x', existsFn: () => true });
+    expect(r.warnings['orphan-pages']).toEqual([]);
+  });
+
   it('totals reflect counts', () => {
     const r = runChecks([validConcept('a')], { repoRoot: '/x', existsFn: () => true });
     expect(r.totals).toEqual({
