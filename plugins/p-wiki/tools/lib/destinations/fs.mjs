@@ -4,6 +4,7 @@ import { serializeFrontmatter, parseFrontmatter } from '../fm.mjs';
 import { directoryFor } from '../schema.mjs';
 import { withDateSuffix } from '../slug.mjs';
 import { toRepoRelative, today } from '../paths.mjs';
+import { rankDocuments } from '../search.mjs';
 
 export function createFsDestination({ rootPath }) {
   const notImpl = () => { throw new Error('not implemented yet'); };
@@ -160,6 +161,28 @@ export function createFsDestination({ rootPath }) {
     return existsSync(absFor(type, slug));
   }
 
+  function search(query, opts = {}) {
+    const where = opts.in ?? 'pages';
+    const all = listPages({ in: where });
+    // Read bodies (listPages returns frontmatter only)
+    const docs = [];
+    for (const { path } of all) {
+      try {
+        const text = readFileSync(join(rootPath, path), 'utf-8');
+        const { frontmatter, body } = parseFrontmatter(text);
+        docs.push({ path, frontmatter, body });
+      } catch { /* skip */ }
+    }
+    let filtered = docs;
+    if (opts.type?.length) filtered = filtered.filter(d => opts.type.includes(d.frontmatter.type));
+    if (opts.tags?.length) filtered = filtered.filter(d => {
+      const dt = d.frontmatter.tags ?? [];
+      return opts.tags.some(t => dt.includes(t));
+    });
+    const results = rankDocuments(query, filtered, { limit: opts.limit ?? 10, snippet: opts.snippet ?? true });
+    return { total: results.length, results };
+  }
+
   return {
     kind: 'fs',
     rootPath,
@@ -169,7 +192,7 @@ export function createFsDestination({ rootPath }) {
     mutatePage,
     movePage,
     listPages,
-    search: notImpl,
+    search,
     lint: notImpl,
   };
 }
