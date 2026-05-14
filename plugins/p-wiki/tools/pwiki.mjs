@@ -127,8 +127,49 @@ function collectArray(args, key) {
   return Array.isArray(v) ? v : [v];
 }
 
-// Other commands (set, promote, search, lint) and unknown handler land in later tasks.
-if (!['new'].includes(command)) {
+if (command === 'set') {
+  const path = args._[0];
+  if (!path) die(`set: <path> required`, 1);
+  const dest = resolveDestination({ cwd: process.cwd() });
+  if (!dest) die(`not inside a p-wiki repo`, 1);
+  const mutations = {};
+
+  if (args.field) {
+    mutations.setFields = {};
+    for (const f of (Array.isArray(args.field) ? args.field : [args.field])) {
+      const eq = f.indexOf('=');
+      if (eq < 0) die(`--field expects name=value`, 1);
+      mutations.setFields[f.slice(0, eq)] = parseFieldValue(f.slice(eq + 1));
+    }
+  }
+  if (args['add-tag']) mutations.addTag = args['add-tag'];
+  if (args['remove-tag']) mutations.removeTag = args['remove-tag'];
+  if (args['add-source']) mutations.addSources = arrayify(args['add-source']);
+  if (args['add-informed-by']) mutations.addInformedBy = arrayify(args['add-informed-by']);
+  if (args['add-compiled-to']) mutations.addCompiledTo = arrayify(args['add-compiled-to']);
+  if (args['bump-updated']) mutations.bumpUpdated = true;
+  if (args['mark-compiled']) mutations.markCompiled = true;
+
+  try {
+    const r = dest.mutatePage(path, mutations);
+    emitJson(r, 0);
+  } catch (e) {
+    die(e.message, 1);
+  }
+}
+
+function arrayify(v) { return Array.isArray(v) ? v : [v]; }
+
+function parseFieldValue(s) {
+  if (s === 'true') return true;
+  if (s === 'false') return false;
+  if (s === 'null') return null;
+  if (/^-?\d+$/.test(s)) return Number(s);
+  return s;
+}
+
+// Other commands (promote, search, lint) and unknown handler land in later tasks.
+if (!['new', 'set'].includes(command)) {
   const KNOWN = ['new', 'set', 'promote', 'search', 'lint'];
   if (!KNOWN.includes(command)) die(`unknown command: ${command}`, 1);
   process.stderr.write(`pwiki: command '${command}' not yet implemented\n`);
