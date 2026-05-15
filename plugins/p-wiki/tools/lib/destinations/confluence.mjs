@@ -15,12 +15,24 @@ export function createConfluenceDestination({ root, config, transport }) {
 
   const nyi = (name) => () => { throw new Error(`ConfluenceDestination.${name}: not implemented`); };
 
+  async function pageExists({ type, slug }) {
+    const cached = identity.get(type, slug);
+    if (cached) return true;
+    const subParent = c.subParents[type];
+    const cql = `ancestor = ${subParent} AND property["pwiki-id"] = "${slug}" AND property["pwiki-type"] = "${type}"`;
+    const res = await http.get(`/wiki/rest/api/search?cql=${encodeURIComponent(cql)}&limit=1`);
+    const r = res.body?.results?.[0];
+    if (!r) return false;
+    identity.set(type, slug, r.content?.id ?? r.id);
+    return true;
+  }
+
   return {
     kind: 'confluence',
     rootPath: `${c.siteUrl}#${c.spaceKey}/${c.rootPageId}`,
     // shared internals (exposed for layered impls):
     _http: http, _config: c, _identity: identity, _properties: properties,
-    pageExists: nyi('pageExists'),
+    pageExists,
     readPage: nyi('readPage'),
     writePage: nyi('writePage'),
     mutatePage: nyi('mutatePage'),
