@@ -18,7 +18,7 @@ Add a second implementation of the `Destination` interface so the same `pwiki` C
 
 ### 1.2 Non-goals
 
-- **Server / Data Center.** Cloud only. Storage format and REST v1 endpoints are out of scope.
+- **Server / Data Center.** Cloud only. v1 *storage format* (XHTML) is not used for content (we use ADF, see §2.2). We do call a small number of REST v1 *endpoints* on Cloud (CQL search, label management) — see §2.5.1 for the version mix rationale.
 - **Migration FS↔Confluence.** Deferred to v2.1. A user starting on Confluence starts with an empty wiki; FS users do not auto-import.
 - **Round-trip user edits.** If a human edits a page in Confluence UI between two `pwiki` writes, the next write overwrites the human edit. Version history in Confluence preserves the old content; pwiki does not attempt detect-and-merge. Rule: pages under the configured root are managed by pwiki, edit via skills.
 - **Raw sources in Confluence.** `raw-article`, `raw-file`, `raw-paste` keep living in `docs/wiki/raw/` on disk in both modes. The Confluence backend handles only the synthesized pages (concept, person, source, query).
@@ -162,8 +162,8 @@ No config file ⇒ FS, preserving v1 behavior for every existing wiki.
 
 - **FS:** unchanged.
 - **Confluence:**
-  1. `pageExists({ type, slug })` — if true:
-     - `onConflict = "fail"` → return `{ created: false, existingPath, dateSuffixSlug }`, exit 2 at CLI layer.
+  1. `pageExists({ type, slug })` — if true (the destination internally resolves the conflicting page's numeric id during this check):
+     - `onConflict = "fail"` → return `{ created: false, existingPath: "confluence://<type>/<slug>", existingViewUrl: "<siteUrl>/wiki/spaces/<spaceKey>/pages/<numericId>", dateSuffixSlug }`, exit 2 at CLI layer. `existingViewUrl` lets the skill show a clickable link to what is already there, which `existingPath` alone (a synthetic opaque string identical to the input) cannot.
      - `onConflict = "date-suffix"` → set `slug = withDateSuffix(slug, today())`, re-run `pageExists` with the new slug; if still true, exit 2 (same single-suffix behavior as FS — we trust today's slug to be unique).
      - `onConflict = "overwrite"` → fall through to update path.
   2. `adf.markdownToAdf(body)` → ADF JSON.
@@ -176,7 +176,7 @@ No config file ⇒ FS, preserving v1 behavior for every existing wiki.
      - `PUT /wiki/api/v2/pages/<id>` with new title, new body, `version.number = current + 1`.
      - On 409 → one auto-retry with fresh GET; second 409 → exit 1 `version-conflict`.
      - For each property whose value differs: `properties.upsert(pageId, key, value)`.
-     - Sync labels diff: `DELETE /wiki/rest/api/content/<id>/label?name=<x>` for removed tags; `POST` for added tags.
+     - Sync labels (wipe-and-set): `GET /wiki/rest/api/content/<id>/label` to list current labels; `DELETE` each one whose name is not in the new `tags`; `POST` each new tag whose name is not already there. The diff approach (not "DELETE all + POST all") avoids unnecessary writes when tags are unchanged.
   5. Return `{ path: "confluence://<type>/<slug>", id, slug, created, viewUrl }`.
 
 `viewUrl` is an additional output field, not part of `path`. Skills use `path` for identity and dispatch back to CLI; `viewUrl` is human-clickable display only.
@@ -184,7 +184,7 @@ No config file ⇒ FS, preserving v1 behavior for every existing wiki.
 ### 3.4 `mutatePage(path, mutations)`
 
 - **FS:** unchanged.
-- **Confluence:** GET properties → apply mutations on the reassembled frontmatter object (reuses the same mutation logic as FS) → diff → `properties.upsert` only for changed properties; if `tags` changed, sync labels (POST/DELETE diff). **Body is never touched** — no body GET, no body PUT, no page-body version increment. Each property has its own server-side version, bumped only on upsert. No body PUT means no spurious entry in page history.
+- **Confluence:** GET properties → apply mutations on the reassembled frontmatter object (reuses the same mutation logic as FS) → diff → `properties.upsert` only for changed properties; if `tags` changed, sync labels with the same diff approach as §3.3 update path (GET current labels, DELETE removed, POST added). **Body is never touched** — no body GET, no body PUT, no page-body version increment. Each property has its own server-side version, bumped only on upsert. No body PUT means no spurious entry in page history.
 
 ### 3.5 `movePage(fromPath, toPath)`
 
@@ -290,7 +290,7 @@ No pooling, streaming, multipart. JSON request/response only.
 | Failure | Exit | `error.code` | Skill response |
 |---|---|---|---|
 | 401, 403 | 1 | `auth-failed` | Show "Check PWIKI_CONFLUENCE_EMAIL / PWIKI_CONFLUENCE_TOKEN; verify token grants access to space" |
-| init: 404 on rootPageId / spaceKey | 1 | `config-invalid` | "Parent page not found in space. Re-run /p-wiki:init." |
+| init: space resolve empty / 404 on rootPageId | 1 | `config-invalid` | "Space or parent page not found / not accessible. Re-run /p-wiki:init." |
 | 404 on `readPage` (page deleted in UI) | 1 | `page-not-found` | "Page `<path>` no longer exists in Confluence" |
 | 429 after 3 retries | 1 | `rate-limited` | "Confluence rate-limited; retry in a few minutes" |
 | 5xx after 3 retries | 1 | `network-error` | "Confluence is unavailable; retry later" |
@@ -360,10 +360,10 @@ Without `--verbose`: silent on success, standard stderr message on failure. Resp
 3. Prompt: destination? (fs | confluence). Default fs.
 4. If confluence:
    a. Prompt: site URL.
-   b. GET /wiki/api/v2/spaces → list accessible spaces. Show keys + names. Capture both `spaceKey` and numeric `spaceId` for each.
-   c. Prompt: space key → keep both spaceKey and spaceId for the selected space.
+   b. Prompt: space key (user types it; no upfront list of all spaces — large sites have hundreds).
+   c. Resolve: `GET /wiki/api/v2/spaces?keys=<key>` → 1 result with `{id, key, name}`. Empty result → exit 1 `config-invalid` with "Space `<key>` not found or not accessible by this token". Capture both `spaceKey` and numeric `spaceId`.
    d. Prompt: parent page title or numeric ID.
-      If title: CQL lookup under that space; if multiple matches, prompt to disambiguate; if no match, exit 1 with "Create the parent page in Confluence UI first, then re-run /p-wiki:init".
+      If title: CQL lookup under that space; if multiple matches, prompt to disambiguate; if no match, exit 1 `config-invalid` with "Create the parent page in Confluence UI first, then re-run /p-wiki:init".
    e. GET that page to validate access.
    f. Ensure sub-parents: for each of {Concepts, People, Sources, Queries}, find-or-create child page under rootPageId. Find via `pwiki-role` property lookup; on create, set `pwiki-role = "sub-parent:<type>"` so subsequent init runs are idempotent and lint skips them (§4).
    g. Write docs/wiki/.pwiki.json (including `spaceId` and `subParents`).
@@ -403,18 +403,29 @@ Three layers on vitest + TypeScript (`tools/__tests__/`).
 
 ### 8.2 Destination contract tests (offline, fake HTTP)
 
-`destination-contract.test.ts` already verifies shape conformance and re-runs against the Confluence destination with an injected fake HTTP transport. Fake is ~150 lines, in `__tests__/fixtures/fake-confluence.mjs`, handling:
+`destination-contract.test.ts` already verifies shape conformance for the FS destination via a `runContractTests(name, makeDest)` helper. **Required refactor** (part of layer 2 work, see §8.4): the test currently hard-codes FS paths in two places — `applyBacklinks({ targetPath: 'docs/wiki/pages/concept/target.md' })` and `expect(r.path).toBe('docs/wiki/index.md')`. To run the same suite against the Confluence destination, the test must:
+
+- Capture `path` from a prior `writePage` and feed it back to `applyBacklinks`/`readPage`/`mutatePage` instead of hard-coding strings.
+- Assert path *shape* via `expect(r.path).toMatch(<regex>)` driven by the destination's `kind` (FS → starts with `docs/wiki/`, Confluence → starts with `confluence://`).
+- For `regenerateIndex`, assert `expect(r.written).toBe(true)` and shape of `groups`, not the literal `path` value.
+
+After the refactor, the file ends with two `runContractTests` invocations: one for FS, one for Confluence (with an injected fake HTTP transport). Fake is ~200 lines, in `__tests__/fixtures/fake-confluence.mjs`, handling exactly the endpoints the real destination calls:
 
 ```
-GET   /wiki/api/v2/pages/:id
-POST  /wiki/api/v2/pages
-PUT   /wiki/api/v2/pages/:id
-GET   /wiki/api/v2/pages/:id/properties
-PUT   /wiki/api/v2/pages/:id/properties/:key
-GET   /wiki/rest/api/search?cql=...
+GET    /wiki/api/v2/spaces?keys=:key
+GET    /wiki/api/v2/pages/:id
+POST   /wiki/api/v2/pages
+PUT    /wiki/api/v2/pages/:id
+GET    /wiki/api/v2/pages/:id/properties
+POST   /wiki/api/v2/pages/:id/properties
+PUT    /wiki/api/v2/pages/:id/properties/:propertyId
+GET    /wiki/rest/api/search?cql=...
+GET    /wiki/rest/api/content/:id/label
+POST   /wiki/rest/api/content/:id/label
+DELETE /wiki/rest/api/content/:id/label?name=:name
 ```
 
-In-memory state: `Map<numericId, { title, parentId, version, body, properties }>`. Naive substring matching for CQL `text ~`. Hand-rolled, zero deps.
+In-memory state: `Map<numericId, { title, parentId, version, body, properties: Map<key,{id,value,version}>, labels: Set<string> }>`. Naive substring matching for CQL `text ~`. Hand-rolled, zero deps.
 
 Confluence-specific semantic tests:
 
@@ -450,12 +461,14 @@ Implementation rolls out in five layers; each layer ships with green tests befor
 | Layer | Implementation | Tests added |
 |---|---|---|
 | 1 | ConfluenceDestination skeleton + `http.mjs` + `config.mjs` + `adf.mjs` + `identity.mjs` + `tree.mjs` | All §8.1 unit tests |
-| 2 | `writePage` + `pageExists` + `listPages` | Contract for these methods through fake; e2e for `pwiki new` |
+| 2 | `writePage` + `pageExists` + `listPages` | Refactor `destination-contract.test.ts` to be backend-agnostic (capture paths from `writePage`, assert path shape not value); add Confluence destination invocation; fake transport; e2e for `pwiki new` |
 | 3 | `readPage` + `mutatePage` + `movePage` | Contract; e2e for `pwiki set` and `pwiki promote` |
 | 4 | `search` + `lint` (including `drift`, `misparented`) | Contract; e2e for `pwiki search` and `pwiki lint` |
 | 5 | `applyBacklinks` + `regenerateIndex` | Contract; e2e full scenario |
 
-Each layer must leave the existing FS test suite green — v2 changes do not touch `destinations/fs.mjs` or its helpers, but the test bot enforces this invariant. End of layer 5 is the v2.0.0 ship. Between layers, Confluence mode is partially functional (e.g. after layer 2 you can `pwiki new` but not `pwiki search`); this is acceptable because Confluence mode is opt-in via `.pwiki.json` — users without that file see no change.
+Each layer must leave the existing FS test suite green; v2 changes do not modify `destinations/fs.mjs` or its helpers, so `npm test` running both suites is the gate at every layer. Contract test coverage grows layer by layer — layer 2 enables `writePage`/`pageExists`/`listPages` assertions on Confluence; subsequent layers extend it. Full Confluence-vs-FS contract parity is achieved at the end of layer 5.
+
+End of layer 5 is the v2.0.0 ship. Between layers, Confluence mode is partially functional (e.g. after layer 2 you can `pwiki new` but not `pwiki search`); this is acceptable because Confluence mode is opt-in via `.pwiki.json` — users without that file see no change.
 
 CI runs unit + contract on every push; e2e runs locally before the `v2.0.0` git tag.
 
