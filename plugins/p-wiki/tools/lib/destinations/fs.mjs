@@ -1,4 +1,4 @@
-import { existsSync, writeFileSync, readFileSync, mkdirSync, renameSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, writeFileSync, readFileSync, mkdirSync, renameSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { serializeFrontmatter, parseFrontmatter } from '../fm.mjs';
 import { directoryFor } from '../schema.mjs';
