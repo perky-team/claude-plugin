@@ -12,8 +12,7 @@ beforeEach(() => {
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
-// Generic contract runner — receives a destination factory
-function runContractTests(name: string, makeDest: () => any) {
+function runContractTests(name: string, makeDest: () => any, pathShape: RegExp, indexPathShape: RegExp) {
   describe(`Destination contract: ${name}`, () => {
     it('exposes the documented method set', () => {
       const d = makeDest();
@@ -24,62 +23,53 @@ function runContractTests(name: string, makeDest: () => any) {
       expect(typeof d.rootPath).toBe('string');
     });
 
-    it('writePage returns the documented shape', () => {
+    it('writePage returns the documented shape', async () => {
       const d = makeDest();
-      const r = d.writePage({
+      const r = await d.writePage({
         type: 'concept', slug: 'shape',
-        frontmatter: {
-          id: 'shape', type: 'concept', title: 'Shape',
-          created: '2026-05-14', updated: '2026-05-14',
-          status: 'active', tags: [], sources: [],
-        },
+        frontmatter: { id: 'shape', type: 'concept', title: 'Shape', created: '2026-05-14', updated: '2026-05-14', status: 'active', tags: [], sources: [] },
         body: '# Shape\n',
       });
       expect(r).toMatchObject({ created: true });
-      expect(typeof r.path).toBe('string');
+      expect(r.path).toMatch(pathShape);
       expect(typeof r.id).toBe('string');
       expect(typeof r.slug).toBe('string');
     });
 
-    it('search returns { total, results[] }', () => {
+    it('search returns { total, results[] }', async () => {
       const d = makeDest();
-      const r = d.search('anything', {});
+      const r = await d.search('anything', {});
       expect(typeof r.total).toBe('number');
       expect(Array.isArray(r.results)).toBe(true);
     });
 
-    it('lint returns { errors, warnings, totals }', () => {
+    it('lint returns { errors, warnings, totals }', async () => {
       const d = makeDest();
-      const r = d.lint({});
+      const r = await d.lint({});
       expect(typeof r.errors).toBe('object');
       expect(typeof r.warnings).toBe('object');
       expect(typeof r.totals.errors).toBe('number');
       expect(typeof r.totals.warnings).toBe('number');
     });
 
-    it('applyBacklinks returns the documented success shape', () => {
+    it('applyBacklinks returns documented shape against a seeded page', async () => {
       const d = makeDest();
-      // Seed a target page so applyBacklinks has something to operate on.
-      d.writePage({
+      const seed = await d.writePage({
         type: 'concept', slug: 'target',
-        frontmatter: {
-          id: 'target', type: 'concept', title: 'Target',
-          created: '2026-05-15', updated: '2026-05-15',
-          status: 'active', tags: [], sources: [],
-        },
+        frontmatter: { id: 'target', type: 'concept', title: 'Target', created: '2026-05-15', updated: '2026-05-15', status: 'active', tags: [], sources: [] },
         body: '\n# Target\n',
       });
-      const r = d.applyBacklinks({ targetPath: 'docs/wiki/pages/concept/target.md' });
+      const r = await d.applyBacklinks({ targetPath: seed.path });
       expect(typeof r.target).toBe('string');
       expect(typeof r.title).toBe('string');
       expect(typeof r.total).toBe('number');
       expect(Array.isArray(r.inserted)).toBe(true);
     });
 
-    it('regenerateIndex returns the documented shape', () => {
+    it('regenerateIndex returns documented shape', async () => {
       const d = makeDest();
-      const r = d.regenerateIndex();
-      expect(r.path).toBe('docs/wiki/index.md');
+      const r = await d.regenerateIndex();
+      expect(r.path).toMatch(indexPathShape);
       expect(typeof r.groups.concept).toBe('number');
       expect(typeof r.groups.person).toBe('number');
       expect(typeof r.groups.source).toBe('number');
@@ -89,4 +79,4 @@ function runContractTests(name: string, makeDest: () => any) {
   });
 }
 
-runContractTests('fs', () => createFsDestination({ rootPath: dir }));
+runContractTests('fs', () => createFsDestination({ rootPath: dir }), /^docs\/wiki\//, /^docs\/wiki\/index\.md$/);
