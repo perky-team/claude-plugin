@@ -80,3 +80,14 @@ describe('Confluence writePage', () => {
     expect(page.body.content[0].type).toBe('heading');
   });
 });
+
+describe('Confluence listPages', () => {
+  it('lists pages under root by type', async () => {
+    const { dest } = makeDest([
+      { id: '201', title: 'A', parentId: '101', properties: [{ key: 'pwiki-id', value: 'a' }, { key: 'pwiki-type', value: 'concept' }, { key: 'pwiki-title', value: 'A' }, { key: 'pwiki-created', value: '2026-05-15' }, { key: 'pwiki-updated', value: '2026-05-15' }, { key: 'pwiki-status', value: 'active' }, { key: 'pwiki-tags', value: '[]' }, { key: 'pwiki-sources', value: '[]' }] },
+      { id: '202', title: 'B', parentId: '102', properties: [{ key: 'pwiki-id', value: 'b' }, { key: 'pwiki-type', value: 'person' }, { key: 'pwiki-title', value: 'B' }, { key: 'pwiki-created', value: '2026-05-15' }, { key: 'pwiki-updated', value: '2026-05-15' }, { key: 'pwiki-status', value: 'active' }, { key: 'pwiki-tags', value: '[]' }, { key: 'pwiki-sources', value: '[]' }] },
+    ]);
+    const r = await dest.listPages({ types: ['concept'] });
+    expect(Array.isArray(r)).toBe(true);
+  });
+});

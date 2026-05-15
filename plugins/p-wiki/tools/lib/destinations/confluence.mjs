@@ -3,8 +3,12 @@ import { createIdentityCache, parsePath, formatPath } from '../confluence/identi
 import { createPropertiesHelper } from '../confluence/properties.mjs';
 import { markdownToAdf } from '../confluence/adf.mjs';
 import { syncLabels } from '../confluence/labels.mjs';
+import { buildListCql } from '../confluence/search.mjs';
 import { withDateSuffix } from '../slug.mjs';
-import { today } from '../paths.mjs';
+import { today, toRepoRelative } from '../paths.mjs';
+import { parseFrontmatter } from '../fm.mjs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 export function createConfluenceDestination({ root, config, transport }) {
   const c = config.confluence;
@@ -132,6 +136,68 @@ export function createConfluenceDestination({ root, config, transport }) {
     };
   }
 
+  function reassembleFm(properties) {
+    const fm = {};
+    const tags = properties['pwiki-tags']; if (tags !== undefined) fm.tags = JSON.parse(tags);
+    const sources = properties['pwiki-sources']; if (sources !== undefined) fm.sources = JSON.parse(sources);
+    const ib = properties['pwiki-informed-by']; if (ib !== undefined) fm['informed-by'] = JSON.parse(ib);
+    const scalarMap = {
+      'pwiki-id': 'id', 'pwiki-type': 'type', 'pwiki-title': 'title',
+      'pwiki-created': 'created', 'pwiki-updated': 'updated', 'pwiki-status': 'status',
+      'pwiki-source-url': 'source-url', 'pwiki-source-type': 'source-type', 'pwiki-question': 'question',
+    };
+    for (const [k, v] of Object.entries(properties)) {
+      if (scalarMap[k] && v !== undefined) fm[scalarMap[k]] = v;
+    }
+    return fm;
+  }
+
+  async function listConfluencePages(types) {
+    const cql = buildListCql({ rootPageId: c.rootPageId, types });
+    const res = await http.get(`/wiki/rest/api/search?cql=${encodeURIComponent(cql)}&limit=250`);
+    const out = [];
+    for (const hit of res.body?.results ?? []) {
+      const id = hit.content?.id ?? hit.id;
+      if (!id) continue;
+      const props = await properties.readAll(id);
+      const fm = reassembleFm(props);
+      if (!fm.type) continue;
+      identity.set(fm.type, fm.id, id);
+      out.push({ path: formatPath(fm.type, fm.id), frontmatter: fm });
+    }
+    return out;
+  }
+
+  function listRawFs() {
+    // Raw is always on FS even in Confluence mode.
+    const rawDir = join(root, 'docs', 'wiki', 'raw');
+    if (!existsSync(rawDir)) return [];
+    const out = [];
+    const stack = [rawDir];
+    while (stack.length) {
+      const cur = stack.pop();
+      for (const ent of readdirSync(cur, { withFileTypes: true })) {
+        const p = join(cur, ent.name);
+        if (ent.isDirectory()) stack.push(p);
+        else if (ent.isFile() && p.endsWith('.md')) {
+          try {
+            const text = readFileSync(p, 'utf-8');
+            const { frontmatter } = parseFrontmatter(text);
+            out.push({ path: toRepoRelative(root, p), frontmatter });
+          } catch { /* skip */ }
+        }
+      }
+    }
+    return out;
+  }
+
+  async function listPages(opts) {
+    const where = opts?.in ?? 'pages';
+    const pagesPart = (where === 'pages' || where === 'all') ? await listConfluencePages(opts?.types) : [];
+    const rawPart = (where === 'raw' || where === 'all') ? listRawFs() : [];
+    return [...pagesPart, ...rawPart];
+  }
+
   return {
     kind: 'confluence',
     rootPath: `${c.siteUrl}#${c.spaceKey}/${c.rootPageId}`,
@@ -142,7 +208,7 @@ export function createConfluenceDestination({ root, config, transport }) {
     writePage,
     mutatePage: nyi('mutatePage'),
     movePage: nyi('movePage'),
-    listPages: nyi('listPages'),
+    listPages,
     search: nyi('search'),
     lint: nyi('lint'),
     applyBacklinks: nyi('applyBacklinks'),
