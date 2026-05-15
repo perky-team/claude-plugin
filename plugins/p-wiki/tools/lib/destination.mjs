@@ -13,6 +13,8 @@ import { createFsDestination } from './destinations/fs.mjs';
  * @property {(opts?: {types?: string[], in?: 'pages'|'raw'|'all'}) => Array<{path: string, frontmatter: object}>} listPages
  * @property {(query: string, opts: object) => {total: number, results: Array<object>}} search
  * @property {(opts?: object) => {errors: object, warnings: object, totals: {errors: number, warnings: number}}} lint
+ * @property {(args: {targetPath: string, maxSuggestions?: number, force?: boolean}) => {target: string, title: string, inserted: Array<{file: string, line: number}>, total: number} | {target: string, title: string, suspicious: true, total: number, candidates: Array<{file: string, line: number, preview: string}>}} applyBacklinks
+ * @property {() => {path: string, groups: {concept: number, person: number, source: number, query: number}, written: true}} regenerateIndex
  */
 
 /**

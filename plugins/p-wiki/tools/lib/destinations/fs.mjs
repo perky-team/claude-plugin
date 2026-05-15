@@ -6,6 +6,7 @@ import { withDateSuffix } from '../slug.mjs';
 import { toRepoRelative, today } from '../paths.mjs';
 import { rankDocuments } from '../search.mjs';
 import { runChecks } from '../lint.mjs';
+import { findFirstMatch, insertLinkAt, computeRelPath } from '../backlinks.mjs';
 
 export function createFsDestination({ rootPath }) {
   const absFor = (type, slug) => join(rootPath, 'docs', 'wiki', directoryFor(type), `${slug}.md`);
@@ -194,6 +195,56 @@ export function createFsDestination({ rootPath }) {
     return runChecks(docs, { repoRoot: rootPath, existsFn: existsSync });
   }
 
+  function applyBacklinks({ targetPath, maxSuggestions = 20, force = false }) {
+    const target = readPage(targetPath);
+    const title = (target.frontmatter.title ?? '').trim();
+    if (!title) throw new Error(`applyBacklinks: target has no title: ${targetPath}`);
+
+    const all = listPages({ in: 'pages' });
+    // Build candidate list: every page except target.
+    const candidates = [];
+    for (const { path } of all) {
+      if (path === targetPath) continue;
+      let text;
+      try { text = readFileSync(join(rootPath, path), 'utf-8'); } catch { continue; }
+      const { body } = parseFrontmatter(text);
+      const m = findFirstMatch(body, title);
+      if (m) {
+        // Preview: 30 chars on each side of the match, single line, ellipsized.
+        const lineStart = Math.max(0, m.index - 30);
+        const lineEnd = Math.min(body.length, m.index + m.length + 30);
+        const preview = body.slice(lineStart, lineEnd).replace(/\s+/g, ' ').trim();
+        candidates.push({ file: path, line: m.line, match: m, body, preview });
+      }
+    }
+
+    if (candidates.length > maxSuggestions && !force) {
+      return {
+        target: targetPath,
+        title,
+        suspicious: true,
+        total: candidates.length,
+        candidates: candidates.map(c => ({ file: c.file, line: c.line, preview: c.preview })),
+      };
+    }
+
+    const inserted = [];
+    for (const c of candidates) {
+      const rel = computeRelPath(c.file, targetPath);
+      const replacement = `[${title}](${rel})`;
+      const text = readFileSync(join(rootPath, c.file), 'utf-8');
+      const { frontmatter, body } = parseFrontmatter(text);
+      const newBody = insertLinkAt(body, c.match, replacement);
+      const newText = serializeFrontmatter(frontmatter, newBody);
+      const abs = join(rootPath, c.file);
+      writeFileSync(abs + '.tmp', newText, 'utf-8');
+      renameSync(abs + '.tmp', abs);
+      inserted.push({ file: c.file, line: c.line });
+    }
+
+    return { target: targetPath, title, inserted, total: inserted.length };
+  }
+
   return {
     kind: 'fs',
     rootPath,
@@ -205,5 +256,6 @@ export function createFsDestination({ rootPath }) {
     listPages,
     search,
     lint,
+    applyBacklinks,
   };
 }
