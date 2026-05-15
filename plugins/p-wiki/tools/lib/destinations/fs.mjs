@@ -7,6 +7,7 @@ import { toRepoRelative, today } from '../paths.mjs';
 import { rankDocuments } from '../search.mjs';
 import { runChecks } from '../lint.mjs';
 import { findFirstMatch, insertLinkAt, computeRelPath } from '../backlinks.mjs';
+import { extractSummary, renderIndex } from '../index.mjs';
 
 export function createFsDestination({ rootPath }) {
   const absFor = (type, slug) => join(rootPath, 'docs', 'wiki', directoryFor(type), `${slug}.md`);
@@ -245,6 +246,42 @@ export function createFsDestination({ rootPath }) {
     return { target: targetPath, title, inserted, total: inserted.length };
   }
 
+  function regenerateIndex() {
+    const allPages = listPages({ in: 'pages' });
+    const groups = { concept: [], person: [], source: [], query: [] };
+    for (const { path, frontmatter } of allPages) {
+      const t = frontmatter.type;
+      if (!(t in groups)) continue;
+      const text = readFileSync(join(rootPath, path), 'utf-8');
+      const { body } = parseFrontmatter(text);
+      // Strip leading 'docs/wiki/' so the link is relative to index.md (which lives in docs/wiki/).
+      const relPath = path.startsWith('docs/wiki/') ? path.slice('docs/wiki/'.length) : path;
+      groups[t].push({
+        id: frontmatter.id,
+        title: frontmatter.title,
+        path: relPath,
+        summary: extractSummary(body),
+      });
+    }
+    for (const k of Object.keys(groups)) {
+      groups[k].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    }
+    const text = renderIndex(groups);
+    const abs = join(rootPath, 'docs', 'wiki', 'index.md');
+    writeFileSync(abs + '.tmp', text, 'utf-8');
+    renameSync(abs + '.tmp', abs);
+    return {
+      path: 'docs/wiki/index.md',
+      groups: {
+        concept: groups.concept.length,
+        person: groups.person.length,
+        source: groups.source.length,
+        query: groups.query.length,
+      },
+      written: true,
+    };
+  }
+
   return {
     kind: 'fs',
     rootPath,
@@ -257,5 +294,6 @@ export function createFsDestination({ rootPath }) {
     search,
     lint,
     applyBacklinks,
+    regenerateIndex,
   };
 }
