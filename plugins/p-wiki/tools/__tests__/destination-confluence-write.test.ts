@@ -31,3 +31,52 @@ describe('Confluence pageExists', () => {
     expect(dest._identity.get('concept', 'foo')).toBe('200');
   });
 });
+
+describe('Confluence writePage', () => {
+  it('creates a new page with properties and labels', async () => {
+    const { dest, fake } = makeDest();
+    const fm = { id: 'foo', type: 'concept', title: 'Foo', created: '2026-05-15', updated: '2026-05-15', status: 'active', tags: ['x', 'y'], sources: [] };
+    const r = await dest.writePage({ type: 'concept', slug: 'foo', frontmatter: fm, body: '# Foo\n' });
+    expect(r.created).toBe(true);
+    expect(r.path).toBe('confluence://concept/foo');
+    expect(r.viewUrl).toMatch(/\/pages\/\d+/);
+
+    const page = [...fake.pageById.values()].find(p => p.title === 'Foo')!;
+    expect(page.properties.get('pwiki-id')?.value).toBe('foo');
+    expect(page.properties.get('pwiki-tags')?.value).toBe('["x","y"]');
+    expect([...page.labels].sort()).toEqual(['x', 'y']);
+  });
+
+  it('fails with existingPath when slug taken and onConflict=fail', async () => {
+    const { dest } = makeDest([
+      { id: '200', title: 'Foo', parentId: '101', properties: [{ key: 'pwiki-id', value: 'foo' }, { key: 'pwiki-type', value: 'concept' }] },
+    ]);
+    const fm = { id: 'foo', type: 'concept', title: 'Foo', created: '2026-05-15', updated: '2026-05-15', status: 'active', tags: [], sources: [] };
+    const r = await dest.writePage({ type: 'concept', slug: 'foo', frontmatter: fm, body: '#\n', onConflict: 'fail' });
+    expect(r.created).toBe(false);
+    expect(r.existingPath).toBe('confluence://concept/foo');
+    expect(r.existingViewUrl).toMatch(/\/pages\/200/);
+    expect(r.dateSuffixSlug).toMatch(/^foo-\d{4}-\d{2}-\d{2}$/);
+  });
+
+  it('date-suffix retries pageExists with suffixed slug', async () => {
+    const { dest } = makeDest([
+      { id: '200', title: 'Foo', parentId: '101', properties: [{ key: 'pwiki-id', value: 'foo' }, { key: 'pwiki-type', value: 'concept' }] },
+    ]);
+    const fm = { id: 'foo', type: 'concept', title: 'Foo', created: '2026-05-15', updated: '2026-05-15', status: 'active', tags: [], sources: [] };
+    const r = await dest.writePage({ type: 'concept', slug: 'foo', frontmatter: fm, body: '#\n', onConflict: 'date-suffix' });
+    expect(r.created).toBe(true);
+    expect(r.slug).toMatch(/^foo-\d{4}-\d{2}-\d{2}$/);
+  });
+
+  it('overwrite updates body and bumps version', async () => {
+    const { dest, fake } = makeDest([
+      { id: '200', title: 'Foo', parentId: '101', version: 1, body: { type: 'doc', version: 1, content: [] }, properties: [{ key: 'pwiki-id', value: 'foo' }, { key: 'pwiki-type', value: 'concept' }] },
+    ]);
+    const fm = { id: 'foo', type: 'concept', title: 'Foo', created: '2026-05-15', updated: '2026-05-15', status: 'active', tags: [], sources: [] };
+    await dest.writePage({ type: 'concept', slug: 'foo', frontmatter: fm, body: '# Updated\n', onConflict: 'overwrite' });
+    const page = fake.pageById.get('200')!;
+    expect(page.version).toBe(2);
+    expect(page.body.content[0].type).toBe('heading');
+  });
+});
