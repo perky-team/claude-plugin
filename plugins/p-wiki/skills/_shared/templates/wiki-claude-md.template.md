@@ -65,7 +65,8 @@ In-repo files used as sources are NOT modified by the plugin. They appear in `so
 - Plain markdown `[text](relative/path.md)`. No `[[wikilinks]]`.
 - Paths relative to the file containing the link.
 - A concept page must have ≥3 outgoing links to other pages (enforced by `/p-wiki:lint`; `status: draft` exempt).
-- **Backlink audit during compile is mandatory.**
+- **Backlink audit during compile is mandatory** — performed via `pwiki backlinks <path>` for each created/updated page.
+- **Index regeneration during compile is mandatory** — performed via `pwiki index` at the end of compile.
 - Links to `raw/` are allowed only in the `sources:` frontmatter field, never in body text.
 
 ## Compile rules
@@ -153,8 +154,10 @@ A bundled Node CLI `pwiki` lives in the plugin (`${CLAUDE_PLUGIN_ROOT}/tools/pwi
 - **Promoting query → concept** — `pwiki promote <path> --to=concept`.
 - **Ranked search** — `pwiki search "<question>" --format=json --limit=10`.
 - **Lint** — `pwiki lint` (text) or `pwiki lint --format=json`.
+- **Backlink audit** — `pwiki backlinks <path>` (inserts hyperlinks to `<path>` in other pages where its `title:` is mentioned; exit 2 if the count exceeds the suspicion threshold).
+- **Index regeneration** — `pwiki index` (rewrites `docs/wiki/index.md` from frontmatter; `--format=text` prints to stdout without writing).
 
-Generic Read/Write/Edit remain for **body editing** (adding facts to sections, conflict-callouts, synthesizing answers). The CLI never touches body text.
+Generic Read/Write/Edit remain for **body editing** in skills (adding facts to sections, synthesizing answers, conflict callouts). The CLI touches body text only in two specific deterministic operations: rendering the template body of a new page (`pwiki new`) and inserting backlink hyperlinks (`pwiki backlinks`).
 
 All CLI commands accept `--format=json` for machine-parseable output. Exit codes: 0 success, 1 user/env error, 2 conflict/schema violation (JSON body carries detail), 3 internal CLI bug.
 
