@@ -17,7 +17,7 @@ function runContractTests(name: string, makeDest: () => any) {
   describe(`Destination contract: ${name}`, () => {
     it('exposes the documented method set', () => {
       const d = makeDest();
-      for (const m of ['pageExists', 'readPage', 'writePage', 'mutatePage', 'movePage', 'listPages', 'search', 'lint']) {
+      for (const m of ['pageExists', 'readPage', 'writePage', 'mutatePage', 'movePage', 'listPages', 'search', 'lint', 'applyBacklinks', 'regenerateIndex']) {
         expect(typeof d[m]).toBe('function');
       }
       expect(typeof d.kind).toBe('string');
@@ -55,6 +55,36 @@ function runContractTests(name: string, makeDest: () => any) {
       expect(typeof r.warnings).toBe('object');
       expect(typeof r.totals.errors).toBe('number');
       expect(typeof r.totals.warnings).toBe('number');
+    });
+
+    it('applyBacklinks returns the documented success shape', () => {
+      const d = makeDest();
+      // Seed a target page so applyBacklinks has something to operate on.
+      d.writePage({
+        type: 'concept', slug: 'target',
+        frontmatter: {
+          id: 'target', type: 'concept', title: 'Target',
+          created: '2026-05-15', updated: '2026-05-15',
+          status: 'active', tags: [], sources: [],
+        },
+        body: '\n# Target\n',
+      });
+      const r = d.applyBacklinks({ targetPath: 'docs/wiki/pages/concept/target.md' });
+      expect(typeof r.target).toBe('string');
+      expect(typeof r.title).toBe('string');
+      expect(typeof r.total).toBe('number');
+      expect(Array.isArray(r.inserted)).toBe(true);
+    });
+
+    it('regenerateIndex returns the documented shape', () => {
+      const d = makeDest();
+      const r = d.regenerateIndex();
+      expect(r.path).toBe('docs/wiki/index.md');
+      expect(typeof r.groups.concept).toBe('number');
+      expect(typeof r.groups.person).toBe('number');
+      expect(typeof r.groups.source).toBe('number');
+      expect(typeof r.groups.query).toBe('number');
+      expect(r.written).toBe(true);
     });
   });
 }
