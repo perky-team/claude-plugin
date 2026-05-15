@@ -8,7 +8,7 @@ import { TYPES, templateBody, isRawType } from './lib/schema.mjs';
 import { kebab, stripDatePrefix } from './lib/slug.mjs';
 import { today } from './lib/paths.mjs';
 
-const VERSION = '1.0.0';
+const VERSION = '1.1.0';
 
 function parseArgs(argv) {
   const opts = { _: [] };
