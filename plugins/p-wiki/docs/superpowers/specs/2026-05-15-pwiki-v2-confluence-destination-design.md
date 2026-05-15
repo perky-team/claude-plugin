@@ -96,7 +96,7 @@ Unchanged from v1 §2.4. CLI walks up from `process.cwd()` until it finds `docs/
 | `created` | `pwiki-created` | ISO 8601 string |
 | `updated` | `pwiki-updated` | ISO 8601 string |
 | `status` | `pwiki-status` | string |
-| `tags` | `pwiki-tags` | JSON-string array |
+| `tags` | `pwiki-tags` + Confluence labels (dual-encoded) | JSON-string array; labels are first-class in CQL, see §3.7 |
 | `sources` | `pwiki-sources` | JSON-string array |
 | `source-url` | `pwiki-source-url` | string (source type only) |
 | `source-type` | `pwiki-source-type` | string (source type only) |
@@ -104,6 +104,21 @@ Unchanged from v1 §2.4. CLI walks up from `process.cwd()` until it finds `docs/
 | `informed-by` | `pwiki-informed-by` | JSON-string array (query type only) |
 
 JSON-string encoding for arrays sidesteps Confluence property-shape quirks (some endpoints return arrays as comma-joined strings). On read, the destination collects all `pwiki-*` properties and reassembles a plain frontmatter object with the same shape `fm.mjs` produces on FS — downstream code does not see the difference.
+
+**Tags dual encoding.** `tags` are written to **both** the `pwiki-tags` JSON-string property AND Confluence labels on the page. The JSON-string property is the canonical pwiki representation (round-trip safe, preserves order); labels are a denormalized search-index used by CQL (`labels = "X"`) and by humans browsing in the Confluence UI. `writePage` and `mutatePage` keep both in sync; on read, `pwiki-tags` is authoritative if they diverge (e.g. a user added a label in UI — lint surfaces this as drift in a future version, out of v2 scope).
+
+**Sub-parent and Index marker.** The four sub-parent pages (Concepts, People, Sources, Queries) and the Index page each carry a single property `pwiki-role` with values `"sub-parent:concept" | "sub-parent:person" | "sub-parent:source" | "sub-parent:query" | "index"`. This lets lint cleanly exempt them from all wiki-content checks (drift, frontmatter, orphan-pages, underlinked) by filtering on `property["pwiki-role"] IS NOT EMPTY`. Sub-parents and Index are not wiki entries; they are pwiki-managed structural artifacts.
+
+### 2.5.1 REST API version mix
+
+- v2 endpoints (`/wiki/api/v2/...`) for **pages and page properties** — modern, stable, future-proof.
+- v1 endpoint (`/wiki/rest/api/search`) for **CQL search** — v2 has no general CQL replacement; mandatory for search/lint/applyBacklinks lookups.
+- Properties access in v2 is keyed by **numeric `propertyId`**, not by key string. The destination wraps this in a helper `properties.upsert(pageId, key, value)`:
+  1. `GET /wiki/api/v2/pages/<pageId>/properties` → list of `{id, key, value, version}`.
+  2. If key exists: `PUT /wiki/api/v2/pages/<pageId>/properties/<id>` with new value + `version.number = current + 1`.
+  3. If key absent: `POST /wiki/api/v2/pages/<pageId>/properties` with `{key, value}`.
+
+  The first list-fetch is cached per `pageId` for the lifetime of one CLI invocation, so a typical `writePage` does one list-fetch + N upserts (one per `pwiki-*` field).
 
 ### 2.6 Destination interface
 
@@ -149,17 +164,19 @@ No config file ⇒ FS, preserving v1 behavior for every existing wiki.
 - **Confluence:**
   1. `pageExists({ type, slug })` — if true:
      - `onConflict = "fail"` → return `{ created: false, existingPath, dateSuffixSlug }`, exit 2 at CLI layer.
-     - `onConflict = "date-suffix"` → `slug = withDateSuffix(slug, today())`, retry once. (Collision on suffixed slug treated as fail — same as FS.)
+     - `onConflict = "date-suffix"` → set `slug = withDateSuffix(slug, today())`, re-run `pageExists` with the new slug; if still true, exit 2 (same single-suffix behavior as FS — we trust today's slug to be unique).
      - `onConflict = "overwrite"` → fall through to update path.
   2. `adf.markdownToAdf(body)` → ADF JSON.
   3. **Create path** (no existing page):
-     - `POST /wiki/api/v2/pages` with `{ spaceId, parentId: subParents[type], title, body: { representation: "atlas_doc_format", value: <adf JSON string> } }` → numeric page id.
-     - `PUT /wiki/api/v2/pages/<id>/properties/pwiki-*` for each property (§2.5).
+     - `POST /wiki/api/v2/pages` with `{ spaceId, parentId: subParents[type], title, body: { representation: "atlas_doc_format", value: <adf JSON string> } }` → numeric page id. `spaceId` is the **numeric** id cached in config (§6.1), not `spaceKey`.
+     - For each `pwiki-*` field: `properties.upsert(pageId, key, value)` (helper from §2.5.1) — first call lists, subsequent calls POST since the page has no properties yet.
+     - Sync labels: for each tag, `POST /wiki/rest/api/content/<id>/label` with `{ name: tag }` (v1 endpoint — label management API has no v2 equivalent; one POST per tag, idempotent server-side).
   4. **Update path** (overwrite):
-     - `GET` current version number → `version.number = current + 1`.
-     - `PUT /wiki/api/v2/pages/<id>` with new title, new body, incremented version.
+     - `GET /wiki/api/v2/pages/<id>` → current version number.
+     - `PUT /wiki/api/v2/pages/<id>` with new title, new body, `version.number = current + 1`.
      - On 409 → one auto-retry with fresh GET; second 409 → exit 1 `version-conflict`.
-     - `PUT` each property whose value differs from the existing one.
+     - For each property whose value differs: `properties.upsert(pageId, key, value)`.
+     - Sync labels diff: `DELETE /wiki/rest/api/content/<id>/label?name=<x>` for removed tags; `POST` for added tags.
   5. Return `{ path: "confluence://<type>/<slug>", id, slug, created, viewUrl }`.
 
 `viewUrl` is an additional output field, not part of `path`. Skills use `path` for identity and dispatch back to CLI; `viewUrl` is human-clickable display only.
@@ -167,16 +184,16 @@ No config file ⇒ FS, preserving v1 behavior for every existing wiki.
 ### 3.4 `mutatePage(path, mutations)`
 
 - **FS:** unchanged.
-- **Confluence:** GET properties → apply mutations on the reassembled frontmatter object (reuses the same mutation logic as FS) → diff → `PUT` only changed properties. **Body is never touched** by `mutatePage`. Page version is incremented only when properties change — Confluence handles this server-side per property. No body PUT means no spurious entry in page history.
+- **Confluence:** GET properties → apply mutations on the reassembled frontmatter object (reuses the same mutation logic as FS) → diff → `properties.upsert` only for changed properties; if `tags` changed, sync labels (POST/DELETE diff). **Body is never touched** — no body GET, no body PUT, no page-body version increment. Each property has its own server-side version, bumped only on upsert. No body PUT means no spurious entry in page history.
 
 ### 3.5 `movePage(fromPath, toPath)`
 
 - **FS:** unchanged — `fs.rename`.
 - **Confluence (used by promote):**
-  1. Resolve `fromPath` → numeric id.
+  1. Resolve `fromPath` → numeric id; GET current page (title, body, version).
   2. Compute new `type` and `slug` from `toPath`.
-  3. `PUT /wiki/api/v2/pages/<id>` with new `parentId = subParents[newType]` and new title.
-  4. `PUT` updated `pwiki-id` and `pwiki-type` properties.
+  3. `PUT /wiki/api/v2/pages/<id>` with new `parentId = subParents[newType]`, **title preserved verbatim from current page**, body preserved, `version.number = current + 1`. Confluence title is human-readable display; the new slug is reflected only in the `pwiki-id` property, not in the title (matches FS semantics, where promote does not rewrite the page title).
+  4. `properties.upsert` for changed `pwiki-id` and `pwiki-type`.
 
 Promote-specific frontmatter mutations (drop `pwiki-question`, drop `pwiki-informed-by`, add `pwiki-sources`, set `pwiki-status = active`, set `pwiki-updated = today`) are applied by the `promote` command via `mutatePage` after `movePage`, exactly as v1 does on FS.
 
@@ -184,14 +201,21 @@ Promote-specific frontmatter mutations (drop `pwiki-question`, drop `pwiki-infor
 
 - **FS:** unchanged.
 - **Confluence:**
-  - `in: 'pages'` (default): one CQL per `types` filter or single CQL with disjunction. `ancestor = rootPageId AND property["pwiki-type"] IN (<types>)`. Pagination handled inside the destination.
+  - `in: 'pages'` (default): one CQL with type disjunction: `ancestor = <rootPageId> AND (property["pwiki-type"] = "concept" OR property["pwiki-type"] = "person" OR ...)`. CQL does not support `IN (...)` for custom properties, so the builder generates `OR` chains. Sub-parents and Index are excluded because they have no `pwiki-type` property — the OR-list of type values is a positive filter, naturally skipping them. Pagination handled inside the destination via CQL `start`/`limit`.
   - `in: 'raw'`: **always** delegates to FS — raw lives on disk in both modes. The destination calls into `paths.mjs` / `fm.mjs` directly for raw scan.
   - `in: 'all'`: union of the two.
 
 ### 3.7 `search(query, options)`
 
 - **FS:** unchanged — BM25-lite.
-- **Confluence:** Single CQL `text ~ "<escaped query>" AND ancestor = rootPageId` plus optional `AND property["pwiki-type"] IN (<types>)` and tag filtering (filter post-fetch since CQL has no array-contains for our JSON-string-encoded tags). Confluence-returned relevance score becomes our `score`. Excerpts come from `expand=excerpt`. Scores are not comparable across backends; skills already do not cross-compare.
+- **Confluence:** Single CQL:
+  ```
+  text ~ "<escaped query>"
+    AND ancestor = <rootPageId>
+    [ AND (property["pwiki-type"] = "concept" OR ...) ]            -- if --type filter set
+    [ AND labels = "<tag1>" AND labels = "<tag2>" AND ... ]        -- if --tags filter set; AND semantics intersection
+  ```
+  Tags are filtered natively via Confluence labels (dual-encoded per §2.5), avoiding the N extra property fetches that would otherwise be needed. Type filter uses OR disjunction (CQL has no `IN` for custom properties). Confluence-returned relevance becomes `score`. Excerpts come from `expand=excerpt`. Scores are not comparable across backends; skills already do not cross-compare.
 
 ### 3.8 `lint(options)`
 
@@ -217,8 +241,8 @@ Auto-retry on 409 (per §5.3) applies here too.
 - **Confluence:**
   1. `listPages({ in: 'pages' })` to enumerate all four types.
   2. Render index ADF (group-by-type, summary line per page).
-  3. Ensure an "Index" stub page exists directly under `rootPageId` (find-or-create idempotent, `pwiki-id = "index"`, `pwiki-type` absent — Index is not a pwiki type).
-  4. `PUT` the Index page with the new ADF body.
+  3. Ensure an "Index" stub page exists directly under `rootPageId` (find-or-create idempotent via `pwiki-role = "index"` lookup, title `"Index"`; no `pwiki-type` since Index is not a wiki entry — `pwiki-role` is what lint uses to skip it).
+  4. `PUT` the Index page with the new ADF body and incremented version.
   5. Return `{ path: "confluence://index", groups, written: true }`.
 
 ---
@@ -236,10 +260,10 @@ Auto-retry on 409 (per §5.3) applies here too.
 
 **New Confluence-only checks:**
 
-- **`drift`** — page under `rootPageId` without `pwiki-id` property. Created by a human in UI; pwiki does not manage it. Warning, not error.
+- **`drift`** — page in the wiki tree (descendant of `rootPageId`) without a `pwiki-id` property AND without `pwiki-role`. Created by a human in UI; pwiki does not manage it. Warning, not error.
 - **`misparented`** — page has `pwiki-type: concept` but sits under Sources sub-parent (or similar mismatch). Sign of a manual UI move. Error: future `mutatePage` would mislocate it.
 
-**Index page exemption.** The "Index" stub page (direct child of `rootPageId`, `pwiki-id = "index"`, no `pwiki-type`) is a pwiki-managed artifact regenerated by `regenerateIndex`. All lint checks skip it explicitly.
+**Structural artifact exemption.** Every lint check excludes pages with `property["pwiki-role"] IS NOT EMPTY` (i.e. sub-parents Concepts/People/Sources/Queries and the Index page). They are pwiki-managed structural pages, not wiki entries.
 
 **Cost:** a full lint in Confluence mode is on the order of one CQL for frontmatter/drift/misparented + one CQL for stale + one CQL + N body fetches for dead-links / orphan-pages / underlinked. Lint runs on user request, not in tight loops. HTTP client batches and respects rate limits (§5).
 
@@ -256,8 +280,8 @@ Small wrapper over `node:https`. Responsibilities:
 - **Auth.** `Authorization: Basic base64(email + ":" + token)` on every request. Email and token read once from env vars at client construction.
 - **Base URL.** From `confluence.siteUrl` in config. Methods take path (e.g. `/wiki/api/v2/pages`) and join.
 - **JSON default.** `Content-Type: application/json` on POST/PUT, `Accept: application/json` always. Body `JSON.stringify`, response `JSON.parse`.
-- **Retries.** Exponential backoff on 429, 502, 503, 504 for GET / PUT (PUTs are idempotent in our usage because they are property updates keyed by pwiki-id, or body updates with explicit version). Max 3 retries, base 1000 ms, multiplier 2. Honors `Retry-After`.
-- **POST is never retried.** Page creation is not idempotent server-side. Callers (`writePage`) check `pageExists` first; the no-retry rule prevents double-create on transient 5xx where the create may have succeeded.
+- **Retries.** Exponential backoff on 429, 502, 503, 504 for GET / PUT (PUTs are idempotent in our usage — body updates carry explicit version, property updates are PUT-by-id). Max 3 retries, base 1000 ms, multiplier 2. Honors `Retry-After`.
+- **Idempotent POSTs are retried; page-create POST is not.** Label POST (`/wiki/rest/api/content/<id>/label`) and property POST (`/wiki/api/v2/pages/<id>/properties`) are idempotent-by-key — adding the same label or creating a property with a key that already exists is a no-op on the server (the property POST returns 400 with `keyAlreadyExists` which the helper treats as success-by-other-means). Only `POST /wiki/api/v2/pages` (page creation) is excluded from retries because a transient 5xx may have already created the page, and a retry would duplicate. Callers (`writePage`) check `pageExists` first to minimize this risk.
 
 No pooling, streaming, multipart. JSON request/response only.
 
@@ -311,6 +335,7 @@ Without `--verbose`: silent on success, standard stderr message on failure. Resp
   "confluence": {
     "siteUrl": "https://exinity.atlassian.net",
     "spaceKey": "ENG",
+    "spaceId": "98765432",
     "rootPageId": "123456",
     "subParents": {
       "concept": "123457",
@@ -321,6 +346,8 @@ Without `--verbose`: silent on success, standard stderr message on failure. Resp
   }
 }
 ```
+
+`spaceId` is the **numeric** id required by `POST /wiki/api/v2/pages` (the v2 API does not accept `spaceKey` directly for create-page). `spaceKey` is kept for human-readable lint messages and for CQL `space = "<key>"` filters where v1 endpoints want a key. Both are cached at init.
 
 `subParents` is cached at init so every `writePage` does not re-resolve. Absence of file ⇒ FS destination (preserves v1 wikis).
 
@@ -333,13 +360,13 @@ Without `--verbose`: silent on success, standard stderr message on failure. Resp
 3. Prompt: destination? (fs | confluence). Default fs.
 4. If confluence:
    a. Prompt: site URL.
-   b. GET /wiki/api/v2/spaces → list accessible spaces. Show keys + names.
-   c. Prompt: space key.
+   b. GET /wiki/api/v2/spaces → list accessible spaces. Show keys + names. Capture both `spaceKey` and numeric `spaceId` for each.
+   c. Prompt: space key → keep both spaceKey and spaceId for the selected space.
    d. Prompt: parent page title or numeric ID.
-      If title: CQL lookup under that space; if multiple matches, prompt to disambiguate.
+      If title: CQL lookup under that space; if multiple matches, prompt to disambiguate; if no match, exit 1 with "Create the parent page in Confluence UI first, then re-run /p-wiki:init".
    e. GET that page to validate access.
-   f. Ensure sub-parents: for each of {Concepts, People, Sources, Queries}, find-or-create child page under rootPageId. Idempotent — re-running init does not duplicate.
-   g. Write docs/wiki/.pwiki.json.
+   f. Ensure sub-parents: for each of {Concepts, People, Sources, Queries}, find-or-create child page under rootPageId. Find via `pwiki-role` property lookup; on create, set `pwiki-role = "sub-parent:<type>"` so subsequent init runs are idempotent and lint skips them (§4).
+   g. Write docs/wiki/.pwiki.json (including `spaceId` and `subParents`).
 5. Scaffold docs/wiki/CLAUDE.md, raw/, queries/ marker as in FS mode.
 6. Write .claude/rules/p-wiki.md.
 ```
@@ -355,6 +382,8 @@ Skills do not branch on destination. All v1 skills (`init`, `ingest`, `compile`,
 1. **Error messages.** Skills now parse `error.code` from JSON for failure classes listed in §5.2 and show a specific message instead of forwarding raw stderr. Implementation is a small switch in each skill's error path, replacing today's "echo stderr and stop".
 2. **`init`** gains the Confluence-destination prompt branch. The existing prompts (Node version check, scaffold) stay identical for FS mode.
 
+`ingest` and `compile` are unchanged in Confluence mode. `ingest` only writes raw-* files (FS-only by design — see §1.2). `compile` reads raws from FS, calls `pwiki new`/`pwiki set` for synthesis — the CLI dispatch through `resolveDestination` routes those writes to Confluence transparently; the skill body never references file paths or destinations directly.
+
 `docs/wiki/CLAUDE.md` template (`wiki-claude-md.template.md`) gains a "Storage backend" section under "CLI tool", noting that pages may live in Confluence and links between pages use the `confluence://<type>/<slug>` shape. No other rule changes — `sources:` are still repo-relative paths because raw is FS-only.
 
 ---
@@ -365,7 +394,7 @@ Three layers on vitest + TypeScript (`tools/__tests__/`).
 
 ### 8.1 Unit tests (offline)
 
-- `adf.mjs` round-trip on a corpus of fixtures (h1-h3, paragraphs, ordered/unordered/nested lists, inline marks bold/italic/code/link, fenced code blocks with language, blockquotes).
+- `adf.mjs` direction-by-direction tests on a corpus of fixtures (h1-h3, paragraphs, ordered/unordered/nested lists, inline marks bold/italic/code/link, fenced code blocks with language, blockquotes): `markdownToAdf(input)` is a deterministic snapshot match against a fixture ADF JSON; `adfToMarkdown(adf)` is asserted equal to a canonicalized markdown form (collapse trailing whitespace, normalize list markers). Strict round-trip equality is not required because some markdown forms canonicalize (e.g. `*` vs `-` list markers); the contract is that markdown → ADF → markdown is stable on the canonical form.
 - `identity.mjs`: path↔(type, slug) parse, cache hit/miss, malformed input.
 - CQL builder: query generation from `(query, types, tags, ancestor)`; escaping of special characters in `text ~`.
 - `http.mjs`: injected fake transport; backoff curve, `Retry-After` honoring, no-retry on POST, retry-cap of 3.
@@ -425,6 +454,8 @@ Implementation rolls out in five layers; each layer ships with green tests befor
 | 3 | `readPage` + `mutatePage` + `movePage` | Contract; e2e for `pwiki set` and `pwiki promote` |
 | 4 | `search` + `lint` (including `drift`, `misparented`) | Contract; e2e for `pwiki search` and `pwiki lint` |
 | 5 | `applyBacklinks` + `regenerateIndex` | Contract; e2e full scenario |
+
+Each layer must leave the existing FS test suite green — v2 changes do not touch `destinations/fs.mjs` or its helpers, but the test bot enforces this invariant. End of layer 5 is the v2.0.0 ship. Between layers, Confluence mode is partially functional (e.g. after layer 2 you can `pwiki new` but not `pwiki search`); this is acceptable because Confluence mode is opt-in via `.pwiki.json` — users without that file see no change.
 
 CI runs unit + contract on every push; e2e runs locally before the `v2.0.0` git tag.
 
