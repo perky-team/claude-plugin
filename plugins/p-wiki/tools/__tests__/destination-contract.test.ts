@@ -115,6 +115,5 @@ runContractTests(
     'lint returns { errors, warnings, totals }',
     'applyBacklinks returns documented shape against a seeded page',
     'regenerateIndex returns documented shape',
-    'search returns { total, results[] }',
   ]),
 );

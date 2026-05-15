@@ -3,7 +3,7 @@ import { createIdentityCache, parsePath, formatPath } from '../confluence/identi
 import { createPropertiesHelper } from '../confluence/properties.mjs';
 import { markdownToAdf, adfToMarkdown } from '../confluence/adf.mjs';
 import { syncLabels } from '../confluence/labels.mjs';
-import { buildListCql } from '../confluence/search.mjs';
+import { buildListCql, buildSearchCql, mapSearchResult } from '../confluence/search.mjs';
 import { withDateSuffix } from '../slug.mjs';
 import { today, toRepoRelative } from '../paths.mjs';
 import { parseFrontmatter } from '../fm.mjs';
@@ -283,6 +283,29 @@ export function createConfluenceDestination({ root, config, transport }) {
     return { path, changed, noop: false };
   }
 
+  async function search(query, opts = {}) {
+    const cql = buildSearchCql({
+      query, rootPageId: c.rootPageId,
+      types: opts.type, tags: opts.tags,
+    });
+    const limit = opts.limit ?? 10;
+    const res = await http.get(`/wiki/rest/api/search?cql=${encodeURIComponent(cql)}&limit=${limit}&expand=excerpt`);
+    const results = [];
+    for (const hit of res.body?.results ?? []) {
+      const m = mapSearchResult(hit);
+      const props = await properties.readAll(m.id);
+      const fm = reassembleFm(props);
+      if (!fm.type) continue;
+      identity.set(fm.type, fm.id, m.id);
+      results.push({
+        path: formatPath(fm.type, fm.id),
+        title: fm.title, type: fm.type, tags: fm.tags ?? [],
+        score: m.score, snippet: m.excerpt,
+      });
+    }
+    return { total: res.body?.totalSize ?? results.length, results };
+  }
+
   async function movePage(fromPath, toPath) {
     const from = parsePath(fromPath);
     const to = parsePath(toPath);
@@ -319,7 +342,7 @@ export function createConfluenceDestination({ root, config, transport }) {
     mutatePage,
     movePage,
     listPages,
-    search: nyi('search'),
+    search,
     lint: nyi('lint'),
     applyBacklinks: nyi('applyBacklinks'),
     regenerateIndex: nyi('regenerateIndex'),
