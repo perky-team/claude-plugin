@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 
 import { readFileSync } from 'node:fs';
+import { parseFrontmatter } from './lib/fm.mjs';
+import { extractSummary, renderIndex } from './lib/index.mjs';
 import { resolveDestination } from './lib/destination.mjs';
 import { TYPES, templateBody, isRawType } from './lib/schema.mjs';
 import { kebab, stripDatePrefix } from './lib/slug.mjs';
@@ -80,7 +82,7 @@ if (process.argv.slice(2)[0] === '--version') {
 const command = process.argv[2];
 const args = parseArgs(process.argv.slice(3));
 
-const KNOWN = ['new', 'set', 'promote', 'search', 'lint'];
+const KNOWN = ['new', 'set', 'promote', 'search', 'lint', 'backlinks', 'index'];
 if (!KNOWN.includes(command)) die(`unknown command: ${command}`, 1);
 
 try {
@@ -260,6 +262,58 @@ try {
       process.stdout.write(formatLintReport(r));
       process.exit(0);
     }
+  }
+
+  if (command === 'backlinks') {
+    const path = args._[0];
+    if (!path) die(`backlinks: <path> required`, 1);
+    const dest = resolveDestination({ cwd: process.cwd() });
+    if (!dest) die(`not inside a p-wiki repo`, 1);
+
+    const maxSuggestions = args['max-suggestions'] !== undefined
+      ? Number(args['max-suggestions'])
+      : 20;
+    const force = args.force === true || args.force === 'true';
+    try {
+      const r = dest.applyBacklinks({ targetPath: path, maxSuggestions, force });
+      if (r.suspicious) emitJson(r, 2);
+      emitJson(r, 0);
+    } catch (e) {
+      die(e.message, 1);
+    }
+  }
+
+  if (command === 'index') {
+    const dest = resolveDestination({ cwd: process.cwd() });
+    if (!dest) die(`not inside a p-wiki repo`, 1);
+    const format = args.format ?? 'json';
+
+    if (format === 'text') {
+      // Render without writing. Build the same input the destination's
+      // regenerateIndex builds, but pipe to stdout instead of writing.
+      const allPages = dest.listPages({ in: 'pages' });
+      const groups = { concept: [], person: [], source: [], query: [] };
+      for (const { path: pagePath, frontmatter } of allPages) {
+        const t = frontmatter.type;
+        if (!(t in groups)) continue;
+        const text = readFileSync(`${dest.rootPath}/${pagePath}`, 'utf-8');
+        const { body } = parseFrontmatter(text);
+        const relPath = pagePath.startsWith('docs/wiki/') ? pagePath.slice('docs/wiki/'.length) : pagePath;
+        groups[t].push({
+          id: frontmatter.id,
+          title: frontmatter.title,
+          path: relPath,
+          summary: extractSummary(body),
+        });
+      }
+      for (const k of Object.keys(groups)) {
+        groups[k].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+      }
+      process.stdout.write(renderIndex(groups));
+      process.exit(0);
+    }
+    const r = dest.regenerateIndex();
+    emitJson(r, 0);
   }
 } catch (e) {
   process.stderr.write(`pwiki: internal error: ${e?.stack ?? e?.message ?? e}\n`);
