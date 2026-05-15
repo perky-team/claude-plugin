@@ -340,6 +340,83 @@ export function createConfluenceDestination({ root, config, transport }) {
     });
   }
 
+  async function applyBacklinks({ targetPath, maxSuggestions = 20, force = false }) {
+    const target = await readPage(targetPath);
+    const title = (target.frontmatter.title ?? '').trim();
+    if (!title) throw new Error(`applyBacklinks: target has no title: ${targetPath}`);
+    const targetId = identity.get(parsePath(targetPath).type, parsePath(targetPath).slug);
+
+    const cql = `text ~ "${title.replace(/"/g, '\\"')}" AND ancestor = ${c.rootPageId} AND id != ${targetId}`;
+    const res = await http.get(`/wiki/rest/api/search?cql=${encodeURIComponent(cql)}&limit=${maxSuggestions + 1}`);
+    const hits = res.body?.results ?? [];
+
+    const matches = [];
+    for (const hit of hits) {
+      const id = hit.content?.id ?? hit.id;
+      const pageRes = await http.get(`/wiki/api/v2/pages/${id}?body-format=atlas_doc_format`);
+      const adfStr = pageRes.body?.body?.atlas_doc_format?.value;
+      if (!adfStr) continue;
+      const adf = JSON.parse(adfStr);
+      const found = findFirstAdfMatch(adf, title);
+      if (found) matches.push({ id, version: pageRes.body.version.number, adf, found });
+    }
+
+    if (matches.length > maxSuggestions && !force) {
+      return {
+        target: targetPath, title, suspicious: true, total: matches.length,
+        candidates: matches.map(m => ({ file: formatPath(parsePath(targetPath).type, parsePath(targetPath).slug), line: -1, preview: '' })),
+      };
+    }
+
+    const inserted = [];
+    const href = viewUrl(targetId);
+    for (const m of matches) {
+      insertLinkMark(m.adf, m.found, href);
+      await http.put(`/wiki/api/v2/pages/${m.id}`, {
+        id: m.id, status: 'current', title: (await http.get(`/wiki/api/v2/pages/${m.id}`)).body.title,
+        version: { number: m.version + 1 },
+        body: { representation: 'atlas_doc_format', value: JSON.stringify(m.adf) },
+      });
+      inserted.push({ file: formatPath('concept', 'unknown'), line: -1 });
+    }
+
+    return { target: targetPath, title, inserted, total: inserted.length };
+  }
+
+  function findFirstAdfMatch(adf, title) {
+    const re = new RegExp(`(^|[^\\w])(${title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})($|[^\\w])`);
+    function walk(node, parent, idx, inCode) {
+      if (!node || typeof node !== 'object') return null;
+      if (node.type === 'codeBlock') return null;
+      if (node.type === 'text') {
+        if (inCode) return null;
+        if ((node.marks ?? []).some(m => m.type === 'link' || m.type === 'code')) return null;
+        const m = re.exec(node.text ?? '');
+        if (m) return { parent, idx, node, start: m.index + m[1].length, len: m[2].length };
+        return null;
+      }
+      const arr = node.content ?? [];
+      for (let i = 0; i < arr.length; i++) {
+        const sub = walk(arr[i], arr, i, inCode);
+        if (sub) return sub;
+      }
+      return null;
+    }
+    return walk(adf, null, -1, false);
+  }
+
+  function insertLinkMark(adf, hit, href) {
+    const t = hit.node.text;
+    const before = t.slice(0, hit.start);
+    const matched = t.slice(hit.start, hit.start + hit.len);
+    const after = t.slice(hit.start + hit.len);
+    const newNodes = [];
+    if (before) newNodes.push({ type: 'text', text: before });
+    newNodes.push({ type: 'text', text: matched, marks: [{ type: 'link', attrs: { href } }] });
+    if (after) newNodes.push({ type: 'text', text: after });
+    hit.parent.splice(hit.idx, 1, ...newNodes);
+  }
+
   return {
     kind: 'confluence',
     rootPath: `${c.siteUrl}#${c.spaceKey}/${c.rootPageId}`,
@@ -353,7 +430,7 @@ export function createConfluenceDestination({ root, config, transport }) {
     listPages,
     search,
     lint,
-    applyBacklinks: nyi('applyBacklinks'),
+    applyBacklinks,
     regenerateIndex: nyi('regenerateIndex'),
   };
 }

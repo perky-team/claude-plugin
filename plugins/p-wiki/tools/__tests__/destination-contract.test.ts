@@ -112,7 +112,6 @@ runContractTests(
   /^confluence:\/\//,
   /^confluence:\/\/index$/,
   new Set([
-    'applyBacklinks returns documented shape against a seeded page',
     'regenerateIndex returns documented shape',
   ]),
 );
