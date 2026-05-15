@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { markdownToAdf } from '../lib/confluence/adf.mjs';
+import { markdownToAdf, adfToMarkdown } from '../lib/confluence/adf.mjs';
 
 describe('markdownToAdf', () => {
   it('produces an empty doc for empty input', () => {
@@ -56,5 +56,31 @@ describe('markdownToAdf', () => {
       type: 'blockquote',
       content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Conflict: A says X.' }] }],
     });
+  });
+});
+
+describe('adfToMarkdown', () => {
+  it('empty doc → empty string', () => {
+    expect(adfToMarkdown({ type: 'doc', version: 1, content: [] })).toBe('');
+  });
+
+  it('heading + paragraph round-trips on canonical form', () => {
+    const md = '# Foo\n\nHello **world**.';
+    expect(adfToMarkdown(markdownToAdf(md))).toBe(md);
+  });
+
+  it('bullet list canonicalizes to `-` marker', () => {
+    const adf = markdownToAdf('* foo\n* bar');
+    expect(adfToMarkdown(adf)).toBe('- foo\n- bar');
+  });
+
+  it('code block preserves language', () => {
+    const md = '```js\nconst x=1;\n```';
+    expect(adfToMarkdown(markdownToAdf(md))).toBe(md);
+  });
+
+  it('link inline reconstructs', () => {
+    const md = 'See [docs](https://x).';
+    expect(adfToMarkdown(markdownToAdf(md))).toBe(md);
   });
 });

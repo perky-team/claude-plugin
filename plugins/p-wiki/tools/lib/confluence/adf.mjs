@@ -112,3 +112,55 @@ function parseInline(text) {
   flush();
   return out;
 }
+
+export function adfToMarkdown(doc) {
+  if (!doc || !Array.isArray(doc.content)) return '';
+  return doc.content.map(renderBlock).filter(s => s !== null).join('\n\n');
+}
+
+function renderBlock(node, depth = 0) {
+  switch (node.type) {
+    case 'heading': return '#'.repeat(node.attrs?.level ?? 1) + ' ' + renderInline(node.content ?? []);
+    case 'paragraph': return renderInline(node.content ?? []);
+    case 'bulletList': return renderList(node, '-', depth);
+    case 'orderedList': return renderList(node, '1.', depth);
+    case 'codeBlock': {
+      const lang = node.attrs?.language ?? '';
+      const body = (node.content ?? []).map(t => t.text ?? '').join('');
+      return '```' + lang + '\n' + body + '\n```';
+    }
+    case 'blockquote': {
+      const inner = (node.content ?? []).map(b => renderBlock(b, depth)).filter(s => s !== null).join('\n\n');
+      return inner.split('\n').map(l => '> ' + l).join('\n');
+    }
+    default: return null;
+  }
+}
+
+function renderList(node, marker, depth) {
+  const lines = [];
+  for (const item of node.content ?? []) {
+    const para = (item.content ?? []).find(c => c.type === 'paragraph');
+    const indent = '  '.repeat(depth);
+    lines.push(indent + marker + ' ' + renderInline(para?.content ?? []));
+    for (const c of item.content ?? []) {
+      if (c.type === 'bulletList' || c.type === 'orderedList') {
+        lines.push(renderList(c, c.type === 'bulletList' ? '-' : '1.', depth + 1));
+      }
+    }
+  }
+  return lines.join('\n');
+}
+
+function renderInline(nodes) {
+  return nodes.map(n => {
+    let t = n.text ?? '';
+    for (const m of n.marks ?? []) {
+      if (m.type === 'strong') t = `**${t}**`;
+      else if (m.type === 'em') t = `*${t}*`;
+      else if (m.type === 'code') t = '`' + t + '`';
+      else if (m.type === 'link') t = `[${t}](${m.attrs.href})`;
+    }
+    return t;
+  }).join('');
+}
