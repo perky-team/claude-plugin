@@ -1,5 +1,7 @@
 import { findWikiRoot } from './paths.mjs';
 import { createFsDestination } from './destinations/fs.mjs';
+import { createConfluenceDestination } from './destinations/confluence.mjs';
+import { readConfig, validateConfig } from './config.mjs';
 
 /**
  * @typedef {Object} Destination
@@ -18,11 +20,15 @@ import { createFsDestination } from './destinations/fs.mjs';
  */
 
 /**
- * @param {{cwd: string}} env
+ * @param {{cwd: string, transport?: Function}} env
  * @returns {Destination | null}
  */
 export function resolveDestination(env) {
   const root = findWikiRoot(env.cwd);
   if (root === null) return null;
+  const cfg = (() => { try { return readConfig(root); } catch { return null; } })();
+  if (cfg && validateConfig(cfg).ok && cfg.destination === 'confluence') {
+    return createConfluenceDestination({ root, config: cfg, transport: env.transport });
+  }
   return createFsDestination({ rootPath: root });
 }
