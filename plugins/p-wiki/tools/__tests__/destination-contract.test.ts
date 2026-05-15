@@ -3,6 +3,8 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createFsDestination } from '../lib/destinations/fs.mjs';
+import { createConfluenceDestination } from '../lib/destinations/confluence.mjs';
+import { createFakeConfluence } from './fixtures/fake-confluence.mjs';
 
 let dir: string;
 beforeEach(() => {
@@ -12,9 +14,32 @@ beforeEach(() => {
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
-function runContractTests(name: string, makeDest: () => any, pathShape: RegExp, indexPathShape: RegExp) {
+function makeConfluenceDest() {
+  const fake = createFakeConfluence({
+    spaces: [{ id: 'S1', key: 'ENG', name: 'Eng' }],
+    initialPages: [
+      { id: '100', title: 'Wiki Root', parentId: null },
+      { id: '101', title: 'Concepts', parentId: '100' },
+      { id: '102', title: 'People', parentId: '100' },
+      { id: '103', title: 'Sources', parentId: '100' },
+      { id: '104', title: 'Queries', parentId: '100' },
+    ],
+  });
+  const config = {
+    destination: 'confluence',
+    confluence: { siteUrl: 'https://x', spaceKey: 'ENG', spaceId: 'S1', rootPageId: '100', subParents: { concept: '101', person: '102', source: '103', query: '104' } },
+  };
+  process.env.PWIKI_CONFLUENCE_EMAIL = 'a@b.c';
+  process.env.PWIKI_CONFLUENCE_TOKEN = 't';
+  return createConfluenceDestination({ root: '/tmp', config, transport: fake.transport });
+}
+
+function runContractTests(name: string, makeDest: () => any, pathShape: RegExp, indexPathShape: RegExp, skip: Set<string> = new Set()) {
   describe(`Destination contract: ${name}`, () => {
-    it('exposes the documented method set', () => {
+    const t = (testName: string, fn: () => any) =>
+      skip.has(testName) ? it.skip(testName, fn) : it(testName, fn);
+
+    t('exposes the documented method set', () => {
       const d = makeDest();
       for (const m of ['pageExists', 'readPage', 'writePage', 'mutatePage', 'movePage', 'listPages', 'search', 'lint', 'applyBacklinks', 'regenerateIndex']) {
         expect(typeof d[m]).toBe('function');
@@ -23,7 +48,7 @@ function runContractTests(name: string, makeDest: () => any, pathShape: RegExp, 
       expect(typeof d.rootPath).toBe('string');
     });
 
-    it('writePage returns the documented shape', async () => {
+    t('writePage returns the documented shape', async () => {
       const d = makeDest();
       const r = await d.writePage({
         type: 'concept', slug: 'shape',
@@ -36,14 +61,14 @@ function runContractTests(name: string, makeDest: () => any, pathShape: RegExp, 
       expect(typeof r.slug).toBe('string');
     });
 
-    it('search returns { total, results[] }', async () => {
+    t('search returns { total, results[] }', async () => {
       const d = makeDest();
       const r = await d.search('anything', {});
       expect(typeof r.total).toBe('number');
       expect(Array.isArray(r.results)).toBe(true);
     });
 
-    it('lint returns { errors, warnings, totals }', async () => {
+    t('lint returns { errors, warnings, totals }', async () => {
       const d = makeDest();
       const r = await d.lint({});
       expect(typeof r.errors).toBe('object');
@@ -52,7 +77,7 @@ function runContractTests(name: string, makeDest: () => any, pathShape: RegExp, 
       expect(typeof r.totals.warnings).toBe('number');
     });
 
-    it('applyBacklinks returns documented shape against a seeded page', async () => {
+    t('applyBacklinks returns documented shape against a seeded page', async () => {
       const d = makeDest();
       const seed = await d.writePage({
         type: 'concept', slug: 'target',
@@ -66,7 +91,7 @@ function runContractTests(name: string, makeDest: () => any, pathShape: RegExp, 
       expect(Array.isArray(r.inserted)).toBe(true);
     });
 
-    it('regenerateIndex returns documented shape', async () => {
+    t('regenerateIndex returns documented shape', async () => {
       const d = makeDest();
       const r = await d.regenerateIndex();
       expect(r.path).toMatch(indexPathShape);
@@ -80,3 +105,16 @@ function runContractTests(name: string, makeDest: () => any, pathShape: RegExp, 
 }
 
 runContractTests('fs', () => createFsDestination({ rootPath: dir }), /^docs\/wiki\//, /^docs\/wiki\/index\.md$/);
+
+runContractTests(
+  'confluence',
+  makeConfluenceDest,
+  /^confluence:\/\//,
+  /^confluence:\/\/index$/,
+  new Set([
+    'lint returns { errors, warnings, totals }',
+    'applyBacklinks returns documented shape against a seeded page',
+    'regenerateIndex returns documented shape',
+    'search returns { total, results[] }',
+  ]),
+);
