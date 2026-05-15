@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { resolve } from 'node:path';
 import { parseFrontmatter } from './lib/fm.mjs';
 import { extractSummary, renderIndex } from './lib/index.mjs';
 import { resolveDestination } from './lib/destination.mjs';
@@ -9,6 +11,17 @@ import { kebab, stripDatePrefix } from './lib/slug.mjs';
 import { today } from './lib/paths.mjs';
 
 const VERSION = '1.1.0';
+
+export function mapErrorToCode(err) {
+  const s = err?.status;
+  if (s === 401 || s === 403) return 'auth-failed';
+  if (s === 404) return 'page-not-found';
+  if (s === 409) return 'version-conflict';
+  if (s === 429) return 'rate-limited';
+  if (typeof s === 'number' && s >= 500) return 'network-error';
+  if (err?.code === 'ECONNREFUSED' || err?.code === 'ETIMEDOUT' || err?.code === 'ENOTFOUND') return 'network-error';
+  return 'internal';
+}
 
 function parseArgs(argv) {
   const opts = { _: [] };
@@ -73,6 +86,10 @@ function formatLintReport(r) {
   out.push(`Total: ${r.totals.errors} errors, ${r.totals.warnings} warnings.`);
   return out.join('\n') + '\n';
 }
+
+const isMain = process.argv[1] && resolve(fileURLToPath(import.meta.url)) === resolve(process.argv[1]);
+
+if (isMain) {
 
 if (process.argv.slice(2)[0] === '--version') {
   process.stdout.write(`${VERSION}\n`);
@@ -315,7 +332,11 @@ try {
     const r = dest.regenerateIndex();
     emitJson(r, 0);
   }
-} catch (e) {
-  process.stderr.write(`pwiki: internal error: ${e?.stack ?? e?.message ?? e}\n`);
-  process.exit(3);
+} catch (err) {
+  const code = mapErrorToCode(err);
+  const payload = { error: { code, message: err?.message ?? String(err) } };
+  process.stdout.write(JSON.stringify(payload) + '\n');
+  process.exit(code === 'schema-violation' || code === 'slug-taken' || code === 'target-exists' ? 2 : code === 'internal' ? 3 : 1);
 }
+
+} // end isMain
