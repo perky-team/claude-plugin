@@ -8,6 +8,7 @@ import { withDateSuffix } from '../slug.mjs';
 import { today, toRepoRelative } from '../paths.mjs';
 import { parseFrontmatter } from '../fm.mjs';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { runConfluenceLint } from '../confluence/lint.mjs';
 import { join } from 'node:path';
 
 export function createConfluenceDestination({ root, config, transport }) {
@@ -331,6 +332,14 @@ export function createConfluenceDestination({ root, config, transport }) {
     identity.set(to.type, to.slug, id);
   }
 
+  async function lint(opts = {}) {
+    return runConfluenceLint({
+      http, properties,
+      config: c,
+      repoRoot: root, existsFn: existsSync,
+    });
+  }
+
   return {
     kind: 'confluence',
     rootPath: `${c.siteUrl}#${c.spaceKey}/${c.rootPageId}`,
@@ -343,7 +352,7 @@ export function createConfluenceDestination({ root, config, transport }) {
     movePage,
     listPages,
     search,
-    lint: nyi('lint'),
+    lint,
     applyBacklinks: nyi('applyBacklinks'),
     regenerateIndex: nyi('regenerateIndex'),
   };

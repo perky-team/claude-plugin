@@ -112,7 +112,6 @@ runContractTests(
   /^confluence:\/\//,
   /^confluence:\/\/index$/,
   new Set([
-    'lint returns { errors, warnings, totals }',
     'applyBacklinks returns documented shape against a seeded page',
     'regenerateIndex returns documented shape',
   ]),
