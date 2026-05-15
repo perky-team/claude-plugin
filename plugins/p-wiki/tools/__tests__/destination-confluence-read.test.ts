@@ -70,3 +70,24 @@ describe('Confluence mutatePage', () => {
     expect(r.noop).toBe(true);
   });
 });
+
+describe('Confluence movePage', () => {
+  it('reparents and updates pwiki-type/pwiki-id, preserves title and body', async () => {
+    const adf = { type: 'doc', version: 1, content: [] };
+    const { dest, fake } = makeDest([
+      { id: '300', title: 'What is X?', parentId: '104', version: 1, body: adf,
+        properties: [
+          { key: 'pwiki-id', value: '2026-05-15-what-is-x' }, { key: 'pwiki-type', value: 'query' },
+          { key: 'pwiki-title', value: 'What is X?' }, { key: 'pwiki-created', value: '2026-05-15' },
+          { key: 'pwiki-status', value: 'filed' }, { key: 'pwiki-question', value: 'What is X?' },
+          { key: 'pwiki-informed-by', value: '[]' }, { key: 'pwiki-tags', value: '[]' },
+        ] },
+    ]);
+    await dest.movePage('confluence://query/2026-05-15-what-is-x', 'confluence://concept/what-is-x');
+    const p = fake.pageById.get('300')!;
+    expect(p.parentId).toBe('101');                            // moved under Concepts
+    expect(p.title).toBe('What is X?');                         // title preserved
+    expect(p.properties.get('pwiki-id')?.value).toBe('what-is-x');
+    expect(p.properties.get('pwiki-type')?.value).toBe('concept');
+  });
+});

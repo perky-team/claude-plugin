@@ -283,6 +283,31 @@ export function createConfluenceDestination({ root, config, transport }) {
     return { path, changed, noop: false };
   }
 
+  async function movePage(fromPath, toPath) {
+    const from = parsePath(fromPath);
+    const to = parsePath(toPath);
+    let id = identity.get(from.type, from.slug);
+    if (!id) { await pageExists({ type: from.type, slug: from.slug }); id = identity.get(from.type, from.slug); }
+    if (!id) throw new Error(`page not found: ${fromPath}`);
+
+    const cur = await http.get(`/wiki/api/v2/pages/${id}`);
+    const curVersion = cur.body.version.number;
+    const title = cur.body.title;
+    const adfStr = cur.body?.body?.atlas_doc_format?.value;
+
+    const putBody = {
+      id, status: 'current', title,
+      version: { number: curVersion + 1 },
+      parentId: c.subParents[to.type],
+      body: adfStr ? { representation: 'atlas_doc_format', value: adfStr } : { representation: 'atlas_doc_format', value: JSON.stringify({ type: 'doc', version: 1, content: [] }) },
+    };
+    await http.put(`/wiki/api/v2/pages/${id}`, putBody);
+
+    await properties.upsert(id, 'pwiki-id', to.slug);
+    await properties.upsert(id, 'pwiki-type', to.type);
+    identity.set(to.type, to.slug, id);
+  }
+
   return {
     kind: 'confluence',
     rootPath: `${c.siteUrl}#${c.spaceKey}/${c.rootPageId}`,
@@ -292,7 +317,7 @@ export function createConfluenceDestination({ root, config, transport }) {
     readPage,
     writePage,
     mutatePage,
-    movePage: nyi('movePage'),
+    movePage,
     listPages,
     search: nyi('search'),
     lint: nyi('lint'),
