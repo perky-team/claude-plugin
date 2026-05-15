@@ -1,7 +1,7 @@
 import { createHttpClient } from '../confluence/http.mjs';
 import { createIdentityCache, parsePath, formatPath } from '../confluence/identity.mjs';
 import { createPropertiesHelper } from '../confluence/properties.mjs';
-import { markdownToAdf } from '../confluence/adf.mjs';
+import { markdownToAdf, adfToMarkdown } from '../confluence/adf.mjs';
 import { syncLabels } from '../confluence/labels.mjs';
 import { buildListCql } from '../confluence/search.mjs';
 import { withDateSuffix } from '../slug.mjs';
@@ -198,13 +198,30 @@ export function createConfluenceDestination({ root, config, transport }) {
     return [...pagesPart, ...rawPart];
   }
 
+  async function readPage(path) {
+    const { type, slug } = parsePath(path);
+    let id = identity.get(type, slug);
+    if (!id) {
+      await pageExists({ type, slug });
+      id = identity.get(type, slug);
+      if (!id) throw new Error(`page not found: ${path}`);
+    }
+    const pageRes = await http.get(`/wiki/api/v2/pages/${id}?body-format=atlas_doc_format`);
+    const adfStr = pageRes.body?.body?.atlas_doc_format?.value;
+    const adf = adfStr ? JSON.parse(adfStr) : { type: 'doc', version: 1, content: [] };
+    const body = adfToMarkdown(adf);
+    const props = await properties.readAll(id);
+    const frontmatter = reassembleFm(props);
+    return { frontmatter, body, path };
+  }
+
   return {
     kind: 'confluence',
     rootPath: `${c.siteUrl}#${c.spaceKey}/${c.rootPageId}`,
     // shared internals (exposed for layered impls):
     _http: http, _config: c, _identity: identity, _properties: properties,
     pageExists,
-    readPage: nyi('readPage'),
+    readPage,
     writePage,
     mutatePage: nyi('mutatePage'),
     movePage: nyi('movePage'),
