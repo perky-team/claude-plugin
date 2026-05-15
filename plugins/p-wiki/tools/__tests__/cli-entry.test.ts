@@ -32,6 +32,7 @@ describe('pwiki CLI entry', () => {
     );
     rmSync(dir, { recursive: true, force: true });
     expect(r.status).toBe(3);
-    expect(r.stderr).toMatch(/internal error/i);
+    const payload = JSON.parse(r.stdout);
+    expect(payload.error.code).toBe('internal');
   });
 });
