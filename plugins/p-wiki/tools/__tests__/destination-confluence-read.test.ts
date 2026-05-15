@@ -33,3 +33,40 @@ describe('Confluence readPage', () => {
     expect(r.path).toBe('confluence://concept/foo');
   });
 });
+
+describe('Confluence mutatePage', () => {
+  it('add-tag updates pwiki-tags property and labels, leaves body untouched', async () => {
+    const adf = { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text: 'body' }] }] };
+    const { dest, fake } = makeDest([
+      { id: '200', title: 'Foo', parentId: '101', body: adf, version: 1,
+        properties: [
+          { key: 'pwiki-id', value: 'foo' }, { key: 'pwiki-type', value: 'concept' },
+          { key: 'pwiki-title', value: 'Foo' }, { key: 'pwiki-created', value: '2026-05-15' },
+          { key: 'pwiki-updated', value: '2026-05-15' }, { key: 'pwiki-status', value: 'active' },
+          { key: 'pwiki-tags', value: '["a"]' }, { key: 'pwiki-sources', value: '[]' },
+        ],
+        labels: ['a'],
+      },
+    ]);
+    const r = await dest.mutatePage('confluence://concept/foo', { addTag: 'b' });
+    expect(r.changed).toContain('tags');
+    expect(r.noop).toBe(false);
+    const p = fake.pageById.get('200')!;
+    expect(p.version).toBe(1);  // body untouched
+    expect(p.properties.get('pwiki-tags')?.value).toBe('["a","b"]');
+    expect([...p.labels].sort()).toEqual(['a', 'b']);
+  });
+
+  it('noop when adding an existing tag', async () => {
+    const { dest } = makeDest([
+      { id: '200', title: 'Foo', parentId: '101', properties: [
+        { key: 'pwiki-id', value: 'foo' }, { key: 'pwiki-type', value: 'concept' },
+        { key: 'pwiki-title', value: 'Foo' }, { key: 'pwiki-created', value: '2026-05-15' },
+        { key: 'pwiki-updated', value: '2026-05-15' }, { key: 'pwiki-status', value: 'active' },
+        { key: 'pwiki-tags', value: '["a"]' }, { key: 'pwiki-sources', value: '[]' },
+      ] },
+    ]);
+    const r = await dest.mutatePage('confluence://concept/foo', { addTag: 'a' });
+    expect(r.noop).toBe(true);
+  });
+});

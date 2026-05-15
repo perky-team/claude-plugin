@@ -215,6 +215,74 @@ export function createConfluenceDestination({ root, config, transport }) {
     return { frontmatter, body, path };
   }
 
+  function applyMutations(fm, mutations) {
+    const newFm = { ...fm };
+    const changed = [];
+    if (mutations.setFields) {
+      for (const [k, v] of Object.entries(mutations.setFields)) {
+        if (newFm[k] !== v) { newFm[k] = v; changed.push(k); }
+      }
+    }
+    if (mutations.addTag) {
+      const tags = newFm.tags ?? [];
+      if (!tags.includes(mutations.addTag)) { newFm.tags = [...tags, mutations.addTag]; changed.push('tags'); }
+    }
+    if (mutations.removeTag) {
+      const tags = newFm.tags ?? [];
+      if (tags.includes(mutations.removeTag)) { newFm.tags = tags.filter(t => t !== mutations.removeTag); changed.push('tags'); }
+    }
+    if (mutations.addSources) {
+      const src = newFm.sources ?? [];
+      const added = mutations.addSources.filter(s => !src.includes(s));
+      if (added.length) { newFm.sources = [...src, ...added]; changed.push('sources'); }
+    }
+    if (mutations.addInformedBy) {
+      const ib = newFm['informed-by'] ?? [];
+      const added = mutations.addInformedBy.filter(s => !ib.includes(s));
+      if (added.length) { newFm['informed-by'] = [...ib, ...added]; changed.push('informed-by'); }
+    }
+    if (mutations.bumpUpdated) {
+      const t = today();
+      if (newFm.updated !== t) { newFm.updated = t; changed.push('updated'); }
+    }
+    if (mutations.removeFields) {
+      for (const k of mutations.removeFields) {
+        if (k in newFm) { delete newFm[k]; changed.push(k); }
+      }
+    }
+    return { newFm, changed: [...new Set(changed)] };
+  }
+
+  async function mutatePage(path, mutations) {
+    const { type, slug } = parsePath(path);
+    let id = identity.get(type, slug);
+    if (!id) { await pageExists({ type, slug }); id = identity.get(type, slug); }
+    if (!id) throw new Error(`page not found: ${path}`);
+
+    const props = await properties.readAll(id);
+    const fm = reassembleFm(props);
+    const { newFm, changed } = applyMutations(fm, mutations);
+    if (changed.length === 0) return { path, changed: [], noop: true };
+
+    // Diff: only upsert properties whose serialized value differs from current.
+    const newPairs = fmToPropertyPairs(newFm);
+    const oldPairs = new Map(fmToPropertyPairs(fm));
+    for (const [key, value] of newPairs) {
+      if (oldPairs.get(key) !== value) await properties.upsert(id, key, value);
+    }
+    // Removed fields: actually DELETE the matching property.
+    if (mutations.removeFields) {
+      const fmKeyToPropKey = { question: 'pwiki-question', 'informed-by': 'pwiki-informed-by', tags: 'pwiki-tags', sources: 'pwiki-sources' };
+      for (const k of mutations.removeFields) {
+        const propKey = fmKeyToPropKey[k];
+        if (propKey && props[propKey] !== undefined) await properties.remove(id, propKey);
+      }
+    }
+    if (changed.includes('tags')) await syncLabels(http, id, newFm.tags ?? []);
+
+    return { path, changed, noop: false };
+  }
+
   return {
     kind: 'confluence',
     rootPath: `${c.siteUrl}#${c.spaceKey}/${c.rootPageId}`,
@@ -223,7 +291,7 @@ export function createConfluenceDestination({ root, config, transport }) {
     pageExists,
     readPage,
     writePage,
-    mutatePage: nyi('mutatePage'),
+    mutatePage,
     movePage: nyi('movePage'),
     listPages,
     search: nyi('search'),
