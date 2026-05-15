@@ -74,9 +74,11 @@ function formatLintReport(r) {
     ['Dead links (errors)', r.errors['dead-links'], (e) => `  - ${e.file} → ${e.target}`],
     ['Dead sources (errors)', r.errors['dead-sources'], (e) => `  - ${e.file} → ${e.source}`],
     ['Frontmatter (errors)', r.errors.frontmatter, (e) => `  - ${e.file} — ${e.error ?? `type mismatch: expected ${e.expected}, actual ${e.actual}`}`],
+    ['Misparented (errors)', r.errors.misparented ?? [], (e) => `  - [${e.id}] ${e.title} — pwiki-type=${e.pwikiType}, parent=${e.parentId}`],
     ['Orphan pages (warnings)', r.warnings['orphan-pages'], (e) => `  - ${e.file}`],
     ['Underlinked (warnings)', r.warnings.underlinked, (e) => `  - ${e.file} — ${e.count} outgoing link${e.count === 1 ? '' : 's'}`],
     ['Stale (warnings)', r.warnings.stale, (e) => `  - ${e.file} — updated ${e.updated} (${e.days} days)`],
+    ['Drift (warnings)', r.warnings.drift ?? [], (e) => `  - [${e.id}] ${e.title} (parent ${e.parentId})`],
   ];
   for (const [title, items, fmt] of sections) {
     out.push(`${title}: ${items.length}`);
