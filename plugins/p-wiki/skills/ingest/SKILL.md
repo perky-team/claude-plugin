@@ -61,12 +61,13 @@ Each branch ends by calling `pwiki new raw-<kind>`. The CLI owns slug, frontmatt
 
 1. Find the largest user-supplied paste in the conversation. If none clear, ask the user to re-paste.
 2. Pick a 3–6 word title via LLM reasoning.
-3. Call:
+3. Build the slug explicitly as `<YYYY-MM-DD>-<kebab-title>` (`pwiki new` only date-prefixes slugs for `type=query`; for `raw-paste` you must pass the dated slug via `--slug`):
    ```bash
    echo "<paste-body>" | node "${CLAUDE_PLUGIN_ROOT}/tools/pwiki.mjs" new raw-paste \
-     --title "<picked-title>" --ingested-from=- --format=json
+     --title "<picked-title>" --slug "<YYYY-MM-DD>-<kebab-title>" \
+     --ingested-from=- --format=json
    ```
-   The `--source-type` is automatically `doc` for `raw-paste`; the CLI also adds the `YYYY-MM-DD-` prefix to the slug per query convention. (Note: confirm CLI prefix behavior matches the paste-naming requirement; if not, pass `--slug=<date>-<kebab-title>` explicitly.)
+   The CLI sets `source-type: doc` automatically for `raw-paste`.
 4. Handle exit 2 as above.
 
 After each branch, the CLI's JSON output contains `path` and `slug`. Use them in Step 4.

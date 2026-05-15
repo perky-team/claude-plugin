@@ -64,7 +64,7 @@ Then stop. Do NOT pre-emptively promote.
 
 If the user agrees in the next turn (any affirmative reply — yes / sure / do it / promote — counts as agreement; anything else counts as decline):
 
-1. Compute target slug from the query file (strip the `YYYY-MM-DD-` prefix from its `id`). Run:
+1. Use the repo-root-relative `path` returned by `pwiki new query` in Step 6 (e.g. `docs/wiki/pages/queries/<YYYY-MM-DD>-<slug>.md`) as `<query-path>`. The CLI derives the target concept slug by stripping the `YYYY-MM-DD-` prefix from the page's `id`. Run:
    ```bash
    node "${CLAUDE_PLUGIN_ROOT}/tools/pwiki.mjs" promote <query-path> --to=concept --format=json
    ```
