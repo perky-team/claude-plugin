@@ -317,7 +317,7 @@ export function createConfluenceDestination({ root, config, destinationConfig, t
           throw e;
         }
       }
-      if (!changed.includes('body')) changed.push('body');
+      changed.push('body');
     }
 
     return { path, changed, noop: false };

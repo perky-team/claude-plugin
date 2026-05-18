@@ -137,6 +137,10 @@ export function createFakeConfluence({ spaces = [], initialPages = [] } = {}) {
     return { status: 404, body: { message: `unhandled ${method} ${path}` } };
   }
 
-  globalThis.__fakeConfluenceBodyPuts = (id) => bodyPutCount.get(String(id)) ?? 0;
-  return { transport, pageById, spaces, bodyPutCount };
+  return {
+    transport,
+    pageById,
+    spaces,
+    bodyPuts: (id) => bodyPutCount.get(String(id)) ?? 0,
+  };
 }

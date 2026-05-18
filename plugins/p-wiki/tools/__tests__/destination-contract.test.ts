@@ -31,7 +31,9 @@ function makeConfluenceDest() {
   };
   process.env.PWIKI_CONFLUENCE_EMAIL = 'a@b.c';
   process.env.PWIKI_CONFLUENCE_TOKEN = 't';
-  return createConfluenceDestination({ root: '/tmp', destinationConfig: config.confluence, transport: fake.transport });
+  const dest = createConfluenceDestination({ root: '/tmp', destinationConfig: config.confluence, transport: fake.transport });
+  (dest as any)._fake = fake;
+  return dest;
 }
 
 function runContractTests(name: string, makeDest: () => any, pathShape: RegExp, indexPathShape: RegExp, skip: Set<string> = new Set()) {
@@ -171,9 +173,9 @@ function runContractTests(name: string, makeDest: () => any, pathShape: RegExp, 
         body: '# NB\n',
       });
       const id = d._identity.get('concept', 'no-body-bump');
-      const before = (globalThis as any).__fakeConfluenceBodyPuts?.(id) ?? 0;
+      const before = (d as any)._fake?.bodyPuts(id) ?? 0;
       await d.mutatePage(r.path, { addTag: 'fresh' });
-      const after = (globalThis as any).__fakeConfluenceBodyPuts?.(id) ?? 0;
+      const after = (d as any)._fake?.bodyPuts(id) ?? 0;
       expect(after - before).toBe(0);
     });
   });
