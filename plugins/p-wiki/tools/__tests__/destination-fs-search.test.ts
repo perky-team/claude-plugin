@@ -18,26 +18,26 @@ afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 describe('fs.search', () => {
   it('finds and ranks pages', () => {
-    const dest = createFsDestination({ rootPath: dir });
+    const dest = createFsDestination({ root: dir, destinationConfig: { kind: 'fs' } });
     const r = dest.search('kafka partitioning', {});
     expect(r.total).toBeGreaterThan(0);
     expect(r.results[0].path).toBe('docs/wiki/pages/concept/kafka.md');
   });
 
   it('filters by type', () => {
-    const dest = createFsDestination({ rootPath: dir });
+    const dest = createFsDestination({ root: dir, destinationConfig: { kind: 'fs' } });
     const r = dest.search('Redis', { type: ['concept'] });
     expect(r.results.every(x => x.type === 'concept')).toBe(true);
   });
 
   it('honors limit', () => {
-    const dest = createFsDestination({ rootPath: dir });
+    const dest = createFsDestination({ root: dir, destinationConfig: { kind: 'fs' } });
     const r = dest.search('kafka redis', { limit: 1 });
     expect(r.results).toHaveLength(1);
   });
 
   it('returns empty results for no match', () => {
-    const dest = createFsDestination({ rootPath: dir });
+    const dest = createFsDestination({ root: dir, destinationConfig: { kind: 'fs' } });
     const r = dest.search('totallyabsent', {});
     expect(r.total).toBe(0);
     expect(r.results).toEqual([]);

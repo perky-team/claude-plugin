@@ -45,7 +45,7 @@ describe('fs.regenerateIndex', () => {
       status: 'active', tags: [], sources: [],
     }, '\n# Pat\n\nA person.\n');
 
-    const dest = createFsDestination({ rootPath: dir });
+    const dest = createFsDestination({ root: dir, destinationConfig: { kind: 'fs' } });
     const r = dest.regenerateIndex();
     expect(r.path).toBe('docs/wiki/index.md');
     expect(r.groups).toEqual({ concept: 2, person: 1, source: 0, query: 0 });
@@ -60,7 +60,7 @@ describe('fs.regenerateIndex', () => {
   });
 
   it('renders fully empty wiki with all _(none yet)_ groups', () => {
-    const dest = createFsDestination({ rootPath: dir });
+    const dest = createFsDestination({ root: dir, destinationConfig: { kind: 'fs' } });
     const r = dest.regenerateIndex();
     expect(r.groups).toEqual({ concept: 0, person: 0, source: 0, query: 0 });
     const text = readFileSync(join(dir, 'docs/wiki/index.md'), 'utf-8');
@@ -73,7 +73,7 @@ describe('fs.regenerateIndex', () => {
       created: '2026-05-15', updated: '2026-05-15',
       status: 'active', tags: [], sources: [],
     }, '\n# X\n');
-    const dest = createFsDestination({ rootPath: dir });
+    const dest = createFsDestination({ root: dir, destinationConfig: { kind: 'fs' } });
     dest.regenerateIndex();
     const text = readFileSync(join(dir, 'docs/wiki/index.md'), 'utf-8');
     expect(text).toContain('- [X](pages/concept/x.md) — _(no summary)_');
@@ -85,7 +85,7 @@ describe('fs.regenerateIndex', () => {
       created: '2026-05-15', updated: '2026-05-15',
       status: 'active', tags: [], sources: [],
     }, '\n# X\n\nReplace <tenant> in config.\n');
-    const dest = createFsDestination({ rootPath: dir });
+    const dest = createFsDestination({ root: dir, destinationConfig: { kind: 'fs' } });
     dest.regenerateIndex();
     const text = readFileSync(join(dir, 'docs/wiki/index.md'), 'utf-8');
     expect(text).toContain('Replace `<tenant>` in config.');
@@ -98,7 +98,7 @@ describe('fs.regenerateIndex', () => {
       created: '2026-05-15', updated: '2026-05-15',
       status: 'active', tags: [], sources: [],
     }, '\n# A\n\nFresh.\n');
-    const dest = createFsDestination({ rootPath: dir });
+    const dest = createFsDestination({ root: dir, destinationConfig: { kind: 'fs' } });
     dest.regenerateIndex();
     const text = readFileSync(join(dir, 'docs', 'wiki', 'index.md'), 'utf-8');
     expect(text).not.toContain('stale content');
@@ -112,7 +112,7 @@ describe('fs.regenerateIndex', () => {
       status: 'active', tags: [], sources: [],
       'source-url': 'https://x', 'source-type': 'article',
     }, '\n# Article X\n\nA summary.\n');
-    const dest = createFsDestination({ rootPath: dir });
+    const dest = createFsDestination({ root: dir, destinationConfig: { kind: 'fs' } });
     dest.regenerateIndex();
     const text = readFileSync(join(dir, 'docs', 'wiki', 'index.md'), 'utf-8');
     expect(text).toContain('](pages/source/article-x-summary.md)');

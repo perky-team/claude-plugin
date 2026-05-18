@@ -12,7 +12,7 @@ function setup(extraPages: any[] = []) {
   process.env.PWIKI_CONFLUENCE_TOKEN = 't';
   return { fake, dest: createConfluenceDestination({
     root: '/tmp',
-    config: { destination: 'confluence', confluence: { siteUrl: 'https://x', spaceKey: 'ENG', spaceId: 'S1', rootPageId: '100', subParents: { concept: '101', person: '102', source: '103', query: '104' } } },
+    destinationConfig: { siteUrl: 'https://x', spaceKey: 'ENG', spaceId: 'S1', rootPageId: '100', subParents: { concept: '101', person: '102', source: '103', query: '104' } },
     transport: fake.transport,
   }) };
 }

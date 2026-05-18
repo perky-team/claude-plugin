@@ -16,7 +16,7 @@ afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 describe('fs.readPage', () => {
   it('reads frontmatter and body by repo-relative path', () => {
-    const dest = createFsDestination({ rootPath: dir });
+    const dest = createFsDestination({ root: dir, destinationConfig: { kind: 'fs' } });
     const r = dest.readPage('docs/wiki/pages/concept/foo.md');
     expect(r.frontmatter.id).toBe('foo');
     expect(r.body).toMatch(/# Foo/);
@@ -25,7 +25,7 @@ describe('fs.readPage', () => {
 
 describe('fs.mutatePage', () => {
   it('bumps updated and adds source', () => {
-    const dest = createFsDestination({ rootPath: dir });
+    const dest = createFsDestination({ root: dir, destinationConfig: { kind: 'fs' } });
     const r = dest.mutatePage('docs/wiki/pages/concept/foo.md', {
       bumpUpdated: true,
       addSources: ['raw/articles/x.md'],
@@ -38,21 +38,21 @@ describe('fs.mutatePage', () => {
   });
 
   it('dedups when adding existing source', () => {
-    const dest = createFsDestination({ rootPath: dir });
+    const dest = createFsDestination({ root: dir, destinationConfig: { kind: 'fs' } });
     dest.mutatePage('docs/wiki/pages/concept/foo.md', { addSources: ['raw/x.md'] });
     const r = dest.mutatePage('docs/wiki/pages/concept/foo.md', { addSources: ['raw/x.md'] });
     expect(r.changed).not.toContain('sources');
   });
 
   it('returns noop=true when nothing changed', () => {
-    const dest = createFsDestination({ rootPath: dir });
+    const dest = createFsDestination({ root: dir, destinationConfig: { kind: 'fs' } });
     const r = dest.mutatePage('docs/wiki/pages/concept/foo.md', {});
     expect(r.noop).toBe(true);
     expect(r.changed).toEqual([]);
   });
 
   it('throws on file not found', () => {
-    const dest = createFsDestination({ rootPath: dir });
+    const dest = createFsDestination({ root: dir, destinationConfig: { kind: 'fs' } });
     expect(() => dest.readPage('docs/wiki/pages/concept/missing.md'))
       .toThrow(/not found/i);
   });

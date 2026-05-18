@@ -33,7 +33,7 @@ describe('fs.applyBacklinks', () => {
       status: 'active', tags: [], sources: [],
     }, '\n# Kafka\n\nAbout Kafka.\n');
 
-    const dest = createFsDestination({ rootPath: dir });
+    const dest = createFsDestination({ root: dir, destinationConfig: { kind: 'fs' } });
     const r = dest.applyBacklinks({ targetPath: 'docs/wiki/pages/concept/kafka.md' });
     expect(r.total).toBe(0);
     expect(r.inserted).toEqual([]);
@@ -52,7 +52,7 @@ describe('fs.applyBacklinks', () => {
       status: 'active', tags: [], sources: [],
     }, '\n# Streaming\n\nWe use Kafka here.\n');
 
-    const dest = createFsDestination({ rootPath: dir });
+    const dest = createFsDestination({ root: dir, destinationConfig: { kind: 'fs' } });
     const r = dest.applyBacklinks({ targetPath: 'docs/wiki/pages/concept/kafka.md' });
     expect(r.total).toBe(1);
     expect(r.inserted).toEqual([
@@ -76,7 +76,7 @@ describe('fs.applyBacklinks', () => {
       'source-url': 'https://x', 'source-type': 'article',
     }, '\n# Summary\n\nDiscusses Kafka briefly.\n');
 
-    const dest = createFsDestination({ rootPath: dir });
+    const dest = createFsDestination({ root: dir, destinationConfig: { kind: 'fs' } });
     dest.applyBacklinks({ targetPath: 'docs/wiki/pages/concept/kafka.md' });
     const updated = readFileSync(join(dir, 'docs/wiki/pages/source/article-x-summary.md'), 'utf-8');
     expect(updated).toContain('Discusses [Kafka](../concept/kafka.md) briefly.');
@@ -89,7 +89,7 @@ describe('fs.applyBacklinks', () => {
       status: 'active', tags: [], sources: [],
     }, '\n# Kafka\n\nKafka is a thing. Kafka.\n');
 
-    const dest = createFsDestination({ rootPath: dir });
+    const dest = createFsDestination({ root: dir, destinationConfig: { kind: 'fs' } });
     const r = dest.applyBacklinks({ targetPath: 'docs/wiki/pages/concept/kafka.md' });
     expect(r.total).toBe(0);
     const text = readFileSync(join(dir, 'docs/wiki/pages/concept/kafka.md'), 'utf-8');
@@ -108,7 +108,7 @@ describe('fs.applyBacklinks', () => {
       status: 'active', tags: [], sources: [],
     }, '\n# Streaming\n\nWe use Kafka here.\n');
 
-    const dest = createFsDestination({ rootPath: dir });
+    const dest = createFsDestination({ root: dir, destinationConfig: { kind: 'fs' } });
     dest.applyBacklinks({ targetPath: 'docs/wiki/pages/concept/kafka.md' });
     const r2 = dest.applyBacklinks({ targetPath: 'docs/wiki/pages/concept/kafka.md' });
     expect(r2.total).toBe(0);
@@ -129,7 +129,7 @@ describe('fs.applyBacklinks', () => {
       }, `\n# P${i}\n\nWe Plan to do something.\n`);
     }
 
-    const dest = createFsDestination({ rootPath: dir });
+    const dest = createFsDestination({ root: dir, destinationConfig: { kind: 'fs' } });
     const r = dest.applyBacklinks({ targetPath: 'docs/wiki/pages/concept/plan.md', maxSuggestions: 3 });
     expect(r.suspicious).toBe(true);
     expect(r.total).toBe(5);
@@ -159,7 +159,7 @@ describe('fs.applyBacklinks', () => {
       }, `\n# P${i}\n\nWe Plan to do something.\n`);
     }
 
-    const dest = createFsDestination({ rootPath: dir });
+    const dest = createFsDestination({ root: dir, destinationConfig: { kind: 'fs' } });
     const r = dest.applyBacklinks({ targetPath: 'docs/wiki/pages/concept/plan.md', maxSuggestions: 3, force: true });
     expect(r.suspicious).toBeUndefined();
     expect(r.total).toBe(5);
@@ -172,7 +172,7 @@ describe('fs.applyBacklinks', () => {
       created: '2026-05-15', updated: '2026-05-15',
       status: 'active', tags: [], sources: [],
     }, '\n# X\n');
-    const dest = createFsDestination({ rootPath: dir });
+    const dest = createFsDestination({ root: dir, destinationConfig: { kind: 'fs' } });
     expect(() => dest.applyBacklinks({ targetPath: 'docs/wiki/pages/concept/notitle.md' }))
       .toThrow(/title/i);
   });
@@ -189,7 +189,7 @@ describe('fs.applyBacklinks', () => {
       status: 'active', tags: [], sources: [],
     }, '\n# Streaming\n\nWe use Kafka here.\n');
 
-    const dest = createFsDestination({ rootPath: dir });
+    const dest = createFsDestination({ root: dir, destinationConfig: { kind: 'fs' } });
     dest.applyBacklinks({ targetPath: 'docs/wiki/pages/concept/kafka.md' });
     const text = readFileSync(join(dir, 'docs/wiki/pages/concept/streaming.md'), 'utf-8');
     expect(text).toContain('updated: 2020-01-01');

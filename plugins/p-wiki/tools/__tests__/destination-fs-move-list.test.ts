@@ -33,7 +33,7 @@ afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 describe('fs.movePage', () => {
   it('renames a file across directories', () => {
-    const dest = createFsDestination({ rootPath: dir });
+    const dest = createFsDestination({ root: dir, destinationConfig: { kind: 'fs' } });
     dest.movePage('docs/wiki/pages/concept/a.md', 'docs/wiki/pages/queries/2026-05-14-a.md');
     expect(existsSync(join(dir, 'docs/wiki/pages/concept/a.md'))).toBe(false);
     expect(existsSync(join(dir, 'docs/wiki/pages/queries/2026-05-14-a.md'))).toBe(true);
@@ -42,14 +42,14 @@ describe('fs.movePage', () => {
 
 describe('fs.listPages', () => {
   it('lists all pages with their frontmatter', () => {
-    const dest = createFsDestination({ rootPath: dir });
+    const dest = createFsDestination({ root: dir, destinationConfig: { kind: 'fs' } });
     const r = dest.listPages();
     expect(r).toHaveLength(2);
     expect(r.map((p: { frontmatter: { id: string } }) => p.frontmatter.id).sort()).toEqual(['a', 'b']);
   });
 
   it('filters by type', () => {
-    const dest = createFsDestination({ rootPath: dir });
+    const dest = createFsDestination({ root: dir, destinationConfig: { kind: 'fs' } });
     const r = dest.listPages({ types: ['concept'] });
     expect(r.every((p: { frontmatter: { type: string } }) => p.frontmatter.type === 'concept')).toBe(true);
   });
@@ -60,7 +60,7 @@ describe('fs.listPages', () => {
       'source-url': 'https://x.test', 'source-type': 'article',
       ingested: '2026-05-01', compiled: false, 'compiled-to': [],
     });
-    const dest = createFsDestination({ rootPath: dir });
+    const dest = createFsDestination({ root: dir, destinationConfig: { kind: 'fs' } });
     const all = dest.listPages({ in: 'all' });
     expect(all.some((p: { frontmatter: { id: string } }) => p.frontmatter.id === 'x')).toBe(true);
   });

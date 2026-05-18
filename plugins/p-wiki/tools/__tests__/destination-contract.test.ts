@@ -31,7 +31,7 @@ function makeConfluenceDest() {
   };
   process.env.PWIKI_CONFLUENCE_EMAIL = 'a@b.c';
   process.env.PWIKI_CONFLUENCE_TOKEN = 't';
-  return createConfluenceDestination({ root: '/tmp', config, transport: fake.transport });
+  return createConfluenceDestination({ root: '/tmp', destinationConfig: config.confluence, transport: fake.transport });
 }
 
 function runContractTests(name: string, makeDest: () => any, pathShape: RegExp, indexPathShape: RegExp, skip: Set<string> = new Set()) {
@@ -104,7 +104,7 @@ function runContractTests(name: string, makeDest: () => any, pathShape: RegExp, 
   });
 }
 
-runContractTests('fs', () => createFsDestination({ rootPath: dir }), /^docs\/wiki\//, /^docs\/wiki\/index\.md$/);
+runContractTests('fs', () => createFsDestination({ root: dir, destinationConfig: { kind: 'fs' } }), /^docs\/wiki\//, /^docs\/wiki\/index\.md$/);
 
 runContractTests(
   'confluence',

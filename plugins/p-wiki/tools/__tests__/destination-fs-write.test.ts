@@ -15,7 +15,7 @@ afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 describe('fs.writePage', () => {
   it('creates a new concept page with valid frontmatter', () => {
-    const dest = createFsDestination({ rootPath: dir });
+    const dest = createFsDestination({ root: dir, destinationConfig: { kind: 'fs' } });
     const r = dest.writePage({
       type: 'concept',
       slug: 'foo',
@@ -36,7 +36,7 @@ describe('fs.writePage', () => {
   });
 
   it('fails with conflict info when slug taken (default on-conflict=fail)', () => {
-    const dest = createFsDestination({ rootPath: dir });
+    const dest = createFsDestination({ root: dir, destinationConfig: { kind: 'fs' } });
     const args = {
       type: 'concept', slug: 'foo',
       frontmatter: {
@@ -54,7 +54,7 @@ describe('fs.writePage', () => {
   });
 
   it('applies date-suffix when on-conflict=date-suffix', () => {
-    const dest = createFsDestination({ rootPath: dir });
+    const dest = createFsDestination({ root: dir, destinationConfig: { kind: 'fs' } });
     const args = {
       type: 'concept', slug: 'foo',
       frontmatter: {
@@ -71,7 +71,7 @@ describe('fs.writePage', () => {
   });
 
   it('overwrites when on-conflict=overwrite', () => {
-    const dest = createFsDestination({ rootPath: dir });
+    const dest = createFsDestination({ root: dir, destinationConfig: { kind: 'fs' } });
     const args = {
       type: 'concept', slug: 'foo',
       frontmatter: {
@@ -89,7 +89,7 @@ describe('fs.writePage', () => {
   });
 
   it('writes raw-paste under raw/pastes/', () => {
-    const dest = createFsDestination({ rootPath: dir });
+    const dest = createFsDestination({ root: dir, destinationConfig: { kind: 'fs' } });
     const r = dest.writePage({
       type: 'raw-paste', slug: '2026-05-14-note',
       frontmatter: {

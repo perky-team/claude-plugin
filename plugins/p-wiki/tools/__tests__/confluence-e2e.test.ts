@@ -55,7 +55,7 @@ describe.skipIf(skip)('Confluence E2E', () => {
       destination: 'confluence',
       confluence: { siteUrl: process.env.PWIKI_E2E_SITE_URL!, spaceKey, spaceId, rootPageId, subParents },
     };
-    dest = createConfluenceDestination({ root: '/tmp', config, transport: realTransport });
+    dest = createConfluenceDestination({ root: '/tmp', destinationConfig: config.confluence, transport: realTransport });
   }, 60_000);
 
   afterAll(async () => {

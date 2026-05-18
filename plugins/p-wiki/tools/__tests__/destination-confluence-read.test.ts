@@ -12,7 +12,7 @@ function makeDest(initialPages: any[] = []) {
   };
   process.env.PWIKI_CONFLUENCE_EMAIL = 'a@b.c';
   process.env.PWIKI_CONFLUENCE_TOKEN = 't';
-  return { dest: createConfluenceDestination({ root: '/tmp', config, transport: fake.transport }), fake };
+  return { dest: createConfluenceDestination({ root: '/tmp', destinationConfig: config.confluence, transport: fake.transport }), fake };
 }
 
 describe('Confluence readPage', () => {

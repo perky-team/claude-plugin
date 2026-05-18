@@ -16,7 +16,7 @@ afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 describe('fs.lint', () => {
   it('reports the dead link', () => {
-    const dest = createFsDestination({ rootPath: dir });
+    const dest = createFsDestination({ root: dir, destinationConfig: { kind: 'fs' } });
     const r = dest.lint({});
     expect(r.errors['dead-links']).toHaveLength(1);
     expect(r.totals.errors).toBeGreaterThanOrEqual(1);
