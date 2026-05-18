@@ -270,7 +270,8 @@ export function createConfluenceDestination({ root, config, destinationConfig, t
     const props = await properties.readAll(id);
     const fm = reassembleFm(props);
     const { newFm, changed } = applyMutations(fm, mutations);
-    if (changed.length === 0) return { path, changed: [], noop: true };
+    const hasBody = typeof mutations.setBody === 'string';
+    if (changed.length === 0 && !hasBody) return { path, changed: [], noop: true };
 
     // Diff: only upsert properties whose serialized value differs from current.
     const newPairs = fmToPropertyPairs(newFm);
@@ -287,6 +288,37 @@ export function createConfluenceDestination({ root, config, destinationConfig, t
       }
     }
     if (changed.includes('tags')) await syncLabels(http, id, newFm.tags ?? []);
+
+    if (hasBody) {
+      const cur = await http.get(`/wiki/api/v2/pages/${id}`);
+      const ver = cur.body?.version?.number ?? 1;
+      const adf = markdownToAdf(mutations.setBody);
+      try {
+        await http.put(`/wiki/api/v2/pages/${id}`, {
+          id, status: 'current',
+          title: cur.body?.title,
+          spaceId: c.spaceId,
+          body: { representation: 'atlas_doc_format', value: JSON.stringify(adf) },
+          version: { number: ver + 1 },
+        });
+      } catch (e) {
+        if (e.status === 409) {
+          // single auto-retry on version conflict
+          const cur2 = await http.get(`/wiki/api/v2/pages/${id}`);
+          const ver2 = cur2.body?.version?.number ?? 1;
+          await http.put(`/wiki/api/v2/pages/${id}`, {
+            id, status: 'current',
+            title: cur2.body?.title,
+            spaceId: c.spaceId,
+            body: { representation: 'atlas_doc_format', value: JSON.stringify(adf) },
+            version: { number: ver2 + 1 },
+          });
+        } else {
+          throw e;
+        }
+      }
+      if (!changed.includes('body')) changed.push('body');
+    }
 
     return { path, changed, noop: false };
   }

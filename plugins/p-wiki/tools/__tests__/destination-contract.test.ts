@@ -142,6 +142,40 @@ function runContractTests(name: string, makeDest: () => any, pathShape: RegExp, 
       expect(typeof p).toBe('string');
       expect(p.length).toBeGreaterThan(0);
     });
+
+    t('mutatePage({setBody}) replaces body, preserves frontmatter', async () => {
+      const d = makeDest();
+      const r = await d.writePage({
+        type: 'concept', slug: 'setbody-test',
+        frontmatter: { id: 'setbody-test', type: 'concept', title: 'SetBody', created: '2026-05-18', updated: '2026-05-18', status: 'active', tags: ['t1'], sources: [] },
+        body: '# Original\n\nOriginal body.\n',
+      });
+
+      const m = await d.mutatePage(r.path, { setBody: '# Replaced\n\nNew body content.\n' });
+      expect(m.noop).toBe(false);
+      expect(m.changed).toContain('body');
+
+      const re = await d.readPage(r.path);
+      expect(re.body).toContain('Replaced');
+      expect(re.body).toContain('New body content');
+      expect(re.frontmatter.title).toBe('SetBody');
+      expect(re.frontmatter.tags).toEqual(['t1']);
+    });
+
+    t('mutatePage with no body mutation does not bump body (Confluence-only)', async () => {
+      const d = makeDest();
+      if (d.kind !== 'confluence') return;
+      const r = await d.writePage({
+        type: 'concept', slug: 'no-body-bump',
+        frontmatter: { id: 'no-body-bump', type: 'concept', title: 'NB', created: '2026-05-18', updated: '2026-05-18', status: 'active', tags: [], sources: [] },
+        body: '# NB\n',
+      });
+      const id = d._identity.get('concept', 'no-body-bump');
+      const before = (globalThis as any).__fakeConfluenceBodyPuts?.(id) ?? 0;
+      await d.mutatePage(r.path, { addTag: 'fresh' });
+      const after = (globalThis as any).__fakeConfluenceBodyPuts?.(id) ?? 0;
+      expect(after - before).toBe(0);
+    });
   });
 }
 

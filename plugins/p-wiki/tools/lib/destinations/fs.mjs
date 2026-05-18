@@ -112,9 +112,15 @@ export function createFsDestination({ rootPath, root }) {
       }
     }
 
+    let newBody = body;
+    if (typeof mutations.setBody === 'string' && mutations.setBody !== body) {
+      newBody = mutations.setBody;
+      changed.push('body');
+    }
+
     if (changed.length === 0) return { path: repoRelPath, changed: [], noop: true };
 
-    writeFileSync(join(rootPath, repoRelPath), serializeFrontmatter(newFm, body), 'utf-8');
+    writeFileSync(join(rootPath, repoRelPath), serializeFrontmatter(newFm, newBody), 'utf-8');
     return { path: repoRelPath, changed: [...new Set(changed)], noop: false };
   }
 

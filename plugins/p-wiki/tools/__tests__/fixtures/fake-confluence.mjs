@@ -2,6 +2,7 @@ export function createFakeConfluence({ spaces = [], initialPages = [] } = {}) {
   let nextPageId = 1000;
   let nextPropId = 1;
   const pageById = new Map();
+  const bodyPutCount = new Map();   // id (string) → count
   for (const p of initialPages) pageById.set(p.id, normalizePage(p));
 
   function normalizePage(p) {
@@ -72,6 +73,8 @@ export function createFakeConfluence({ spaces = [], initialPages = [] } = {}) {
         p.title = body.title ?? p.title;
         p.parentId = body.parentId ? String(body.parentId) : p.parentId;
         p.body = adfValue;
+        // Bump bodyPutCount because PUT to /wiki/api/v2/pages/:id always carries a body field
+        bodyPutCount.set(p.id, (bodyPutCount.get(p.id) ?? 0) + 1);
         return { status: 200, body: { id: p.id, version: { number: p.version } } };
       }
       if (method === 'DELETE') { pageById.delete(p.id); return { status: 204 }; }
@@ -134,5 +137,6 @@ export function createFakeConfluence({ spaces = [], initialPages = [] } = {}) {
     return { status: 404, body: { message: `unhandled ${method} ${path}` } };
   }
 
-  return { transport, pageById, spaces };
+  globalThis.__fakeConfluenceBodyPuts = (id) => bodyPutCount.get(String(id)) ?? 0;
+  return { transport, pageById, spaces, bodyPutCount };
 }
