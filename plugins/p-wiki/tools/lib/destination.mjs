@@ -4,31 +4,53 @@ import { createConfluenceDestination } from './destinations/confluence.mjs';
 import { readConfig, validateConfig } from './config.mjs';
 
 /**
- * @typedef {Object} Destination
- * @property {'fs'} kind
- * @property {string} rootPath
- * @property {(args: {type: string, slug: string}) => boolean} pageExists
- * @property {(path: string) => {frontmatter: object, body: string, path: string}} readPage
- * @property {(args: {type: string, slug: string, frontmatter: object, body: string, onConflict?: 'fail'|'date-suffix'|'overwrite'}) => {path: string, id: string, slug: string, created: boolean, existingPath?: string, dateSuffixSlug?: string}} writePage
- * @property {(path: string, mutations: object) => {path: string, changed: string[], noop: boolean}} mutatePage
- * @property {(fromPath: string, toPath: string) => void} movePage
- * @property {(opts?: {types?: string[], in?: 'pages'|'raw'|'all'}) => Array<{path: string, frontmatter: object}>} listPages
- * @property {(query: string, opts: object) => {total: number, results: Array<object>}} search
- * @property {(opts?: object) => {errors: object, warnings: object, totals: {errors: number, warnings: number}}} lint
- * @property {(args: {targetPath: string, maxSuggestions?: number, force?: boolean}) => {target: string, title: string, inserted: Array<{file: string, line: number}>, total: number} | {target: string, title: string, suspicious: true, total: number, candidates: Array<{file: string, line: number, preview: string}>}} applyBacklinks
- * @property {() => {path: string, groups: {concept: number, person: number, source: number, query: number}, written: true}} regenerateIndex
+ * @typedef {Object} ResolvedDestinations
+ * @property {Destination} primary
+ * @property {string} primaryName
+ * @property {Destination[]} mirrors   - same length and order as mirrorNames; entries lazily constructed
+ * @property {string[]} mirrorNames
  */
 
+const DEFAULT_FS_CONFIG = { primary: 'fs', mirrors: [], destinations: { fs: { kind: 'fs' } } };
+
+function makeDestination(name, block, root, env) {
+  if (block.kind === 'fs') return createFsDestination({ root, destinationConfig: block });
+  if (block.kind === 'confluence') {
+    if (env._spyConfluenceFactory) env._spyConfluenceFactory(name);
+    return createConfluenceDestination({ root, destinationConfig: block, transport: env.transport });
+  }
+  throw new Error(`unknown destination kind: ${block.kind}`);
+}
+
 /**
- * @param {{cwd: string, transport?: Function}} env
- * @returns {Destination | null}
+ * @param {{cwd: string, transport?: Function, _spyConfluenceFactory?: (name: string) => void}} env
+ * @returns {ResolvedDestinations | null}
  */
 export function resolveDestination(env) {
   const root = findWikiRoot(env.cwd);
   if (root === null) return null;
-  const cfg = (() => { try { return readConfig(root); } catch { return null; } })();
-  if (cfg && validateConfig(cfg).ok && cfg.destination === 'confluence') {
-    return createConfluenceDestination({ root, config: cfg, transport: env.transport });
-  }
-  return createFsDestination({ rootPath: root });
+  const cfg = (() => { try { return readConfig(root); } catch { return null; } })() ?? DEFAULT_FS_CONFIG;
+  const v = validateConfig(cfg);
+  if (!v.ok) throw new Error(`invalid .pwiki.json: ${v.error}`);
+
+  const primaryName = cfg.primary;
+  const primary = makeDestination(primaryName, cfg.destinations[primaryName], root, env);
+
+  const mirrorNames = [...(cfg.mirrors ?? [])];
+  const mirrorCache = new Array(mirrorNames.length);
+  const mirrors = new Proxy(mirrorCache, {
+    get(target, prop) {
+      if (typeof prop === 'string' && /^\d+$/.test(prop)) {
+        const i = Number(prop);
+        if (target[i] === undefined && i < mirrorNames.length) {
+          const name = mirrorNames[i];
+          target[i] = makeDestination(name, cfg.destinations[name], root, env);
+        }
+        return target[i];
+      }
+      return Reflect.get(target, prop);
+    },
+  });
+
+  return { primary, primaryName, mirrors, mirrorNames };
 }

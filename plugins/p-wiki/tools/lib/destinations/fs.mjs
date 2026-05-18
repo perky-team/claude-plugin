@@ -9,7 +9,8 @@ import { runChecks } from '../lint.mjs';
 import { findFirstMatch, insertLinkAt, computeRelPath } from '../backlinks.mjs';
 import { extractSummary, renderIndex } from '../index.mjs';
 
-export function createFsDestination({ rootPath }) {
+export function createFsDestination({ rootPath, root }) {
+  rootPath = rootPath ?? root;
   const absFor = (type, slug) => join(rootPath, 'docs', 'wiki', directoryFor(type), `${slug}.md`);
   const repoRel = (abs) => toRepoRelative(rootPath, abs);
 

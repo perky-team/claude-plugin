@@ -13,8 +13,8 @@ import { ensureIndex } from '../confluence/tree.mjs';
 import { renderIndexAdf } from '../confluence/index.mjs';
 import { join } from 'node:path';
 
-export function createConfluenceDestination({ root, config, transport }) {
-  const c = config.confluence;
+export function createConfluenceDestination({ root, config, destinationConfig, transport }) {
+  const c = destinationConfig ?? config.confluence;
   const email = process.env.PWIKI_CONFLUENCE_EMAIL;
   const token = process.env.PWIKI_CONFLUENCE_TOKEN;
   if (!email || !token) {
