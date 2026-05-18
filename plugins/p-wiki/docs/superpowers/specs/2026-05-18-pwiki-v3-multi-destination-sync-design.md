@@ -62,8 +62,7 @@ Let the same wiki live in more than one destination at once, with one acting as 
       "subParents": { "concept": "...", "person": "...", "source": "...", "query": "..." }
     },
     "fs-backup": {
-      "kind": "fs",
-      "path": "docs/wiki"
+      "kind": "fs"
     }
   }
 }
@@ -75,7 +74,7 @@ Field semantics:
 - `mirrors` (optional, array of strings) — zero or more names that receive a 1:1 copy of the primary on every `pwiki sync`. Each name MUST also key into `destinations`. Defaults to `[]`.
 - `destinations` (required object) — map keyed by user-chosen name. Each value is the per-backend config plus an explicit `kind` discriminator (`"fs"` or `"confluence"`). The key is just an identifier — `kind` is authoritative. Multiple instances of the same kind are allowed (e.g. two `confluence` instances pointing at different spaces, distinguished by name).
 
-Default (file absent): treat as `{ primary: "fs", mirrors: [], destinations: { fs: { kind: "fs", path: "docs/wiki" } } }`. Preserves v1 behavior.
+Default (file absent): treat as `{ primary: "fs", mirrors: [], destinations: { fs: { kind: "fs" } } }`. Preserves v1 behavior. The FS destination always lives at `<repoRoot>/docs/wiki/`; no `path` field — multi-path FS support is out of scope for v3 (a Confluence-primary + FS-mirror setup writes to the single `docs/wiki/` location, which is empty when Confluence is canonical).
 
 ### 2.2 Migration of v2 config
 
@@ -83,23 +82,25 @@ On every read of `.pwiki.json`, `config.mjs#readConfig` detects shape:
 
 1. **v3 shape** (`primary` field present) → use as-is.
 2. **v2 shape** (`destination` field present, no `primary`) → rewrite in memory to:
-   ```json
+   ```js
    {
-     "primary": "<old.destination>",
-     "mirrors": [],
-     "destinations": {
-       "<old.destination>": { "kind": "<old.destination>", ...old[old.destination] }
+     primary: old.destination,                                  // "fs" or "confluence"
+     mirrors: [],
+     destinations: {
+       [old.destination]: old.destination === 'fs'
+         ? { kind: 'fs' }
+         : { kind: 'confluence', ...old.confluence }            // v2 nests confluence block
      }
    }
    ```
-   Then **persist immediately** — overwrite the file with the v3 shape. Migration is lossless and one-shot.
+   In practice, `.pwiki.json` only ever existed in v2 with `destination: 'confluence'` (v2 omits the file for FS wikis — see v2 §2.4). The `destination: 'fs'` branch handles users who manually wrote an explicit FS config. **Persist immediately** — overwrite the file with the v3 shape. Migration is lossless and one-shot.
 3. **Neither** → exit 1 with `error.code = config-invalid`, message names the missing/unexpected fields.
 
 A user who never runs a CLI command after upgrade keeps a working wiki — the next CLI invocation does the in-place migration.
 
-### 2.3 Resolver
+### 2.3 Resolver and destination factories
 
-`tools/lib/destination.mjs#resolveDestination(cwd)` returns:
+`tools/lib/destination.mjs#resolveDestination(env)` returns:
 
 ```
 {
@@ -110,13 +111,26 @@ A user who never runs a CLI command after upgrade keeps a working wiki — the n
 }
 ```
 
-Existing call sites use `.primary` everywhere — a one-line change wherever the resolver was previously expected to return a single `Destination`. Only `pwiki sync` reads `.mirrors`.
+Today the resolver returns a single `Destination` directly. The seven call sites in `tools/pwiki.mjs` (each named `dest = resolveDestination(...)`) become `dest = resolveDestination(...).primary`. The two `destination-resolve.test.ts` cases also update. Only `pwiki sync` reads `.mirrors`.
 
 Mirror destinations are constructed lazily — `mirrors[i]` is built only if `pwiki sync` actually iterates over it. (Construction can be expensive for Confluence: env-var checks, HTTP-client setup.)
 
+**Factory signature change.** The current `createConfluenceDestination({ root, config, transport })` reaches into `config.confluence.siteUrl` etc. In v3 it accepts a single per-destination block:
+
+```
+createConfluenceDestination({ root, destinationConfig, transport })
+   // destinationConfig: { kind:'confluence', siteUrl, spaceKey, spaceId, rootPageId, subParents }
+
+createFsDestination({ root, destinationConfig })
+   // destinationConfig: { kind:'fs' }                     — no other fields in v3
+   // root: repo root (unchanged semantics — FS lives at <root>/docs/wiki/)
+```
+
+The resolver builds the per-destination config block from `cfg.destinations[name]` and passes it through. This isolates the v2→v3 schema change to `config.mjs` and `destination.mjs`; the destination implementations stay otherwise unchanged.
+
 ### 2.4 Destination interface additions
 
-Two additions to the `Destination` contract:
+Four additions to the `Destination` contract:
 
 ```
 deletePage(path) → { deleted: boolean, path }
@@ -132,10 +146,33 @@ pathFor({ type, slug }) → path             // synchronous; identity-only
 ```
 
 - Returns the canonical path string for a `(type, slug)` pair without any I/O.
-- FS impl: `path.join(root, type, `${slug}.md`)` (POSIX-normalized).
+- FS impl: `join(rootPath, 'docs/wiki/pages', directoryFor(type), `${slug}.md`)`, POSIX-normalized via `toRepoRelative`.
 - Confluence impl: `confluence://<type>/<slug>`.
 
 Used by sync to derive destination paths without round-tripping `pageExists`.
+
+```
+ensureStructure() → void                   // idempotent, possibly async
+```
+
+- Brings the destination up to a state where `writePage({type, slug, ...})` is safe for every `type` in the schema. Bootstraps backend-specific scaffolding that v2's `pwiki init` would otherwise have done.
+- FS impl: no-op — `writePage` already does `mkdirSync({recursive: true})`.
+- Confluence impl: for each type in `['concept','person','source','query']`, call `tree.mjs#ensureSubParent(http, spaceId, rootPageId, type)` and update the destination's in-memory `subParents` map. Idempotent — re-running finds existing sub-parents via `pwiki-role` lookup.
+- Called by sync at the start of every per-mirror run, so a Confluence destination added as a mirror via a hand-edited `.pwiki.json` (no init invocation) still works.
+
+```
+parseWikiLink(href, fromPath) → { type, slug } | null
+formatWikiLink({ type, slug }, fromPath) → string
+```
+
+- `parseWikiLink`: returns identity if `href` (markdown link target) points to a wiki page on THIS destination, treating relative paths as resolved against `fromPath`. Returns `null` for external URLs, anchors, mailto, or wiki cross-links whose `(type, slug)` is unresolvable on this destination.
+  - FS impl: resolve `href` relative to `fromPath`, normalize, check if absolute path matches `docs/wiki/pages/<directoryFor(type)>/<slug>.md`; return `{type, slug}` or null. Handles `./bar.md`, `bar.md`, `../source/baz.md` uniformly.
+  - Confluence impl: match against `<this.siteUrl>/wiki/spaces/<this.spaceKey>/pages/<numericId>`; on match, look up `(type, slug)` from `identity.resolveById(numericId)` (cache, no HTTP if hot); return null for foreign siteUrls.
+- `formatWikiLink`: returns a markdown link `href` pointing to `(type, slug)` on THIS destination, suitable for inclusion in the body of `fromPath` (relativity needs the source-page context).
+  - FS impl: compute relative POSIX path from `dirname(fromPath)` to `pathFor({type, slug})`.
+  - Confluence impl: look up the numeric id of `(type, slug)` on this destination, return `<this.siteUrl>/wiki/spaces/<this.spaceKey>/pages/<numericId>`. If identity is not in cache, fall back to one CQL lookup; on miss, throws (cross-link rewriter handles the throw as "broken link, leave verbatim, warn").
+
+These two methods are the seam that lets `cross-links.mjs` stay backend-agnostic — it never sees `siteUrl`, never sees `pwiki-id` properties, never touches the Confluence URL format directly.
 
 ### 2.5 `mutatePage` body extension
 
@@ -148,17 +185,21 @@ mutatePage(path, { setBody: string })
 - FS impl: rewrite the file body in place, frontmatter preserved verbatim.
 - Confluence impl: `markdownToAdf(body)` → GET current page version → PUT new ADF body with `version.number = current + 1`. Properties untouched. Auto-retry on 409 per v2 §5.3.
 
-Additive — existing mutation shapes (`addTag`, `removeTag`, `set: {...}`) are unchanged. A single `mutatePage` call may include `setBody` together with other mutations; setBody is applied last to ensure ADF re-render sees final properties.
+Additive: existing mutation shapes (`addTag`, `removeTag`, `set: {...}`) are unchanged. The v2 invariant — *"`mutatePage` does not touch body when no body mutation is in the mutations object"* — is preserved; the body GET / PUT path runs only when `setBody` is present in the mutations argument.
+
+Sync calls `mutatePage(dstPath, { setBody: bodyRewritten })` with no other mutations, so cross-link rewriting bumps the body version by exactly 1 per page per sync run.
 
 ### 2.6 Sync orchestrator
 
 ```
 plugins/p-wiki/tools/lib/
-├── sync.mjs               ← new: orchestrator (passes 1-4, single direction)
+├── sync.mjs               ← new: orchestrator (pass 0..4, single direction)
 ├── cross-links.mjs        ← new: classify / resolve / rewrite (backend-agnostic markdown)
 └── destinations/
-    ├── fs.mjs             ← + deletePage, + mutatePage(setBody), + pathFor
-    └── confluence.mjs     ← + deletePage, + mutatePage(setBody), + pathFor
+    ├── fs.mjs             ← + deletePage, + mutatePage(setBody), + pathFor,
+    │                        + ensureStructure, + parseWikiLink, + formatWikiLink
+    └── confluence.mjs     ← + deletePage, + mutatePage(setBody), + pathFor,
+                             + ensureStructure, + parseWikiLink, + formatWikiLink
 ```
 
 `sync.mjs#syncToMirror(primary, mirror)` is the unit of work. `pwiki sync` calls it once per mirror.
@@ -167,30 +208,47 @@ plugins/p-wiki/tools/lib/
 
 ## 3. Sync algorithm
 
+`listPages` returns `{ path, frontmatter }[]` per the v2 interface (see `tools/lib/destination.mjs`). Identity `(type, slug)` is derived as `(frontmatter.type, frontmatter.id)` — `frontmatter.id` is the canonical slug (FS `writePage` sets `fm.id = useSlug`; Confluence stores the same as `pwiki-id`).
+
 ```
 syncToMirror(src, dst):
-  srcPages = src.listPages({ in: 'pages' })      // identity list { type, slug, path }
-  dstPages = dst.listPages({ in: 'pages' })
-  srcIndex = Map<(type,slug), srcPath>
-  dstIndex = Map<(type,slug), dstPath>
+  // Pass 0 — make dst capable of receiving writes for every type.
+  dst.ensureStructure()                            // no-op for FS; bootstraps sub-parents for Confluence
 
-  // Pass 1 — write/upsert every source page on the destination, with cross-link hrefs
+  // Enumerate once. Read source bodies once and hold them in memory across passes.
+  srcList = src.listPages({ in: 'pages' })         // [{path, frontmatter}]
+  dstList = dst.listPages({ in: 'pages' })
+
+  srcIndex = new Map()                             // key: "<type>/<slug>", value: { srcPath, frontmatter, body }
+  for ({ path: srcPath, frontmatter } of srcList):
+    { body } = src.readPage(srcPath)               // one read per source page total
+    srcIndex.set(`${frontmatter.type}/${frontmatter.id}`, { srcPath, frontmatter, body })
+
+  dstIndex = new Map()                             // key: "<type>/<slug>", value: dstPath
+  for ({ path: dstPath, frontmatter } of dstList):
+    dstIndex.set(`${frontmatter.type}/${frontmatter.id}`, dstPath)
+
+  // Pass 1 — write/upsert every source page on dst with cross-link hrefs
   // replaced by a sentinel. Pages and properties are created; bodies are well-formed.
-  for (type, slug, srcPath) of srcIndex:
-    { frontmatter, body } = src.readPage(srcPath)
-    bodyStub = stripCrossLinks(body)            // replace href → "#pwiki-pending", keep text
-    dst.writePage({ type, slug, frontmatter, body: bodyStub, onConflict: 'overwrite' })
+  for ([key, { srcPath, frontmatter, body }] of srcIndex):
+    bodyStub = stripCrossLinks(body, src, srcPath) // replace wiki-link hrefs → "#pwiki-pending"
+    dst.writePage({
+      type: frontmatter.type,
+      slug: frontmatter.id,
+      frontmatter,
+      body: bodyStub,
+      onConflict: 'overwrite',
+    })
 
-  // Pass 2 — now that all target pages exist, rewrite cross-links in target format.
-  for (type, slug, srcPath) of srcIndex:
-    dstPath = dst.pathFor({ type, slug })       // synchronous
-    { body } = src.readPage(srcPath)
-    bodyRewritten = rewriteCrossLinks(body, src, dst)
+  // Pass 2 — rewrite cross-links in target format now that all dst pages exist.
+  for ([key, { srcPath, frontmatter, body }] of srcIndex):
+    dstPath = dst.pathFor({ type: frontmatter.type, slug: frontmatter.id })  // synchronous
+    bodyRewritten = rewriteCrossLinks(body, src, srcPath, dst, dstPath)
     dst.mutatePage(dstPath, { setBody: bodyRewritten })
 
   // Pass 3 — delete pages in dst that are not in src (true mirror).
-  for (type, slug, dstPath) of dstIndex:
-    if not srcIndex.has((type, slug)):
+  for ([key, dstPath] of dstIndex):
+    if not srcIndex.has(key):
       dst.deletePage(dstPath)
 
   // Pass 4 — regenerate Index on dst. The source Index page is NOT copied;
@@ -198,29 +256,34 @@ syncToMirror(src, dst):
   dst.regenerateIndex()
 ```
 
-### 3.1 Why four passes
+### 3.1 Why pre-pass + four passes
 
-The naive single-pass approach (write each page with its body in one go) fails on cross-links: when writing page A whose body links to page B, the link's `href` requires B's location on the destination — but B may not exist there yet. Two-phase resolves this:
+- **Pass 0** (`ensureStructure`) lets a destination be added as a mirror via a hand-edited `.pwiki.json` without prior `pwiki init`. For Confluence, this creates sub-parents on demand; for FS, it's a no-op.
+- The naive single-pass approach (write each page with its body in one go) fails on cross-links: when writing page A whose body links to page B, the link's `href` requires B's location on the destination — but B may not exist there yet. Two phases resolve this:
+  - **Pass 1** establishes identity on the destination (all `(type, slug)` pairs exist with stub bodies). After pass 1, `dst.pathFor({type, slug})` reliably refers to a real page; for Confluence, `dst.identity` is populated as a side-effect of `writePage`.
+  - **Pass 2** can now resolve every cross-link target to a real page on the destination via `dst.formatWikiLink(...)`.
+- **Pass 3** deletes mirror-only pages (true mirror semantics).
+- **Pass 4** regenerates the Index on the destination — never copied from source, always recomputed.
 
-- **Pass 1** establishes identity-by-identity on the destination (all `(type, slug)` pairs exist with stub bodies). After pass 1, `dst.pathFor({type, slug})` reliably refers to a real page.
-- **Pass 2** can now resolve every cross-link to a real target on the destination.
-
-`stripCrossLinks` (rather than just writing the raw source body) ensures partial-failure state is easy to diagnose: `grep pwiki-pending docs/wiki/` (FS) or CQL on `pwiki-pending` (Confluence) shows what didn't complete pass 2. A re-run of `pwiki sync` clears the sentinels — pass 1 overwrites with stubs again, pass 2 finalizes.
+`stripCrossLinks` (rather than writing raw source bodies in pass 1) ensures partial-failure state is easy to diagnose: `grep pwiki-pending docs/wiki/` (FS) or CQL on `pwiki-pending` (Confluence) shows pages that didn't complete pass 2. A re-run of `pwiki sync` clears the sentinels — pass 1 overwrites with stubs again, pass 2 finalizes.
 
 ### 3.2 Idempotency and resumability
 
-All four passes are idempotent:
+All passes are idempotent:
 
+- `ensureStructure` is find-or-create per sub-parent.
 - `writePage` with `onConflict: 'overwrite'` is upsert.
 - `mutatePage({ setBody })` is overwrite.
 - `deletePage` swallows missing-page errors.
 - `regenerateIndex` is deterministic.
 
-A `pwiki sync` interrupted mid-run leaves the mirror in some intermediate but well-formed state (every page has at least a stub body). Re-running completes the sync.
+A `pwiki sync` interrupted mid-run leaves the mirror in some intermediate but well-formed state (every page written so far has at least a stub body). Re-running completes the sync.
 
-### 3.3 Performance
+### 3.3 Performance and memory
 
-Per mirror: `O(N)` `readPage` calls on source, `2N` writes on destination, plus enumerate + N deletions in the worst case. For Confluence-as-source with hundreds of pages this is slow (one HTTP GET per page); acceptable for a maintenance command run on demand. If hot, a future optimization is `listPages({ withBodies: true })` to batch reads — explicitly out of scope for v3.
+Per mirror: `O(N)` `readPage` calls on source (one per page total — bodies are cached in memory between passes 1 and 2), `2N` writes on destination, plus enumerate + up to `N` deletions in the worst case. For Confluence-as-source with hundreds of pages this is the minimum possible network cost without a `listPages({withBodies: true})` batch API.
+
+Memory: `srcIndex` holds frontmatter + body for every source page. At ~10 KB per page, even 5000 pages is ~50 MB — fine for a maintenance command running in a fresh Node process. If a corpus ever exceeds this, the orchestrator can spill bodies to a temp file between passes — explicitly out of scope for v3.
 
 ---
 
@@ -228,34 +291,33 @@ Per mirror: `O(N)` `readPage` calls on source, `2N` writes on destination, plus 
 
 Pages reference each other in the body. Format depends on the backend:
 
-- **FS**: relative markdown links — `[Title](../concepts/foo.md)`.
+- **FS**: relative markdown links — `[Title](../source/baz.md)`, `[Title](./bar.md)`, `[Title](bar.md)`.
 - **Confluence**: ADF `link` marks whose `href` is `<siteUrl>/wiki/spaces/<key>/pages/<numericId>`. When `readPage` converts ADF → markdown, these become `[Title](<siteUrl>/wiki/spaces/<key>/pages/<numericId>)` in the returned markdown string.
 
-The canonical bridge between the two formats is `(type, slug)` — both destinations key by it.
+The canonical bridge between formats is `(type, slug)`. The Destination-interface methods `parseWikiLink` and `formatWikiLink` (§2.4) hide all backend-specific URL/path handling behind a uniform contract.
 
 ### 4.1 Algorithm
 
-`rewriteCrossLinks(body, src, dst)` operates on the markdown body returned by `src.readPage`. For each markdown link found (outside fenced/inline code blocks):
+`rewriteCrossLinks(body, src, srcPath, dst, dstPath)` walks markdown links in `body` (outside fenced/inline code blocks and shortcut reference links — same skip-rules as v1.1 `backlinks.mjs#findSkippedRanges`). For each link `[text](href)`:
 
-1. **Classify** the `href`:
-   - Confluence URL matching `<src.siteUrl>/wiki/spaces/<key>/pages/<numericId>` → wiki cross-link.
-   - Relative path matching `(\.\./)*(concept|person|source|query)/<slug>\.md` → wiki cross-link.
-   - Anything else (external URL, anchor, `mailto:`, etc.) → pass through verbatim.
-2. **Resolve to identity** `(type, slug)`:
-   - From Confluence URL: extract numeric id → `src.identity.resolveById(numericId)` → `(type, slug)` via the page's `pwiki-id` and `pwiki-type` properties (cached in `confluence/identity.mjs`).
-   - From FS path: parse the path under wiki root → `(type, slug)`.
-3. **Format for `dst`**:
-   - If `dst.kind === 'fs'`: compute the relative path from the current page's FS location to `dst.pathFor({type, slug})`, format as `[Title](<relPath>)`.
-   - If `dst.kind === 'confluence'`: look up the numeric id of `(type, slug)` on `dst` (via `dst.identity.resolveByIdentity({type, slug})` — same helper that powers v2 Confluence destination), format as `[Title](<dst.siteUrl>/wiki/spaces/<dst.spaceKey>/pages/<numericId>)`.
-4. **Wiki cross-link whose `(type, slug)` does not exist on `dst`**: emit verbatim, log a warning to stderr (`[sync] cross-link target <type>/<slug> not found on mirror <name>`). Lint surfaces the broken link on the mirror later.
+1. `id = src.parseWikiLink(href, srcPath)` — classify and resolve to identity.
+2. If `id === null`: external URL / anchor / mailto / foreign-site URL → pass through verbatim.
+3. Else: replace `href` with `dst.formatWikiLink(id, dstPath)`. The new href is in target format (relative `.md` path for FS, Confluence URL for Confluence).
+4. If `formatWikiLink` throws (target page does not exist on `dst`, e.g. broken source link or src/dst out of sync mid-sync): emit verbatim, log a warning to stderr (`[sync] cross-link target <type>/<slug> not found on mirror <name>`). The warning increments the per-mirror `warnings` counter in the JSON output (§5.1). Lint surfaces the broken link separately on the mirror.
 
 ### 4.2 `stripCrossLinks`
 
-Pass 1 variant. Same classification as §4.1, but every wiki cross-link's `href` is replaced with the literal string `#pwiki-pending`; link text and surrounding markdown are preserved. External URLs untouched.
+Pass 1 variant. Same per-link walk, same skip-rules, same classification:
 
-### 4.3 Module placement
+1. `id = src.parseWikiLink(href, srcPath)`.
+2. If `id === null`: pass through (external links survive intact).
+3. Else: replace `href` with the literal `#pwiki-pending`, keep `text` and surrounding markdown.
 
-`cross-links.mjs` is pure-functional, no I/O. Its inputs are `(body: string, src: Destination, dst: Destination)`; it calls only synchronous methods on the destinations (`pathFor`, `siteUrl` accessor, identity caches pre-populated by `listPages` in pass 1). No `readPage` / no HTTP from inside the rewriter.
+This guarantees `markdownToAdf` produces valid ADF (anchor-only hrefs are well-formed link marks), and pass-1 `writePage` does not need any dst-side identity lookups.
+
+### 4.3 Module placement and purity
+
+`cross-links.mjs` is pure-functional (no I/O of its own). Its inputs are `(body, src, srcPath, dst, dstPath)`; it calls only the `parseWikiLink` / `formatWikiLink` methods on the destinations. No `siteUrl` accessor, no `identity` member, no `readPage`, no HTTP. All backend-specific URL/path shapes live in the destination implementations.
 
 ---
 
@@ -329,6 +391,8 @@ After the v2 init flow has resolved the primary destination, prompt:
 
 If `y`, run the destination prompts again for the second backend (FS or Confluence; whichever the user did NOT pick first is the natural offer). Write both into `destinations`, with the first as `primary` and the second as the only entry in `mirrors`. Skip — write the v3-shape config with `mirrors: []`.
 
+**CLI subcommand changes.** v2's `pwiki init --confluence --site=... --space=... --parent=...` (Task 29 of the v2 plan) writes the v2 config shape directly. v3 changes this to write the v3 shape — the existing flags still resolve a single Confluence destination, but it is persisted as `{ primary: 'confluence', mirrors: [], destinations: { confluence: { kind: 'confluence', ... } } }`. A new flag `pwiki init --mirror-fs` appends `{ kind: 'fs' }` to `destinations` under the name `fs` and adds it to `mirrors`. The analogous `--mirror-confluence --mirror-site=... --mirror-space=... --mirror-parent=...` adds a Confluence mirror under the name `confluence-mirror` (or `confluence` if the primary is FS). The init skill prompt at §6.1 wraps these flags.
+
 Adding or removing mirrors later is a manual `.pwiki.json` edit — documented in the wiki CLAUDE.md template (§6.2).
 
 ### 6.2 Editing `.pwiki.json` to add mirrors later
@@ -368,24 +432,33 @@ Matches the v2 three-layer structure.
 ### 8.1 Unit (offline)
 
 - `cross-links.mjs`:
-  - Classify wiki cross-link vs external URL (Confluence-shape, FS-shape, mailto, anchor, etc.).
-  - Extract `(type, slug)` from FS relative path and from Confluence URL.
-  - Format target in the other shape; `stripCrossLinks` produces `#pwiki-pending` and preserves text.
-  - Skip rules: links inside fenced code blocks, inline code, link text vs href.
+  - Walks links using v1.1 `findSkippedRanges` (fenced/inline code blocks, bracket forms) — assert links inside those ranges are not rewritten.
+  - `rewriteCrossLinks` with both `src` and `dst` mocked: `src.parseWikiLink` returns identity for wiki hrefs, null for externals; `dst.formatWikiLink` returns the expected target string; mailto / anchor / external URL pass through verbatim.
+  - `formatWikiLink` throws → cross-link emitted verbatim, warning callback invoked once.
+  - `stripCrossLinks`: wiki hrefs become `#pwiki-pending`, externals untouched, link text preserved.
+- Destination-specific `parseWikiLink` / `formatWikiLink`:
+  - FS impl: `parseWikiLink('./bar.md', 'docs/wiki/pages/concept/foo.md')` → `{type:'concept', slug:'bar'}`; `../source/baz.md` → `{type:'source', slug:'baz'}`; `https://example.com` → `null`; `bar.md` → `{type:'concept', slug:'bar'}`.
+  - FS impl `formatWikiLink({type:'source', slug:'baz'}, 'docs/wiki/pages/concept/foo.md')` → `../source/baz.md` (POSIX, exact).
+  - Confluence impl: parse `<siteUrl>/wiki/spaces/<KEY>/pages/<id>` → identity (with cached pwiki-id lookup); foreign siteUrl → null. Format identity → URL with this destination's siteUrl + numeric id from identity cache; missing identity → throw.
+- `ensureStructure`:
+  - FS impl: no-op (assertion: directories not created if not needed).
+  - Confluence impl (against fake transport): calls `ensureSubParent` for each of the four types; idempotent on second invocation (no extra POSTs).
 - `config.mjs`:
-  - v2-shape input → migrated v3-shape, both in returned object and persisted to disk (assert file rewrite happens).
-  - v3-shape input → returned as-is, no file rewrite.
-  - Neither shape → `config-invalid` error.
+  - v2-shape input → migrated v3-shape, both in returned object and persisted to disk (assert file rewrite happens, file content matches expected v3 JSON).
+  - v3-shape input → returned as-is, file mtime unchanged.
+  - Neither shape → `config-invalid` error with code in JSON output.
   - `kind` missing on a destination → `config-invalid`.
   - Mirror name not in `destinations` → `config-invalid`.
+  - `primary` name not in `destinations` → `config-invalid`.
 - `destination.mjs#resolveDestination`:
   - Returns `{ primary, mirrors, primaryName, mirrorNames }` correctly populated for v3 configs.
-  - Empty `mirrors` array yields `mirrors: []`.
-  - Mirror destinations not instantiated until requested (lazy construction asserted by counting HTTP-client constructor calls).
+  - File-absent → `primaryName === 'fs'`, `primary.kind === 'fs'`, `mirrors.length === 0`.
+  - Empty `mirrors` array in config yields `mirrors.length === 0`.
+  - Mirror destinations not instantiated until requested (lazy construction asserted by counting factory invocations via a spy).
 
 ### 8.2 Contract (extend `destination-contract.test.ts`)
 
-Two new methods added to the contract suite, applied to both FS and Confluence backends:
+Four new methods added to the contract suite, applied to both FS and Confluence backends:
 
 - `deletePage`:
   - Returns `{ deleted: true }` for an existing page; `pageExists` is false afterward.
@@ -393,14 +466,20 @@ Two new methods added to the contract suite, applied to both FS and Confluence b
 - `mutatePage(path, { setBody })`:
   - Changes body bytes; frontmatter (FS) / properties + labels (Confluence) preserved verbatim.
   - On Confluence: page body version bumps by exactly 1; property versions unchanged.
+- `pathFor({type, slug})`:
+  - Synchronous, deterministic, no I/O.
+  - Output matches what `writePage` returns as `path` for the same `(type, slug)`.
+- `ensureStructure`:
+  - First call brings the destination into a writable state (assert a subsequent `writePage` for each type succeeds without prior `pwiki init`).
+  - Second call is a no-op (no new pages created, no errors).
 
-`pathFor` is exercised implicitly by every sync test.
+`parseWikiLink` and `formatWikiLink` are tested in §8.1 (unit) rather than the destination-contract suite, because their semantics differ across backends in interpretable ways (FS shapes vs Confluence URLs) — contract assertions would be vacuous.
 
 ### 8.3 Sync (`tools/__tests__/sync.test.ts`)
 
 Runs the full §3 algorithm using two in-memory backends (FS-against-temp-dir + fake-Confluence from v2 fixtures). Each scenario covers both directions (`fs→confluence` and `confluence→fs`):
 
-- Empty source + empty mirror → no-op (no writes, no deletes).
+- Empty source + empty mirror → no page writes, no deletes; pass 4 still runs (regenerateIndex produces an empty Index).
 - Source has 3 pages, mirror empty → mirror gains 3 pages with rewritten cross-links.
 - Source removes 1 page → mirror loses 1 page on next sync; remaining pages untouched.
 - Source updates 1 page (body + tag) → mirror's copy updates body and labels.
@@ -414,14 +493,14 @@ Runs the full §3 algorithm using two in-memory backends (FS-against-temp-dir + 
 
 One new scenario after the existing v2 flow:
 
-- Bootstrap: existing Confluence sandbox space + temp FS dir.
-- Configure both in `.pwiki.json`: `primary: "confluence"`, `mirrors: ["fs-temp"]`.
-- Create two concept pages and a query that links to one of the concepts via the normal `pwiki new` flow.
+- Bootstrap: existing Confluence sandbox space + temp wiki root (the FS mirror writes into `<tempRoot>/docs/wiki/`).
+- Configure both in `<tempRoot>/docs/wiki/.pwiki.json`: `primary: "confluence"`, `mirrors: ["fs"]`, both destinations present in `destinations`.
+- Create two concept pages and a query that links to one of the concepts via the normal `pwiki new` flow (writes go to Confluence — the primary).
 - Run `pwiki sync`.
-- Assert FS mirror has three matching `.md` files with rewritten relative-path cross-links and a regenerated `INDEX.md`.
+- Assert FS mirror has three matching `.md` files under `<tempRoot>/docs/wiki/pages/<type>/` with rewritten relative-path cross-links, and a regenerated `<tempRoot>/docs/wiki/index.md`.
 - Delete one of the source pages via Confluence UI (raw DELETE call from the test).
 - Run `pwiki sync` again.
-- Assert FS mirror is down to two pages, `INDEX.md` rewritten.
+- Assert FS mirror is down to two pages, `index.md` rewritten.
 
 E2E gating unchanged (`PWIKI_E2E_CONFLUENCE=1`, dedicated sandbox space).
 
