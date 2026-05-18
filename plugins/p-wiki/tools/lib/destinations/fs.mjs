@@ -1,7 +1,12 @@
 import { existsSync, writeFileSync, readFileSync, mkdirSync, renameSync, readdirSync, unlinkSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, posix as pathPosix } from 'node:path';
 import { serializeFrontmatter, parseFrontmatter } from '../fm.mjs';
 import { directoryFor } from '../schema.mjs';
+
+// Cross-link parsing/formatting helpers. The directory names below match what
+// directoryFor() produces — note 'query' type lives in the 'queries/' folder.
+const TYPE_DIRS = { concept: 'concept', person: 'person', source: 'source', query: 'queries' };
+const DIR_TYPES = Object.fromEntries(Object.entries(TYPE_DIRS).map(([t, d]) => [d, t]));
 import { withDateSuffix } from '../slug.mjs';
 import { toRepoRelative, today } from '../paths.mjs';
 import { rankDocuments } from '../search.mjs';
@@ -179,6 +184,30 @@ export function createFsDestination({ rootPath, root }) {
     return repoRel(abs);
   }
 
+  function parseWikiLink(href, fromPath) {
+    if (!href) return null;
+    if (/^[a-z][a-z0-9+.\-]*:/i.test(href)) return null;  // http://, mailto:, etc.
+    if (href.startsWith('#')) return null;
+    if (!href.endsWith('.md')) return null;
+    const fromDir = pathPosix.dirname(fromPath);
+    const resolved = pathPosix.normalize(pathPosix.join(fromDir, href));
+    // Expected shape: docs/wiki/pages/<dir>/<slug>.md
+    const m = /^docs\/wiki\/pages\/([^/]+)\/([^/]+)\.md$/.exec(resolved);
+    if (!m) return null;
+    const type = DIR_TYPES[m[1]];
+    if (!type) return null;
+    return { type, slug: m[2] };
+  }
+
+  function formatWikiLink({ type, slug }, fromPath) {
+    const target = pathFor({ type, slug });
+    const fromDir = pathPosix.dirname(fromPath);
+    // pathFor returns OS-style path on Windows (uses path.join → backslashes).
+    // Normalize to POSIX for cross-link emission:
+    const targetPosix = target.split(/[\\/]+/).join('/');
+    return pathPosix.relative(fromDir, targetPosix);
+  }
+
   function deletePage(repoRelPath) {
     const abs = join(rootPath, repoRelPath);
     try {
@@ -315,6 +344,8 @@ export function createFsDestination({ rootPath, root }) {
     rootPath,
     pageExists,
     pathFor,
+    parseWikiLink,
+    formatWikiLink,
     readPage,
     writePage,
     mutatePage,
