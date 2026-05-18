@@ -29,7 +29,7 @@ function makeDestination(name, block, root, env) {
 export function resolveDestination(env) {
   const root = findWikiRoot(env.cwd);
   if (root === null) return null;
-  const cfg = (() => { try { return readConfig(root); } catch { return null; } })() ?? DEFAULT_FS_CONFIG;
+  const cfg = readConfig(root) ?? DEFAULT_FS_CONFIG;
   const v = validateConfig(cfg);
   if (!v.ok) throw new Error(`invalid .pwiki.json: ${v.error}`);
 

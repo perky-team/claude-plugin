@@ -14,6 +14,7 @@ import { renderIndexAdf } from '../confluence/index.mjs';
 import { join } from 'node:path';
 
 export function createConfluenceDestination({ root, config, destinationConfig, transport }) {
+  // TODO(Task 4): drop {config} fallback once all callers pass {root, destinationConfig}.
   const c = destinationConfig ?? config.confluence;
   const email = process.env.PWIKI_CONFLUENCE_EMAIL;
   const token = process.env.PWIKI_CONFLUENCE_TOKEN;
