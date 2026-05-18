@@ -13,7 +13,7 @@ import { createHttpClient } from './lib/confluence/http.mjs';
 import { ensureSubParent } from './lib/confluence/tree.mjs';
 import { writeConfig, validateConfig } from './lib/config.mjs';
 
-const VERSION = '1.1.0';
+const VERSION = '2.0.0';
 
 export function mapErrorToCode(err) {
   const s = err?.status;
