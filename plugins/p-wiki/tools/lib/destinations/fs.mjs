@@ -15,6 +15,10 @@ export function createFsDestination({ rootPath, root }) {
   const absFor = (type, slug) => join(rootPath, 'docs', 'wiki', directoryFor(type), `${slug}.md`);
   const repoRel = (abs) => toRepoRelative(rootPath, abs);
 
+  function ensureStructure() {
+    // No-op: writePage does mkdirSync({recursive: true}) on demand.
+  }
+
   function writePage({ type, slug, frontmatter, body, onConflict }) {
     const conflict = onConflict ?? 'fail';
     let useSlug = slug;
@@ -321,5 +325,6 @@ export function createFsDestination({ rootPath, root }) {
     lint,
     applyBacklinks,
     regenerateIndex,
+    ensureStructure,
   };
 }

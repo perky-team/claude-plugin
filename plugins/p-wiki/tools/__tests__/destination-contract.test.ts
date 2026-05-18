@@ -178,6 +178,26 @@ function runContractTests(name: string, makeDest: () => any, pathShape: RegExp, 
       const after = (d as any)._fake?.bodyPuts(id) ?? 0;
       expect(after - before).toBe(0);
     });
+
+    t('ensureStructure brings the destination into a writable state', async () => {
+      const d = makeDest();
+      await d.ensureStructure();
+      // After ensure, writePage for every type succeeds:
+      for (const type of ['concept', 'person', 'source', 'query'] as const) {
+        const r = await d.writePage({
+          type, slug: `ensure-${type}`,
+          frontmatter: { id: `ensure-${type}`, type, title: `Ensure ${type}`, created: '2026-05-18', updated: '2026-05-18', status: type === 'query' ? 'filed' : 'active', tags: [], sources: [], ...(type === 'query' ? { question: '?' } : {}), ...(type === 'source' ? { 'source-url': 'https://x', 'source-type': 'doc' } : {}) },
+          body: '# x\n',
+        });
+        expect(r.created).toBe(true);
+      }
+    });
+
+    t('ensureStructure is idempotent', async () => {
+      const d = makeDest();
+      await d.ensureStructure();
+      await d.ensureStructure();
+    });
   });
 }
 

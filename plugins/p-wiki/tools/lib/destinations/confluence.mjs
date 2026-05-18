@@ -9,7 +9,7 @@ import { today, toRepoRelative } from '../paths.mjs';
 import { parseFrontmatter } from '../fm.mjs';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { runConfluenceLint } from '../confluence/lint.mjs';
-import { ensureIndex } from '../confluence/tree.mjs';
+import { ensureIndex, ensureSubParent } from '../confluence/tree.mjs';
 import { renderIndexAdf } from '../confluence/index.mjs';
 import { join } from 'node:path';
 
@@ -483,6 +483,22 @@ export function createConfluenceDestination({ root, config, destinationConfig, t
     hit.parent.splice(hit.idx, 1, ...newNodes);
   }
 
+  async function ensureStructure() {
+    for (const type of ['concept', 'person', 'source', 'query']) {
+      if (!c.subParents[type]) {
+        c.subParents[type] = await ensureSubParent(http, c.spaceId, c.rootPageId, type);
+      } else {
+        // verify the cached sub-parent still exists; if not, re-create.
+        try {
+          await http.get(`/wiki/api/v2/pages/${c.subParents[type]}`);
+        } catch (e) {
+          if (e.status === 404) c.subParents[type] = await ensureSubParent(http, c.spaceId, c.rootPageId, type);
+          else throw e;
+        }
+      }
+    }
+  }
+
   async function regenerateIndex() {
     const all = await listConfluencePages(['concept', 'person', 'source', 'query']);
     const groups = { concept: [], person: [], source: [], query: [] };
@@ -527,5 +543,6 @@ export function createConfluenceDestination({ root, config, destinationConfig, t
     lint,
     applyBacklinks,
     regenerateIndex,
+    ensureStructure,
   };
 }

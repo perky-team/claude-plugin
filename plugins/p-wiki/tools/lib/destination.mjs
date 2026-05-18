@@ -7,6 +7,7 @@ import { readConfig, validateConfig } from './config.mjs';
  * @typedef {Object} Destination
  * @property {(path: string) => Promise<{deleted: boolean, path: string}> | {deleted: boolean, path: string}} deletePage
  * @property {(args: {type: string, slug: string}) => string} pathFor
+ * @property {() => Promise<void> | void} ensureStructure
  */
 
 /**
