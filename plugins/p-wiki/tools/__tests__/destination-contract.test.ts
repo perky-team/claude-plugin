@@ -101,6 +101,29 @@ function runContractTests(name: string, makeDest: () => any, pathShape: RegExp, 
       expect(typeof r.groups.query).toBe('number');
       expect(r.written).toBe(true);
     });
+
+    t('deletePage removes an existing page; pageExists is false afterward', async () => {
+      const d = makeDest();
+      const r = await d.writePage({
+        type: 'concept', slug: 'delete-me',
+        frontmatter: { id: 'delete-me', type: 'concept', title: 'Delete Me', created: '2026-05-18', updated: '2026-05-18', status: 'active', tags: [], sources: [] },
+        body: '# Delete Me\n',
+      });
+      expect(r.created).toBe(true);
+      const del = await d.deletePage(r.path);
+      expect(del.deleted).toBe(true);
+      expect(await d.pageExists({ type: 'concept', slug: 'delete-me' })).toBe(false);
+    });
+
+    t('deletePage is idempotent — missing page returns {deleted:false}', async () => {
+      const d = makeDest();
+      // Hard-code missing-path forms per backend since pathFor lands in Task 6.
+      const missingPath = d.kind === 'fs'
+        ? 'docs/wiki/pages/concept/never-existed.md'
+        : 'confluence://concept/never-existed';
+      const del = await d.deletePage(missingPath);
+      expect(del.deleted).toBe(false);
+    });
   });
 }
 

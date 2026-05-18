@@ -16,6 +16,7 @@ export function createIdentityCache() {
   return {
     get(type, slug) { return map.get(key(type, slug)); },
     set(type, slug, id) { map.set(key(type, slug), id); },
+    drop(type, slug) { map.delete(key(type, slug)); },
     clear() { map.clear(); },
   };
 }

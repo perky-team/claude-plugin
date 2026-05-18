@@ -1,4 +1,4 @@
-import { existsSync, writeFileSync, readFileSync, mkdirSync, renameSync, readdirSync } from 'node:fs';
+import { existsSync, writeFileSync, readFileSync, mkdirSync, renameSync, readdirSync, unlinkSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { serializeFrontmatter, parseFrontmatter } from '../fm.mjs';
 import { directoryFor } from '../schema.mjs';
@@ -164,6 +164,17 @@ export function createFsDestination({ rootPath, root }) {
     return existsSync(absFor(type, slug));
   }
 
+  function deletePage(repoRelPath) {
+    const abs = join(rootPath, repoRelPath);
+    try {
+      unlinkSync(abs);
+      return { deleted: true, path: repoRelPath };
+    } catch (e) {
+      if (e.code === 'ENOENT') return { deleted: false, path: repoRelPath };
+      throw e;
+    }
+  }
+
   function search(query, opts = {}) {
     const where = opts.in ?? 'pages';
     const all = listPages({ in: where });
@@ -292,6 +303,7 @@ export function createFsDestination({ rootPath, root }) {
     writePage,
     mutatePage,
     movePage,
+    deletePage,
     listPages,
     search,
     lint,

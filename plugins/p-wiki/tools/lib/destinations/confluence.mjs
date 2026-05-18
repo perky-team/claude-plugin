@@ -335,6 +335,33 @@ export function createConfluenceDestination({ root, config, destinationConfig, t
     identity.set(to.type, to.slug, id);
   }
 
+  async function deletePage(path) {
+    const { type, slug } = parsePath(path);
+    let id = identity.get(type, slug);
+    if (!id) {
+      // Resolve via CQL (same shape as pageExists). Cache miss + page actually missing → return {deleted:false}.
+      const subParent = c.subParents[type];
+      const cql = `ancestor = ${subParent} AND property["pwiki-id"] = "${slug}" AND property["pwiki-type"] = "${type}"`;
+      const res = await http.get(`/wiki/rest/api/search?cql=${encodeURIComponent(cql)}&limit=1`);
+      const r = res.body?.results?.[0];
+      if (!r) return { deleted: false, path };
+      id = r.content?.id ?? r.id;
+      identity.set(type, slug, id);
+    }
+    try {
+      await http.delete(`/wiki/api/v2/pages/${id}`);
+      // Drop from cache so subsequent pageExists hits the wire and returns false.
+      identity.drop(type, slug);
+      return { deleted: true, path };
+    } catch (e) {
+      if (e.status === 404) {
+        identity.drop(type, slug);
+        return { deleted: false, path };
+      }
+      throw e;
+    }
+  }
+
   async function lint(opts = {}) {
     return runConfluenceLint({
       http, properties,
@@ -457,6 +484,7 @@ export function createConfluenceDestination({ root, config, destinationConfig, t
     writePage,
     mutatePage,
     movePage,
+    deletePage,
     listPages,
     search,
     lint,

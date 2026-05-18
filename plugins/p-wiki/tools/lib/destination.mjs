@@ -4,6 +4,11 @@ import { createConfluenceDestination } from './destinations/confluence.mjs';
 import { readConfig, validateConfig } from './config.mjs';
 
 /**
+ * @typedef {Object} Destination
+ * @property {(path: string) => Promise<{deleted: boolean, path: string}> | {deleted: boolean, path: string}} deletePage
+ */
+
+/**
  * @typedef {Object} ResolvedDestinations
  * @property {Destination} primary
  * @property {string} primaryName
