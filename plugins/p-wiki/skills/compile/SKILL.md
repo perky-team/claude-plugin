@@ -153,3 +153,20 @@ Why: Obsidian and CommonMark parse bare `<word>` as an opening HTML tag and stop
 - Source file exists but is empty → skip it and report.
 - Source file references entities that share normalised titles with existing pages of a different type → prefer the existing type; do not duplicate across types.
 - A page would exceed 2000 words after Edit → flag in the report, suggest splitting (don't auto-split).
+
+## Error handling
+
+If `pwiki <command>` exits non-zero, parse the JSON `error.code` field:
+
+| error.code | What to say to the user |
+|---|---|
+| `auth-failed` | "Check PWIKI_CONFLUENCE_EMAIL / PWIKI_CONFLUENCE_TOKEN; verify the token grants access to the space." |
+| `config-invalid` | "Confluence config invalid — re-run `/p-wiki:init`." |
+| `page-not-found` | "Page `<path>` no longer exists in Confluence." |
+| `rate-limited` | "Confluence rate-limited; retry in a few minutes." |
+| `network-error` | "Confluence is unavailable; retry later." |
+| `version-conflict` | "Page was modified concurrently; re-run the command." |
+| `slug-taken` | Existing slug-conflict prompt (overwrite / date-suffix) — unchanged. |
+| `target-exists` | Existing callout — unchanged. |
+| `schema-violation` | Existing behavior — unchanged. |
+| `internal` | "Internal CLI error — file an issue against p-wiki." |
