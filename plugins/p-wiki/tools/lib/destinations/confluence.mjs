@@ -371,6 +371,26 @@ export function createConfluenceDestination({ root, config, destinationConfig, t
     identity.set(to.type, to.slug, id);
   }
 
+  // Match Confluence page URLs on this site only.
+  const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const URL_RE = new RegExp(`^${escapeRe(c.siteUrl)}/wiki/spaces/${escapeRe(c.spaceKey)}/pages/(\\d+)$`);
+
+  function parseWikiLink(href, _fromPath) {
+    if (!href) return null;
+    const m = URL_RE.exec(href);
+    if (!m) return null;
+    const numericId = m[1];
+    const hit = identity.getByNumericId(numericId);
+    if (!hit) return null;
+    return { type: hit.type, slug: hit.slug };
+  }
+
+  function formatWikiLink({ type, slug }, _fromPath) {
+    const id = identity.get(type, slug);
+    if (!id) throw new Error(`formatWikiLink: identity miss for ${type}/${slug}`);
+    return `${c.siteUrl}/wiki/spaces/${c.spaceKey}/pages/${id}`;
+  }
+
   async function deletePage(path) {
     const { type, slug } = parsePath(path);
     let id = identity.get(type, slug);
@@ -544,5 +564,7 @@ export function createConfluenceDestination({ root, config, destinationConfig, t
     applyBacklinks,
     regenerateIndex,
     ensureStructure,
+    parseWikiLink,
+    formatWikiLink,
   };
 }

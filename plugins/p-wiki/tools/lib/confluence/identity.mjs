@@ -11,12 +11,29 @@ export function formatPath(type, slug) {
 }
 
 export function createIdentityCache() {
-  const map = new Map();
-  const key = (t, s) => `${t}/${s}`;
+  const forward = new Map();         // "<type>/<slug>" → numericId
+  const reverse = new Map();         // numericId (string) → { type, slug }
+  const fkey = (t, s) => `${t}/${s}`;
   return {
-    get(type, slug) { return map.get(key(type, slug)); },
-    set(type, slug, id) { map.set(key(type, slug), id); },
-    drop(type, slug) { map.delete(key(type, slug)); },
-    clear() { map.clear(); },
+    get(type, slug) { return forward.get(fkey(type, slug)); },
+    set(type, slug, id) {
+      const k = fkey(type, slug);
+      const prev = forward.get(k);
+      if (prev !== undefined) reverse.delete(String(prev));
+      if (id === undefined) {
+        forward.delete(k);
+      } else {
+        forward.set(k, id);
+        reverse.set(String(id), { type, slug });
+      }
+    },
+    drop(type, slug) {
+      const k = fkey(type, slug);
+      const prev = forward.get(k);
+      if (prev !== undefined) reverse.delete(String(prev));
+      forward.delete(k);
+    },
+    getByNumericId(id) { return reverse.get(String(id)); },
+    clear() { forward.clear(); reverse.clear(); },
   };
 }

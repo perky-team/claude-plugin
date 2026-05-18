@@ -26,4 +26,20 @@ describe('identity', () => {
     expect(c.get('concept', 'foo')).toBe('12345');
     expect(c.get('concept', 'bar')).toBeUndefined();
   });
+
+  it('cache supports reverse lookup by numericId', () => {
+    const c = createIdentityCache();
+    c.set('concept', 'foo', '12345');
+    expect(c.getByNumericId('12345')).toEqual({ type: 'concept', slug: 'foo' });
+    c.set('concept', 'foo', undefined);
+    expect(c.getByNumericId('12345')).toBeUndefined();
+  });
+
+  it('drop clears both directions of the cache', () => {
+    const c = createIdentityCache();
+    c.set('concept', 'foo', '12345');
+    c.drop('concept', 'foo');
+    expect(c.get('concept', 'foo')).toBeUndefined();
+    expect(c.getByNumericId('12345')).toBeUndefined();
+  });
 });
