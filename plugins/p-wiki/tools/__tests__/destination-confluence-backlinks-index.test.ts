@@ -61,3 +61,29 @@ describe('Confluence applyBacklinks', () => {
     for (let i = 0; i < 25; i++) expect(fake.pageById.get(String(700 + i))!.version).toBe(1);
   });
 });
+
+describe('Confluence regenerateIndex', () => {
+  it('creates Index page on first run, writes ADF body, returns counts', async () => {
+    const concept = { id: '500', title: 'Foo', parentId: '101', version: 1, body: { type: 'doc', version: 1, content: [] },
+      properties: new Map([
+        ['pwiki-id', { id: 'p1', key: 'pwiki-id', value: 'foo', version: 1 }],
+        ['pwiki-type', { id: 'p2', key: 'pwiki-type', value: 'concept', version: 1 }],
+        ['pwiki-title', { id: 'p3', key: 'pwiki-title', value: 'Foo', version: 1 }],
+        ['pwiki-tags', { id: 'p4', key: 'pwiki-tags', value: '[]', version: 1 }],
+        ['pwiki-sources', { id: 'p5', key: 'pwiki-sources', value: '[]', version: 1 }],
+      ]),
+      labels: new Set(),
+    };
+    const { dest, fake } = setup([concept]);
+    const r = await dest.regenerateIndex();
+    expect(r.written).toBe(true);
+    expect(r.path).toBe('confluence://index');
+    expect(r.groups.concept).toBe(1);
+    const idx = [...fake.pageById.values()].find(p => p.title === 'Index');
+    expect(idx).toBeDefined();
+    expect(idx!.properties.get('pwiki-role')?.value).toBe('index');
+    const bodyJson = JSON.stringify(idx!.body);
+    expect(bodyJson).toContain('Concepts');
+    expect(bodyJson).toContain('Foo');
+  });
+});

@@ -111,7 +111,4 @@ runContractTests(
   makeConfluenceDest,
   /^confluence:\/\//,
   /^confluence:\/\/index$/,
-  new Set([
-    'regenerateIndex returns documented shape',
-  ]),
 );

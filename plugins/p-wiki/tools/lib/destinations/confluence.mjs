@@ -9,6 +9,8 @@ import { today, toRepoRelative } from '../paths.mjs';
 import { parseFrontmatter } from '../fm.mjs';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { runConfluenceLint } from '../confluence/lint.mjs';
+import { ensureIndex } from '../confluence/tree.mjs';
+import { renderIndexAdf } from '../confluence/index.mjs';
 import { join } from 'node:path';
 
 export function createConfluenceDestination({ root, config, transport }) {
@@ -417,6 +419,33 @@ export function createConfluenceDestination({ root, config, transport }) {
     hit.parent.splice(hit.idx, 1, ...newNodes);
   }
 
+  async function regenerateIndex() {
+    const all = await listConfluencePages(['concept', 'person', 'source', 'query']);
+    const groups = { concept: [], person: [], source: [], query: [] };
+    for (const { path, frontmatter } of all) {
+      const t = frontmatter.type;
+      if (!(t in groups)) continue;
+      const numericId = identity.get(t, frontmatter.id);
+      groups[t].push({ id: frontmatter.id, title: frontmatter.title, numericId, summary: '' });
+    }
+    for (const k of Object.keys(groups)) {
+      groups[k].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    }
+    const indexId = await ensureIndex(http, c.spaceId, c.rootPageId);
+    const adf = renderIndexAdf({ siteUrl: c.siteUrl, spaceKey: c.spaceKey, groups });
+    const cur = await http.get(`/wiki/api/v2/pages/${indexId}`);
+    await http.put(`/wiki/api/v2/pages/${indexId}`, {
+      id: indexId, status: 'current', title: 'Index',
+      version: { number: cur.body.version.number + 1 },
+      body: { representation: 'atlas_doc_format', value: JSON.stringify(adf) },
+    });
+    return {
+      path: 'confluence://index',
+      groups: { concept: groups.concept.length, person: groups.person.length, source: groups.source.length, query: groups.query.length },
+      written: true,
+    };
+  }
+
   return {
     kind: 'confluence',
     rootPath: `${c.siteUrl}#${c.spaceKey}/${c.rootPageId}`,
@@ -431,6 +460,6 @@ export function createConfluenceDestination({ root, config, transport }) {
     search,
     lint,
     applyBacklinks,
-    regenerateIndex: nyi('regenerateIndex'),
+    regenerateIndex,
   };
 }
