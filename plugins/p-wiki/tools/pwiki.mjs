@@ -8,7 +8,10 @@ import { extractSummary, renderIndex } from './lib/index.mjs';
 import { resolveDestination } from './lib/destination.mjs';
 import { TYPES, templateBody, isRawType } from './lib/schema.mjs';
 import { kebab, stripDatePrefix } from './lib/slug.mjs';
-import { today } from './lib/paths.mjs';
+import { today, findWikiRoot } from './lib/paths.mjs';
+import { createHttpClient } from './lib/confluence/http.mjs';
+import { ensureSubParent } from './lib/confluence/tree.mjs';
+import { writeConfig, validateConfig } from './lib/config.mjs';
 
 const VERSION = '1.1.0';
 
@@ -89,6 +92,70 @@ function formatLintReport(r) {
   return out.join('\n') + '\n';
 }
 
+function makeRealTransport() {
+  return async function transport(req) {
+    const res = await globalThis.fetch(req.url, {
+      method: req.method,
+      headers: req.headers,
+      body: req.body,
+    });
+    let body = null;
+    const ct = res.headers.get('content-type') ?? '';
+    if (ct.includes('application/json')) {
+      try { body = await res.json(); } catch { body = null; }
+    } else {
+      await res.text(); // drain the body
+    }
+    const headers = {};
+    res.headers.forEach((v, k) => { headers[k] = v; });
+    return { status: res.status, headers, body };
+  };
+}
+
+async function initConfluence(args) {
+  const email = process.env.PWIKI_CONFLUENCE_EMAIL;
+  const token = process.env.PWIKI_CONFLUENCE_TOKEN;
+  if (!email || !token) die('PWIKI_CONFLUENCE_EMAIL and PWIKI_CONFLUENCE_TOKEN required', 1);
+  const siteUrl = args.site;
+  const spaceKey = args.space;
+  const parentTitleOrId = args.parent;
+  if (!siteUrl || !spaceKey || !parentTitleOrId) die('--site, --space, and --parent required', 1);
+  const root = findWikiRoot(process.cwd());
+  if (!root) die('not inside a p-wiki repo (no docs/wiki/CLAUDE.md found)', 1);
+
+  const http = createHttpClient({ baseUrl: siteUrl, email, token, transport: makeRealTransport() });
+  const spaceRes = await http.get(`/wiki/api/v2/spaces?keys=${encodeURIComponent(spaceKey)}`);
+  const space = spaceRes.body?.results?.[0];
+  if (!space) emitJson({ error: { code: 'config-invalid', message: `space ${spaceKey} not found` } }, 1);
+
+  let rootPageId;
+  if (/^\d+$/.test(parentTitleOrId)) {
+    rootPageId = parentTitleOrId;
+    await http.get(`/wiki/api/v2/pages/${rootPageId}`);
+  } else {
+    const cql = `title = "${parentTitleOrId.replace(/"/g, '\\"')}" AND space = "${spaceKey}"`;
+    const r = await http.get(`/wiki/rest/api/search?cql=${encodeURIComponent(cql)}&limit=2`);
+    const hits = r.body?.results ?? [];
+    if (hits.length === 0) emitJson({ error: { code: 'config-invalid', message: `parent page "${parentTitleOrId}" not found in space ${spaceKey} — create it in UI first` } }, 1);
+    if (hits.length > 1) emitJson({ error: { code: 'config-invalid', message: `parent page title ambiguous (${hits.length} matches) — pass numeric ID instead` } }, 1);
+    rootPageId = hits[0].content?.id ?? hits[0].id;
+  }
+
+  const subParents = {};
+  for (const type of ['concept', 'person', 'source', 'query']) {
+    subParents[type] = await ensureSubParent(http, space.id, rootPageId, type);
+  }
+
+  const config = {
+    destination: 'confluence',
+    confluence: { siteUrl, spaceKey, spaceId: space.id, rootPageId, subParents },
+  };
+  const v = validateConfig(config);
+  if (!v.ok) emitJson({ error: { code: 'internal', message: v.error } }, 3);
+  writeConfig(root, config);
+  emitJson({ ok: true, configPath: 'docs/wiki/.pwiki.json', spaceId: space.id, rootPageId, subParents }, 0);
+}
+
 const isMain = process.argv[1] && resolve(fileURLToPath(import.meta.url)) === resolve(process.argv[1]);
 
 if (isMain) {
@@ -101,7 +168,7 @@ if (process.argv.slice(2)[0] === '--version') {
 const command = process.argv[2];
 const args = parseArgs(process.argv.slice(3));
 
-const KNOWN = ['new', 'set', 'promote', 'search', 'lint', 'backlinks', 'index'];
+const KNOWN = ['new', 'set', 'promote', 'search', 'lint', 'backlinks', 'index', 'init'];
 if (!KNOWN.includes(command)) die(`unknown command: ${command}`, 1);
 
 try {
@@ -300,6 +367,11 @@ try {
     } catch (e) {
       die(e.message, 1);
     }
+  }
+
+  if (command === 'init') {
+    if (!args.confluence) die('use the /p-wiki:init skill for FS scaffolding; only --confluence is supported here', 1);
+    await initConfluence(args);
   }
 
   if (command === 'index') {

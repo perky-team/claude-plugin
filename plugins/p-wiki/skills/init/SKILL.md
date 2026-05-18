@@ -14,17 +14,38 @@ You are scaffolding the `p-wiki` knowledge base inside the current repo.
 
 Run `node --version` via Bash. If it fails or returns a major version <18, stop and tell the user: "p-wiki requires Node ≥ 18 in PATH for the bundled CLI. Install or update Node, then re-run /p-wiki:init." Do not proceed with scaffolding.
 
-## Step 1 — Find the repo root
+## Step 1 — Choose destination
+
+Ask the user (single question):
+
+> Where should this wiki live? Options:
+> - `fs` — local filesystem under `docs/wiki/` (default).
+> - `confluence` — Confluence Cloud space (requires PWIKI_CONFLUENCE_EMAIL + PWIKI_CONFLUENCE_TOKEN env vars).
+
+If the user picks `confluence`:
+
+1. Verify both env vars are set; if not, output instructions linking to https://id.atlassian.com/manage-profile/security/api-tokens and stop.
+2. Prompt: site URL (e.g. `https://example.atlassian.net`).
+3. Prompt: space key (e.g. `ENG`).
+4. Prompt: parent page title or numeric ID under which wiki pages will live.
+5. Call `node "${CLAUDE_PLUGIN_ROOT}/tools/pwiki.mjs" init --confluence --site=<url> --space=<key> --parent=<title-or-id>`.
+   - The CLI resolves the space (GET /wiki/api/v2/spaces?keys=<key>), looks up the parent page, ensures sub-parents, and writes `docs/wiki/.pwiki.json`.
+   - On `error.code = config-invalid`, show the suggested fix and prompt again.
+6. Continue with the rest of the scaffold (CLAUDE.md template, `.claude/rules/p-wiki.md`).
+
+If the user picks `fs` (or the default), proceed with the existing FS scaffold path below.
+
+## Step 2 — Find the repo root
 
 Run `git rev-parse --show-toplevel` via Bash. If it fails (not a git repo), ask the user once whether to use the current working directory as the root. If they decline, stop. If they accept, use CWD.
 
 Hereafter `<root>` = the resolved repo root.
 
-## Step 2 — Refuse if already initialised
+## Step 3 — Refuse if already initialised
 
 If `<root>/docs/wiki/` exists, stop and tell the user: "Wiki already initialised at `<root>/docs/wiki/`. Remove the directory by hand if you want to reset it."
 
-## Step 3 — Create the layout
+## Step 4 — Create the layout
 
 Create these directories (use `mkdir -p` via Bash):
 
@@ -41,7 +62,7 @@ Create these directories (use `mkdir -p` via Bash):
 
 Put a `.gitkeep` file in each leaf directory (7 files) so git tracks empty dirs.
 
-## Step 4 — Write the wiki content files
+## Step 5 — Write the wiki content files
 
 Read the templates from this skill's bundle and write them into the wiki:
 
@@ -53,14 +74,14 @@ Read the templates from this skill's bundle and write them into the wiki:
 
 Copy verbatim — no transformations.
 
-## Step 5 — Write the global rule
+## Step 6 — Write the global rule
 
 Ensure `<root>/.claude/rules/` exists (`mkdir -p`). Then:
 
 - If `<root>/.claude/rules/p-wiki.md` already exists, do NOT overwrite. Tell the user the file is present and they should review it before proceeding.
 - Otherwise, copy `${CLAUDE_SKILL_DIR}/../_shared/templates/p-wiki-rule.template.md` to `<root>/.claude/rules/p-wiki.md` verbatim.
 
-## Step 6 — Final message
+## Step 7 — Final message
 
 Tell the user, in order:
 
