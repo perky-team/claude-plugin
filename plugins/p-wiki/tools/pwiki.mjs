@@ -177,8 +177,9 @@ try {
     if (!TYPES.includes(type)) die(`unknown type: ${type}`, 1);
     if (!args.title) die(`--title required`, 1);
 
-    const dest = resolveDestination({ cwd: process.cwd() });
-    if (!dest) die(`not inside a p-wiki repo`, 1);
+    const res = resolveDestination({ cwd: process.cwd(), transport: makeRealTransport() });
+    if (!res) die(`not inside a p-wiki repo`, 1);
+    const dest = res.primary;
 
     let slug = args.slug ?? kebab(args.title);
     if (type === 'query') slug = `${today()}-${slug}`;
@@ -252,8 +253,9 @@ try {
   if (command === 'set') {
     const path = args._[0];
     if (!path) die(`set: <path> required`, 1);
-    const dest = resolveDestination({ cwd: process.cwd() });
-    if (!dest) die(`not inside a p-wiki repo`, 1);
+    const res = resolveDestination({ cwd: process.cwd(), transport: makeRealTransport() });
+    if (!res) die(`not inside a p-wiki repo`, 1);
+    const dest = res.primary;
     const mutations = {};
 
     if (args.field) {
@@ -284,8 +286,9 @@ try {
     const path = args._[0];
     if (!path) die(`promote: <path> required`, 1);
     if (args.to !== 'concept') die(`promote: only --to=concept supported in v1`, 1);
-    const dest = resolveDestination({ cwd: process.cwd() });
-    if (!dest) die(`not inside a p-wiki repo`, 1);
+    const res = resolveDestination({ cwd: process.cwd(), transport: makeRealTransport() });
+    if (!res) die(`not inside a p-wiki repo`, 1);
+    const dest = res.primary;
 
     let source;
     try { source = dest.readPage(path); } catch (e) { die(e.message, 1); }
@@ -322,8 +325,9 @@ try {
   if (command === 'search') {
     const query = args._[0];
     if (!query) die(`search: <query> required`, 1);
-    const dest = resolveDestination({ cwd: process.cwd() });
-    if (!dest) die(`not inside a p-wiki repo`, 1);
+    const res = resolveDestination({ cwd: process.cwd(), transport: makeRealTransport() });
+    if (!res) die(`not inside a p-wiki repo`, 1);
+    const dest = res.primary;
 
     const opts = {
       type: typeof args.type === 'string' ? args.type.split(',').map(s => s.trim()).filter(Boolean) : [],
@@ -338,8 +342,9 @@ try {
   }
 
   if (command === 'lint') {
-    const dest = resolveDestination({ cwd: process.cwd() });
-    if (!dest) die(`not inside a p-wiki repo`, 1);
+    const res = resolveDestination({ cwd: process.cwd(), transport: makeRealTransport() });
+    if (!res) die(`not inside a p-wiki repo`, 1);
+    const dest = res.primary;
     const r = dest.lint({});
     const format = args.format ?? 'text';
     if (format === 'json') {
@@ -353,8 +358,9 @@ try {
   if (command === 'backlinks') {
     const path = args._[0];
     if (!path) die(`backlinks: <path> required`, 1);
-    const dest = resolveDestination({ cwd: process.cwd() });
-    if (!dest) die(`not inside a p-wiki repo`, 1);
+    const res = resolveDestination({ cwd: process.cwd(), transport: makeRealTransport() });
+    if (!res) die(`not inside a p-wiki repo`, 1);
+    const dest = res.primary;
 
     const maxSuggestions = args['max-suggestions'] !== undefined
       ? Number(args['max-suggestions'])
@@ -375,8 +381,9 @@ try {
   }
 
   if (command === 'index') {
-    const dest = resolveDestination({ cwd: process.cwd() });
-    if (!dest) die(`not inside a p-wiki repo`, 1);
+    const res = resolveDestination({ cwd: process.cwd(), transport: makeRealTransport() });
+    if (!res) die(`not inside a p-wiki repo`, 1);
+    const dest = res.primary;
     const format = args.format ?? 'json';
 
     if (format === 'text') {
