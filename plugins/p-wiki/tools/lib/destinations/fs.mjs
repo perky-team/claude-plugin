@@ -9,11 +9,9 @@ import { runChecks } from '../lint.mjs';
 import { findFirstMatch, insertLinkAt, computeRelPath } from '../backlinks.mjs';
 import { extractSummary, renderIndex } from '../index.mjs';
 
-export function createFsDestination({ rootPath, root, destinationConfig }) {
+export function createFsDestination({ rootPath, root }) {
   // TODO(Task 4 cleanup): drop {rootPath} fallback once nothing in-tree uses it.
   rootPath = rootPath ?? root;
-  // eslint-disable-next-line no-unused-vars
-  const _destConfig = destinationConfig ?? { kind: 'fs' };
   const absFor = (type, slug) => join(rootPath, 'docs', 'wiki', directoryFor(type), `${slug}.md`);
   const repoRel = (abs) => toRepoRelative(rootPath, abs);
 
