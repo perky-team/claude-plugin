@@ -124,6 +124,24 @@ function runContractTests(name: string, makeDest: () => any, pathShape: RegExp, 
       const del = await d.deletePage(missingPath);
       expect(del.deleted).toBe(false);
     });
+
+    t('pathFor matches what writePage returns as path for the same (type, slug)', async () => {
+      const d = makeDest();
+      const expected = d.pathFor({ type: 'concept', slug: 'pathfor-check' });
+      const r = await d.writePage({
+        type: 'concept', slug: 'pathfor-check',
+        frontmatter: { id: 'pathfor-check', type: 'concept', title: 'PathFor', created: '2026-05-18', updated: '2026-05-18', status: 'active', tags: [], sources: [] },
+        body: '# PathFor\n',
+      });
+      expect(r.path).toBe(expected);
+    });
+
+    t('pathFor is synchronous and does no I/O', () => {
+      const d = makeDest();
+      const p = d.pathFor({ type: 'concept', slug: 'never-written' });
+      expect(typeof p).toBe('string');
+      expect(p.length).toBeGreaterThan(0);
+    });
   });
 }
 

@@ -164,6 +164,11 @@ export function createFsDestination({ rootPath, root }) {
     return existsSync(absFor(type, slug));
   }
 
+  function pathFor({ type, slug }) {
+    const abs = absFor(type, slug);
+    return repoRel(abs);
+  }
+
   function deletePage(repoRelPath) {
     const abs = join(rootPath, repoRelPath);
     try {
@@ -299,6 +304,7 @@ export function createFsDestination({ rootPath, root }) {
     kind: 'fs',
     rootPath,
     pageExists,
+    pathFor,
     readPage,
     writePage,
     mutatePage,

@@ -27,6 +27,10 @@ export function createConfluenceDestination({ root, config, destinationConfig, t
 
   const nyi = (name) => () => { throw new Error(`ConfluenceDestination.${name}: not implemented`); };
 
+  function pathFor({ type, slug }) {
+    return formatPath(type, slug);
+  }
+
   async function pageExists({ type, slug }) {
     const cached = identity.get(type, slug);
     if (cached) return true;
@@ -480,6 +484,7 @@ export function createConfluenceDestination({ root, config, destinationConfig, t
     // shared internals (exposed for layered impls):
     _http: http, _config: c, _identity: identity, _properties: properties,
     pageExists,
+    pathFor,
     readPage,
     writePage,
     mutatePage,
