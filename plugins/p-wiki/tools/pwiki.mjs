@@ -12,10 +12,12 @@ import { today, findWikiRoot } from './lib/paths.mjs';
 import { createHttpClient } from './lib/confluence/http.mjs';
 import { ensureSubParent } from './lib/confluence/tree.mjs';
 import { writeConfig, validateConfig } from './lib/config.mjs';
+import { syncToMirror } from './lib/sync.mjs';
 
 const VERSION = '2.0.0';
 
 export function mapErrorToCode(err) {
+  if (err?.message && /invalid \.pwiki\.json/.test(err.message)) return 'config-invalid';
   const s = err?.status;
   if (s === 401 || s === 403) return 'auth-failed';
   if (s === 404) return 'page-not-found';
@@ -168,7 +170,7 @@ if (process.argv.slice(2)[0] === '--version') {
 const command = process.argv[2];
 const args = parseArgs(process.argv.slice(3));
 
-const KNOWN = ['new', 'set', 'promote', 'search', 'lint', 'backlinks', 'index', 'init'];
+const KNOWN = ['new', 'set', 'promote', 'search', 'lint', 'backlinks', 'index', 'init', 'sync'];
 if (!KNOWN.includes(command)) die(`unknown command: ${command}`, 1);
 
 try {
@@ -413,11 +415,49 @@ try {
     const r = dest.regenerateIndex();
     emitJson(r, 0);
   }
+
+  if (command === 'sync') {
+    const env = { cwd: process.cwd(), transport: makeRealTransport() };
+    const res = resolveDestination(env);
+    if (!res) die(`not inside a p-wiki repo`, 1);
+
+    const format = args.format ?? 'text';
+    const results = [];
+    let worstExit = 0;
+    for (let i = 0; i < res.mirrorNames.length; i++) {
+      const name = res.mirrorNames[i];
+      const mirror = res.mirrors[i];
+      const start = Date.now();
+      try {
+        const counters = await syncToMirror(res.primary, mirror, {
+          mirrorName: name,
+          onWarn: (info) => process.stderr.write(`[sync] cross-link target ${info.type}/${info.slug} not found on mirror ${name}\n`),
+        });
+        const elapsed = Date.now() - start;
+        results.push({ name, ...counters, elapsedMs: elapsed });
+        if (format === 'text') {
+          process.stdout.write(`Syncing primary=${res.primaryName} → mirror=${name}\n`);
+          process.stdout.write(`  pass 1: writing ${counters.written} pages\n`);
+          process.stdout.write(`  pass 2: rewriting cross-links in ${counters.rewritten} pages\n`);
+          process.stdout.write(`  pass 3: deleting ${counters.deleted} pages\n`);
+          process.stdout.write(`  pass 4: regenerating Index\n`);
+          process.stdout.write(`Done in ${(elapsed / 1000).toFixed(1)}s.\n`);
+        }
+      } catch (e) {
+        const code = mapErrorToCode(e);
+        worstExit = Math.max(worstExit, 1);
+        results.push({ name, error: { code, message: e?.message ?? String(e) } });
+        process.stderr.write(`[sync] mirror ${name} failed: ${e?.message ?? e}\n`);
+      }
+    }
+    if (format === 'json') emitJson({ ok: worstExit === 0, mirrors: results }, worstExit);
+    process.exit(worstExit);
+  }
 } catch (err) {
   const code = mapErrorToCode(err);
   const payload = { error: { code, message: err?.message ?? String(err) } };
   process.stdout.write(JSON.stringify(payload) + '\n');
-  process.exit(code === 'schema-violation' || code === 'slug-taken' || code === 'target-exists' ? 2 : code === 'internal' ? 3 : 1);
+  process.exit(code === 'schema-violation' || code === 'slug-taken' || code === 'target-exists' || code === 'config-invalid' ? 2 : code === 'internal' ? 3 : 1);
 }
 
 } // end isMain
