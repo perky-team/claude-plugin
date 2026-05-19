@@ -114,7 +114,7 @@ function makeRealTransport() {
   };
 }
 
-async function initConfluence(args) {
+export async function initConfluence(args, _opts = {}) {
   const email = process.env.PWIKI_CONFLUENCE_EMAIL;
   const token = process.env.PWIKI_CONFLUENCE_TOKEN;
   if (!email || !token) die('PWIKI_CONFLUENCE_EMAIL and PWIKI_CONFLUENCE_TOKEN required', 1);
@@ -125,7 +125,8 @@ async function initConfluence(args) {
   const root = findWikiRoot(process.cwd());
   if (!root) die('not inside a p-wiki repo (no docs/wiki/CLAUDE.md found)', 1);
 
-  const http = createHttpClient({ baseUrl: siteUrl, email, token, transport: makeRealTransport() });
+  const transport = _opts.transport ?? makeRealTransport();
+  const http = createHttpClient({ baseUrl: siteUrl, email, token, transport });
   const spaceRes = await http.get(`/wiki/api/v2/spaces?keys=${encodeURIComponent(spaceKey)}`);
   const space = spaceRes.body?.results?.[0];
   if (!space) emitJson({ error: { code: 'config-invalid', message: `space ${spaceKey} not found` } }, 1);
@@ -148,14 +149,52 @@ async function initConfluence(args) {
     subParents[type] = await ensureSubParent(http, space.id, rootPageId, type);
   }
 
-  const config = {
-    destination: 'confluence',
-    confluence: { siteUrl, spaceKey, spaceId: space.id, rootPageId, subParents },
-  };
+  const confluenceBlock = { kind: 'confluence', siteUrl, spaceKey, spaceId: space.id, rootPageId, subParents };
+  const destinations = { confluence: confluenceBlock };
+  const mirrors = [];
+
+  if (args['mirror-fs']) {
+    destinations.fs = { kind: 'fs' };
+    mirrors.push('fs');
+  }
+
+  if (args['mirror-confluence']) {
+    const msite = args['mirror-site'];
+    const mspace = args['mirror-space'];
+    const mparent = args['mirror-parent'];
+    if (!msite || !mspace || !mparent) die('--mirror-confluence requires --mirror-site, --mirror-space, --mirror-parent', 1);
+    const mhttp = createHttpClient({ baseUrl: msite, email, token, transport });
+    const mspaceRes = await mhttp.get(`/wiki/api/v2/spaces?keys=${encodeURIComponent(mspace)}`);
+    const mspaceObj = mspaceRes.body?.results?.[0];
+    if (!mspaceObj) emitJson({ error: { code: 'config-invalid', message: `mirror space ${mspace} not found` } }, 1);
+
+    let mrootId;
+    if (/^\d+$/.test(mparent)) {
+      mrootId = mparent;
+      await mhttp.get(`/wiki/api/v2/pages/${mrootId}`);
+    } else {
+      const cql = `title = "${mparent.replace(/"/g, '\\"')}" AND space = "${mspace}"`;
+      const mr = await mhttp.get(`/wiki/rest/api/search?cql=${encodeURIComponent(cql)}&limit=2`);
+      const mhits = mr.body?.results ?? [];
+      if (mhits.length === 0) emitJson({ error: { code: 'config-invalid', message: `mirror parent page "${mparent}" not found in space ${mspace}` } }, 1);
+      if (mhits.length > 1) emitJson({ error: { code: 'config-invalid', message: `mirror parent page title ambiguous` } }, 1);
+      mrootId = mhits[0].content?.id ?? mhits[0].id;
+    }
+
+    const msubParents = {};
+    for (const type of ['concept', 'person', 'source', 'query']) {
+      msubParents[type] = await ensureSubParent(mhttp, mspaceObj.id, mrootId, type);
+    }
+    const mname = 'confluence-mirror';
+    destinations[mname] = { kind: 'confluence', siteUrl: msite, spaceKey: mspace, spaceId: mspaceObj.id, rootPageId: mrootId, subParents: msubParents };
+    mirrors.push(mname);
+  }
+
+  const config = { primary: 'confluence', mirrors, destinations };
   const v = validateConfig(config);
   if (!v.ok) emitJson({ error: { code: 'internal', message: v.error } }, 3);
   writeConfig(root, config);
-  emitJson({ ok: true, configPath: 'docs/wiki/.pwiki.json', spaceId: space.id, rootPageId, subParents }, 0);
+  emitJson({ ok: true, configPath: 'docs/wiki/.pwiki.json', primary: 'confluence', mirrors }, 0);
 }
 
 const isMain = process.argv[1] && resolve(fileURLToPath(import.meta.url)) === resolve(process.argv[1]);
