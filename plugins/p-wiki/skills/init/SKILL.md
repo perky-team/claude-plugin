@@ -35,17 +35,41 @@ If the user picks `confluence`:
 
 If the user picks `fs` (or the default), proceed with the existing FS scaffold path below.
 
-## Step 2 — Find the repo root
+## Step 2 — Add a mirror? (optional)
+
+Ask the user (single question):
+
+> Want to add a mirror? The mirror gets a 1:1 copy of the wiki on every `pwiki sync`. Useful for:
+> - **Confluence primary + FS mirror** — git-backed backup of a Confluence wiki, browsable in IDE.
+> - **FS primary + Confluence mirror** — markdown is canonical, Confluence is the published view.
+>
+> Pick: `none` (default), `fs`, or `confluence`.
+
+If the user picks `none`, continue without a mirror — the wiki will run on the chosen primary only.
+
+If the user picks `fs` and the primary is Confluence:
+- Re-run the Confluence init with the `--mirror-fs` flag:
+  `node "${CLAUDE_PLUGIN_ROOT}/tools/pwiki.mjs" init --confluence --site=<...> --space=<...> --parent=<...> --mirror-fs`
+
+If the user picks `confluence` and the primary is FS:
+- Prompt for mirror Confluence site URL, space key, and parent (same prompts as the Confluence-primary branch).
+- After the FS scaffold completes, add a Confluence mirror by re-running init with:
+  `node "${CLAUDE_PLUGIN_ROOT}/tools/pwiki.mjs" init --mirror-confluence --mirror-site=<...> --mirror-space=<...> --mirror-parent=<...>`
+  (FS-primary init creates `.pwiki.json` with `primary: "fs", mirrors: ["confluence-mirror"]`; the mirror flags persist into `destinations`.)
+
+After mirror setup, regardless of branch, continue with the FS-side scaffold step (CLAUDE.md template, `.claude/rules/p-wiki.md`).
+
+## Step 3 — Find the repo root
 
 Run `git rev-parse --show-toplevel` via Bash. If it fails (not a git repo), ask the user once whether to use the current working directory as the root. If they decline, stop. If they accept, use CWD.
 
 Hereafter `<root>` = the resolved repo root.
 
-## Step 3 — Refuse if already initialised
+## Step 4 — Refuse if already initialised
 
 If `<root>/docs/wiki/` exists, stop and tell the user: "Wiki already initialised at `<root>/docs/wiki/`. Remove the directory by hand if you want to reset it."
 
-## Step 4 — Create the layout
+## Step 5 — Create the layout
 
 Create these directories (use `mkdir -p` via Bash):
 
@@ -62,7 +86,7 @@ Create these directories (use `mkdir -p` via Bash):
 
 Put a `.gitkeep` file in each leaf directory (7 files) so git tracks empty dirs.
 
-## Step 5 — Write the wiki content files
+## Step 6 — Write the wiki content files
 
 Read the templates from this skill's bundle and write them into the wiki:
 
@@ -74,14 +98,14 @@ Read the templates from this skill's bundle and write them into the wiki:
 
 Copy verbatim — no transformations.
 
-## Step 6 — Write the global rule
+## Step 7 — Write the global rule
 
 Ensure `<root>/.claude/rules/` exists (`mkdir -p`). Then:
 
 - If `<root>/.claude/rules/p-wiki.md` already exists, do NOT overwrite. Tell the user the file is present and they should review it before proceeding.
 - Otherwise, copy `${CLAUDE_SKILL_DIR}/../_shared/templates/p-wiki-rule.template.md` to `<root>/.claude/rules/p-wiki.md` verbatim.
 
-## Step 7 — Final message
+## Step 8 — Final message
 
 Tell the user, in order:
 
