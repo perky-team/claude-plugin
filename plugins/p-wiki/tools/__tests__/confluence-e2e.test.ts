@@ -125,4 +125,80 @@ describe.skipIf(skip)('Confluence E2E', () => {
     expect(typeof l.totals.errors).toBe('number');
     expect(typeof l.totals.warnings).toBe('number');
   }, 180_000);
+
+  it('multi-destination scenario: configure FS mirror, sync, delete one source page, resync', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const os = await import('node:os');
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pwiki-e2e-sync-'));
+    try {
+      fs.mkdirSync(path.join(tmpDir, 'docs', 'wiki'), { recursive: true });
+      fs.writeFileSync(path.join(tmpDir, 'docs', 'wiki', 'CLAUDE.md'), 'e2e placeholder', 'utf-8');
+
+      const spaceKey = process.env.PWIKI_E2E_SPACE_KEY!;
+      const spaceIdRes = await http.get(`/wiki/api/v2/spaces?keys=${encodeURIComponent(spaceKey)}`);
+      const spaceId = spaceIdRes.body.results[0].id;
+
+      fs.writeFileSync(path.join(tmpDir, 'docs', 'wiki', '.pwiki.json'), JSON.stringify({
+        primary: 'confluence',
+        mirrors: ['fs'],
+        destinations: {
+          confluence: {
+            kind: 'confluence',
+            siteUrl: process.env.PWIKI_E2E_SITE_URL,
+            spaceKey,
+            spaceId,
+            rootPageId: process.env.PWIKI_E2E_ROOT_PAGE_ID,
+            subParents: dest._config.subParents,
+          },
+          fs: { kind: 'fs' },
+        },
+      }, null, 2), 'utf-8');
+
+      const stamp = Date.now().toString();
+
+      const aSlug = `e2e-mirror-a-${stamp}`;
+      const bSlug = `e2e-mirror-b-${stamp}`;
+      await dest.writePage({
+        type: 'concept', slug: aSlug,
+        frontmatter: { id: aSlug, type: 'concept', title: 'Mirror A', created: '2026-05-18', updated: '2026-05-18', status: 'active', tags: [], sources: [] },
+        body: `# Mirror A\n\nLink: [B](confluence://concept/${bSlug})\n`,
+      });
+      createdIds.push(dest._identity.get('concept', aSlug));
+      await dest.writePage({
+        type: 'concept', slug: bSlug,
+        frontmatter: { id: bSlug, type: 'concept', title: 'Mirror B', created: '2026-05-18', updated: '2026-05-18', status: 'active', tags: [], sources: [] },
+        body: `# Mirror B\n`,
+      });
+      createdIds.push(dest._identity.get('concept', bSlug));
+
+      const { spawnSync } = await import('node:child_process');
+      const { createRequire } = await import('node:module');
+      const require = createRequire(import.meta.url);
+      const cliPath = require.resolve('../pwiki.mjs');
+      const r = spawnSync('node', [cliPath, 'sync', '--format=json'], { cwd: tmpDir, encoding: 'utf-8', env: process.env });
+      expect(r.status).toBe(0);
+      const out = JSON.parse(r.stdout);
+      expect(out.ok).toBe(true);
+      expect(out.mirrors[0].name).toBe('fs');
+      expect(out.mirrors[0].written).toBeGreaterThanOrEqual(2);
+
+      // FS mirror has the two pages with rewritten relative cross-links.
+      const aBody = fs.readFileSync(path.join(tmpDir, 'docs', 'wiki', 'pages', 'concept', `${aSlug}.md`), 'utf-8');
+      expect(aBody).toContain(`](${bSlug}.md)`);
+      expect(fs.existsSync(path.join(tmpDir, 'docs', 'wiki', 'index.md'))).toBe(true);
+
+      // Delete one source page in Confluence, resync, FS mirror loses it.
+      await dest.deletePage(`confluence://concept/${aSlug}`);
+      const r2 = spawnSync('node', [cliPath, 'sync', '--format=json'], { cwd: tmpDir, encoding: 'utf-8', env: process.env });
+      expect(r2.status).toBe(0);
+      const out2 = JSON.parse(r2.stdout);
+      expect(out2.mirrors[0].deleted).toBeGreaterThanOrEqual(1);
+      expect(fs.existsSync(path.join(tmpDir, 'docs', 'wiki', 'pages', 'concept', `${aSlug}.md`))).toBe(false);
+      expect(fs.existsSync(path.join(tmpDir, 'docs', 'wiki', 'pages', 'concept', `${bSlug}.md`))).toBe(true);
+    } finally {
+      const fs = await import('node:fs');
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  }, 240_000);
 });
