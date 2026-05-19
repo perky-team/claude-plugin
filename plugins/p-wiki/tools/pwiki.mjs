@@ -14,7 +14,7 @@ import { ensureSubParent } from './lib/confluence/tree.mjs';
 import { writeConfig, validateConfig } from './lib/config.mjs';
 import { syncToMirror } from './lib/sync.mjs';
 
-const VERSION = '2.0.0';
+const VERSION = '3.0.0';
 
 export function mapErrorToCode(err) {
   if (err?.message && /invalid \.pwiki\.json/.test(err.message)) return 'config-invalid';
