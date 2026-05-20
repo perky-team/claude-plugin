@@ -86,6 +86,32 @@ export function createFsDestination({ root, name = 'fs' }) {
         return { ...base, type: 'sub-task', parentId: input.parentId };
       }
     },
-    async updateItem() { throw new Error('not implemented yet'); },
+    async updateItem(id, patch) {
+      const doc = readDoc(root);
+      let found = null;
+      let parentForSub = null;
+      for (const t of doc.tasks) {
+        if (t.id === id) { found = t; break; }
+        if (t.subTasks) {
+          for (const st of t.subTasks) {
+            if (st.id === id) { found = st; parentForSub = t; break; }
+          }
+          if (found) break;
+        }
+      }
+      if (!found) throw Object.assign(new Error(`item-not-found: ${id}`), { code: 'item-not-found' });
+
+      for (const k of ['title', 'description', 'status']) {
+        if (k in patch) found[k] = patch[k];
+      }
+      if ('blockedBy' in patch) found.blockedBy = patch.blockedBy;
+      if ('jiraKeys' in patch) {
+        found.jiraKeys = { ...(found.jiraKeys ?? {}), ...patch.jiraKeys };
+      }
+
+      writeDoc(root, doc);
+      if (parentForSub) return { ...found, type: 'sub-task', parentId: parentForSub.id };
+      return { ...found, type: 'task' };
+    },
   };
 }
