@@ -11,6 +11,7 @@ import { readConfig } from './lib/config.mjs';
 import { resolveDestination } from './lib/destination.mjs';
 import { findCycle } from './lib/cycles.mjs';
 import { STATUSES } from './lib/schema.mjs';
+import { pickNext } from './lib/next.mjs';
 
 export const VERSION = '0.1.0';
 
@@ -163,6 +164,22 @@ export async function setCommand({ root, args }) {
   return emitJson(updated, 0);
 }
 
+export async function nextCommand({ root, args }) {
+  const cfg = readConfig(root);
+  const { primary } = resolveDestination({ root, config: cfg });
+  await primary.ensureStructure();
+  const items = await primary.listItems();
+  const warns = [];
+  if (args.all) {
+    const list = pickNext(items, { all: true, onWarn: (m) => warns.push(m) });
+    for (const w of warns) process.stderr.write(`warning: ${w}\n`);
+    return emitJson({ items: list }, 0);
+  }
+  const one = pickNext(items, { onWarn: (m) => warns.push(m) });
+  for (const w of warns) process.stderr.write(`warning: ${w}\n`);
+  return emitJson({ next: one ?? null }, 0);
+}
+
 export async function initFs({ root }) {
   if (existsSync(configPath(root))) {
     return emitJson({ error: { code: 'already-initialized', message: 'docs/tasks/.ptasks.json already exists' } }, 1);
@@ -202,6 +219,11 @@ if (isMain) {
     if (command === 'set') {
       const root = findRoot(process.cwd());
       await setCommand({ root, args });
+      return;
+    }
+    if (command === 'next') {
+      const root = findRoot(process.cwd());
+      await nextCommand({ root, args });
       return;
     }
     die(`command ${command} not implemented yet`, 1);
