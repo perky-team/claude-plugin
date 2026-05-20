@@ -3,8 +3,8 @@
 import { fileURLToPath } from 'node:url';
 import { execSync } from 'node:child_process';
 import { resolve } from 'node:path';
-import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
 import { configPath, writeConfig, defaultConfig } from './lib/config.mjs';
 import { createFsDestination } from './lib/destinations/fs.mjs';
 import { readConfig } from './lib/config.mjs';
@@ -54,22 +54,11 @@ export function die(msg, code = 1) {
   process.exit(code);
 }
 
-const CLAUDE_MD_BODY = `# p-tasks data store
+const PLUGIN_ROOT = process.env.CLAUDE_PLUGIN_ROOT ?? dirname(dirname(fileURLToPath(import.meta.url)));
 
-Tasks live in \`tasks.yml\` at this directory. Two-level hierarchy:
-- top-level: \`task\` (\`id: t-N\`)
-- nested under \`subTasks\`: \`sub-task\` (\`id: st-N\`)
-
-Statuses: \`todo\` | \`in_progress\` | \`done\`. Use \`/p-tasks:\` commands to mutate.
-Do not hand-edit unless you know what you are doing — id reuse is forbidden.
-`;
-
-const RULE_BODY = `# p-tasks
-
-A task tracker plugin is installed in this repo (\`docs/tasks/tasks.yml\`).
-Slash commands: \`/p-tasks:add\`, \`/p-tasks:set\`, \`/p-tasks:next\`, \`/p-tasks:summary\`, \`/p-tasks:sync\`.
-\`/p-tasks:init\` is one-shot — do not re-run it.
-`;
+function loadTemplate(name) {
+  return readFileSync(join(PLUGIN_ROOT, 'skills', '_shared', 'templates', name), 'utf-8');
+}
 
 function arrayify(v) {
   if (v === undefined) return [];
@@ -204,8 +193,8 @@ export async function initFs({ root }) {
   writeConfig(root, defaultConfig());
   const fs = createFsDestination({ root });
   await fs.ensureStructure();
-  writeFileSync(join(root, 'docs', 'tasks', 'CLAUDE.md'), CLAUDE_MD_BODY, 'utf-8');
-  writeFileSync(join(root, '.claude', 'rules', 'p-tasks.md'), RULE_BODY, 'utf-8');
+  writeFileSync(join(root, 'docs', 'tasks', 'CLAUDE.md'), loadTemplate('CLAUDE.md.tpl'), 'utf-8');
+  writeFileSync(join(root, '.claude', 'rules', 'p-tasks.md'), loadTemplate('p-tasks.rule.md.tpl'), 'utf-8');
   return emitJson({ ok: true, primary: 'fs', mirrors: [] }, 0);
 }
 

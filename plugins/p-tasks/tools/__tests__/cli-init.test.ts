@@ -35,4 +35,9 @@ describe('initFs', () => {
     const out = JSON.parse(stdoutSpy.mock.calls[0][0]);
     expect(out.error.code).toBe('already-initialized');
   });
+  it('written CLAUDE.md contains key phrase from template', async () => {
+    try { await initFs({ root: dir }); } catch {}
+    const text = readFileSync(join(dir, 'docs', 'tasks', 'CLAUDE.md'), 'utf-8');
+    expect(text).toContain('Two-level hierarchy');
+  });
 });
