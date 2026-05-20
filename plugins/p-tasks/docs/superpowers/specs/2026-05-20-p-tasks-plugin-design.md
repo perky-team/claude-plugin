@@ -111,6 +111,7 @@ tasks:
 
 - `id` is unique across the whole file (both `t-*` and `st-*` namespaces combined are unique).
 - `t-*` identifies a top-level task; `st-*` identifies a sub-task. The prefix encodes the level.
+- **Strict two-level hierarchy.** A sub-task's parent is always a task (`t-*`). Nesting `subTasks` under another sub-task is forbidden and rejected on `add` / `set` with `parent-not-found` (the `st-*` id "exists" but is not a valid parent kind). Validation enforces this on every write.
 - `subTasks` always present (empty array if none) — uniform parsing.
 - `blockedBy` always present (empty array if none).
 - `description` is a short text (single-line or short paragraph). Long-form descriptions are out of scope for v0.1.0; a future `descriptionFile: <path>.md` field can carry them without breaking the schema.
@@ -145,7 +146,7 @@ tasks:
 
 - `primary` (required, string) — name keying into `destinations`. Every non-sync CLI command operates on `destinations[primary]`.
 - `mirrors` (optional, array of strings) — zero or more names that receive a 1:1 copy of primary on every `ptasks sync`. Defaults to `[]`.
-- `destinations` (required object) — map keyed by user-chosen name. Each entry has an explicit `kind` (`fs` | `jira`); other fields depend on kind. Multiple instances of the same kind are allowed (e.g. two Jira destinations).
+- `destinations` (required object) — map keyed by user-chosen name. Each entry has an explicit `kind` (`fs` | `jira`); other fields depend on kind. Multiple Jira destinations are valid (e.g. test instance + prod instance as mirrors of an FS primary). Multiple FS destinations are technically accepted but pointless — all of them would write to `<repoRoot>/docs/tasks/`. `ensureStructure` is idempotent across calls, so this is not an error, but `init` warns the user if asked to configure more than one FS destination.
 - Per-Jira-destination fields:
   - `siteUrl`, `projectKey` — required.
   - `issueTypes.task` (default `"Task"`), `issueTypes.subTask` (default `"Sub-task"`) — names of the issue types this destination uses.
@@ -209,15 +210,16 @@ All skills dispatch to the bundled CLI (`node "${CLAUDE_PLUGIN_ROOT}/tools/ptask
 
 **Algorithm:**
 1. Verify `node --version >= 18`. If not, instruct user to install/update Node and stop.
-2. Ask: primary destination? `fs` (default) or `jira`.
-3. If `jira`:
+2. **Pre-flight: check if `docs/tasks/.ptasks.json` already exists.** If yes, refuse with `error.code = already-initialized` and instruct the user to edit `.ptasks.json` directly (or remove it before re-running `init`). This prevents accidental destruction of existing config and `tasks.yml`.
+3. Ask: primary destination? `fs` (default) or `jira`.
+4. If `jira`:
    - Verify `PTASKS_JIRA_EMAIL` and `PTASKS_JIRA_TOKEN`; if missing, link to https://id.atlassian.com/manage-profile/security/api-tokens and stop.
    - Prompt: `siteUrl` (e.g. `https://example.atlassian.net`).
    - Prompt: `projectKey` (e.g. `PROJ`).
    - Confirm/override `issueTypes` defaults.
    - Confirm/override `statusMap` defaults.
-4. Ask: add a mirror? `none` (default) / `fs` / `jira`.
-5. Invoke `ptasks init <flags>`. CLI writes `docs/tasks/.ptasks.json`, scaffolds empty `docs/tasks/tasks.yml` (if FS is in any destination), writes `docs/tasks/CLAUDE.md`, writes `.claude/rules/p-tasks.md`.
+5. Ask: add a mirror? `none` (default) / `fs` / `jira`.
+6. Invoke `ptasks init <flags>`. CLI writes `docs/tasks/.ptasks.json`, scaffolds empty `docs/tasks/tasks.yml` (if FS is in any destination), writes `docs/tasks/CLAUDE.md`, writes `.claude/rules/p-tasks.md`.
 
 **CLI:** `ptasks init [--primary fs|jira] [--mirror fs|jira|none] [--site=...] [--project=...] [--task-type=...] [--sub-task-type=...]`.
 
@@ -228,7 +230,7 @@ All skills dispatch to the bundled CLI (`node "${CLAUDE_PLUGIN_ROOT}/tools/ptask
 
 **Algorithm:**
 1. Ask for missing required fields (title; for sub-task — parent-id if not given).
-2. Validate: parent-id exists; all blockedBy ids exist; adding these blockers would not create a cycle.
+2. Validate: parent-id exists **and is a task** (`t-*`, not `st-*` — see §2.3 invariant); all blockedBy ids exist; adding these blockers would not create a cycle.
 3. Resolve next id (primary's `nextLocalId` for FS; Jira-issued key for Jira).
 4. Write to primary. Render the created item.
 
@@ -316,7 +318,7 @@ Pass 2  dstItems = mirror.listItems()
         dstIndex = Map<mappedKey, dstItem>
 Pass 3a Upsert top-level tasks (no blockers yet, no sub-task references)
 Pass 3b Upsert sub-tasks with parent reference
-Pass 4  Apply blockers links (all items now exist on the mirror)
+Pass 4  Reconcile blocker links (delete extras on mirror, add missing — see §4.3)
 Pass 5  Write back mapping keys to primary (jiraKey field) where created
 ```
 
@@ -325,6 +327,10 @@ Pass 5  Write back mapping keys to primary (jiraKey field) where created
 **Why pass 4 is separate:** blockers may reference items that have not yet been created at the moment their source item is processed. Create-all-then-link is the same two-pass idea p-wiki uses for cross-links.
 
 **Pass 5 is the only write into primary** during sync. It records the mapping (e.g. the Jira key assigned to a newly created issue) so the next sync skips creation and goes straight to update.
+
+### 4.1.1 Multiple mirrors — error isolation
+
+`sync` iterates mirrors sequentially. A failure on one mirror (network, auth, transition mismatch) is recorded in that mirror's counters object and **does not abort** sync for the next mirror. The CLI's overall exit code is non-zero if any mirror reported a non-empty `errors` field. The returned shape is an array of per-mirror counter objects (§4.6).
 
 ### 4.2 Identity and mapping
 
@@ -343,11 +349,11 @@ This asymmetry is deliberate: when FS is primary, the FS id (`t-N`) is the user-
 |---------------------|--------------------------------------------------------------------------------|
 | `title`             | `summary`                                                                      |
 | `description`       | `description` field as ADF (markdown → ADF conversion in `jira/issues.mjs`)    |
-| `status`            | via **status transition** — GET `/issue/{key}/transitions`, find the transition whose target name matches `statusMap[status]`, POST it. Direct status assignment is not allowed by Jira API. |
-| `blockedBy: [...]`  | issue links of type `Blocks` — POST `/issueLink` per blocker                   |
-| `subTasks[...]`     | `parent.key` set on sub-task issue at create time (Jira's inherent relation)   |
+| `status`            | via **status transition** — GET `/issue/{key}/transitions`, find a transition whose target name matches `statusMap[status]`, POST it. Direct status assignment is not allowed by Jira API. **Single-hop only**: the endpoint returns only transitions valid from the issue's *current* state. If the workflow requires going through an intermediate state (e.g. `In Progress → Code Review → Done`) and no direct `In Progress → Done` exists, sync emits `transition-not-found` and skips this item. Multi-hop traversal is out of scope for v0.1.0. |
+| `blockedBy: [...]`  | issue links of type `Blocks` — **reconciled** on each sync: pass 4 computes the expected set of blocker links (from primary) for each item, GETs the existing set from the mirror, DELETEs links in (existing − expected), POSTs links in (expected − existing). This is **link-level reconciliation**, separate from §4.5's "no item deletion" rule. Links are lightweight, frequently changing relationships; items are not. |
+| `subTasks[...]`     | `parent.key` set on sub-task issue at create time (Jira's inherent relation). The parent is never changed after create — a sub-task moving between tasks is out of scope for MVP. |
 
-If the Jira workflow does not expose the needed transition, the item is skipped with a warning carrying code `transition-not-found`. Sync continues with the next item.
+If the Jira workflow does not expose the needed transition (single-hop), the item is skipped with a warning carrying code `transition-not-found`. Sync continues with the next item.
 
 ### 4.4 Idempotency and partial failures
 
@@ -364,20 +370,28 @@ If the Jira workflow does not expose the needed transition, the item is skipped 
 
 ### 4.6 Output
 
+CLI returns an array — one entry per mirror — so multi-mirror sync results are visible even if one entry has errors. `warnings` is a list of structured records; its length is the warning count (no redundant scalar count field).
+
 ```json
-{
-  "mirror": "jira",
-  "created": 3,
-  "updated": 5,
-  "blockersApplied": 4,
-  "warnings": 1,
-  "warningsDetail": [
-    { "code": "transition-not-found", "id": "t-7", "from": "todo", "to": "Done (PROJ workflow)" }
-  ]
-}
+[
+  {
+    "mirror": "jira",
+    "kind": "jira",
+    "created": 3,
+    "updated": 5,
+    "linksAdded": 2,
+    "linksRemoved": 1,
+    "warnings": [
+      { "code": "transition-not-found", "id": "t-7", "from": "todo", "to": "Done (PROJ workflow)" }
+    ],
+    "errors": []
+  }
+]
 ```
 
-Without `--json` — a human summary with the same numbers.
+Per-mirror `errors` is non-empty only if sync aborted for that mirror (auth, network exhaustion, primary-side cycle). Exit code is non-zero if any mirror reports non-empty `errors`.
+
+Without `--json` — a human summary with the same numbers per mirror.
 
 ---
 
@@ -388,6 +402,7 @@ Without `--json` — a human summary with the same numbers.
 | code                     | when                                                              |
 |--------------------------|-------------------------------------------------------------------|
 | `config-invalid`         | `.ptasks.json` unreadable; unknown fields; missing required ones  |
+| `already-initialized`    | `init` invoked but `docs/tasks/.ptasks.json` already exists       |
 | `auth-failed`            | Jira 401/403; missing env-vars                                    |
 | `item-not-found`         | id not found in primary on `set` / `summary`                      |
 | `parent-not-found`       | parent-id of a new sub-task doesn't exist                         |
@@ -406,7 +421,9 @@ HTTP-status-to-code mapping is centralised in `lib/jira/http.mjs` (analogous to 
 
 - **Config:** `config.mjs#readConfig` runs on every CLI invocation. Fails fast with `config-invalid` and a message that names the offending field.
 - **Item shape:** `schema.mjs#validateItem` — warning on read (let users work with a partially-broken file), hard fail on write.
-- **Cycles:** checked at `add` and `set --add-blocker` / `set --blocked-by`, never re-checked in `sync` (primary is already clean by construction).
+- **Cycles:**
+  - On `add` and `set --add-blocker` / `set --blocked-by` — DFS over the to-be-state of the `blockedBy` graph in primary. Reject with `cycle-detected`.
+  - **For Jira-primary**, `sync` reads the issue graph including manually-created `Blocks` links, which may form a cycle Jira itself doesn't reject. After Pass 1 (`primary.listItems()`), the orchestrator runs a cycle check on the assembled `blockedBy` graph; on detection, sync aborts with `cycle-detected` and the offending Jira keys before any writes to mirrors. For FS-primary the check is skipped — primary is clean by construction.
 - **Jira env-vars:** checked only when a Jira destination is actually contacted (`init --jira ...` or any `sync` involving a Jira destination). Pure FS workflows do not require Jira credentials.
 
 ---
@@ -434,10 +451,24 @@ Stack: **Vitest** (already in the repo — see `vitest.config.ts`, `package.json
 
 4. **Integration tests on `sync.mjs`.**
    - Two fake destinations (FS on a temp dir; Jira on a fake transport).
-   - Scenarios: empty mirror → create; rerun → no-op; add blocker on primary → linkApply on mirror; transition not exposed by Jira workflow → warning recorded, sync continues.
+   - Scenarios:
+     - empty mirror → create everything;
+     - rerun on same state → no-op (no writes other than possibly mapping persistence);
+     - add blocker on primary → link POSTed on mirror;
+     - **remove blocker on primary → link DELETEd on mirror** (link reconciliation);
+     - **extra link present on mirror only → DELETEd** (link reconciliation);
+     - transition not exposed by Jira workflow → `transition-not-found` warning recorded, sync continues to next item;
+     - **mirror A network failure, mirror B healthy → A reports error, B completes** (multi-mirror isolation);
+     - **Jira-primary with cyclic Blocks links → sync aborts with `cycle-detected` before any mirror writes**.
 
-5. **Cycle detection.**
+5. **Cycle detection on writes.**
    - Chain `t-1 → t-2 → t-3`; attempt `ptasks set t-3 --add-blocker t-1` → reject with `cycle-detected`.
+
+6. **Two-level hierarchy enforcement.**
+   - `ptasks add sub-task st-1 --title "..."` → reject with `parent-not-found` (parent must be a task).
+
+7. **Init guard.**
+   - `ptasks init ...` when `docs/tasks/.ptasks.json` already exists → reject with `already-initialized`.
 
 CI wires the existing `npm test` (Vitest) to include `plugins/p-tasks/tools/__tests__/**`.
 
