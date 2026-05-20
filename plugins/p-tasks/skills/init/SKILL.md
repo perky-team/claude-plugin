@@ -41,3 +41,12 @@ node "${CLAUDE_PLUGIN_ROOT}/tools/ptasks.mjs" init [--primary fs|jira] [--mirror
 ```
 
 Report the printed JSON. On `auth-failed` or `config-invalid`, explain to the user and stop.
+
+## Templates
+
+The CLI scaffolds two markdown files from templates that ship with this plugin (the user can browse them at install time):
+
+- `${CLAUDE_SKILL_DIR}/../_shared/templates/CLAUDE.md.tpl` — copied to `<root>/docs/tasks/CLAUDE.md` (rules for Claude when working inside the task store).
+- `${CLAUDE_SKILL_DIR}/../_shared/templates/p-tasks.rule.md.tpl` — copied to `<root>/.claude/rules/p-tasks.md` (global rule that loads every session).
+
+The CLI handles the copy; this section exists so you can locate and customize the source templates if the user requests a different stock body.

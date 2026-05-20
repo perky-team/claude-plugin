@@ -2,7 +2,7 @@
 name: next
 description: |
   Return the most relevant unblocked item to work on next. Use when the user says "next task", "what should I work on", "что делать дальше", or asks to be assigned the next thing.
-argument-hint: [--all]
+argument-hint: "[--all]"
 allowed-tools: Bash(node:*) Read
 ---
 

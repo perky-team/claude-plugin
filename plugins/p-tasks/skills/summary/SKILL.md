@@ -2,7 +2,7 @@
 name: summary
 description: |
   Summarize completed work. Without an id — all done top-level tasks. With a task id — done sub-tasks of that task. Use when the user says "summary", "what's done", "what did we ship on X", "саммари сделанного".
-argument-hint: [<task-id>]
+argument-hint: "[<task-id>]"
 allowed-tools: Bash(node:*) Read
 ---
 
