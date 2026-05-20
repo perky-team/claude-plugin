@@ -33,4 +33,18 @@ describe('resolveDestination', () => {
     expect(res.mirrors).toHaveLength(1);
     expect(res.mirrors[0].name).toBe('fs2');
   });
+  it('builds a jira destination from a jira block', () => {
+    process.env.PTASKS_JIRA_EMAIL = 'a@b.c';
+    process.env.PTASKS_JIRA_TOKEN = 't';
+    const cfg = {
+      primary: 'fs',
+      mirrors: ['j'],
+      destinations: {
+        fs: { kind: 'fs' },
+        j: { kind: 'jira', siteUrl: 'https://x', projectKey: 'PROJ', issueTypes: { task: 'Task', subTask: 'Sub-task' }, statusMap: { todo: 'To Do', in_progress: 'In Progress', done: 'Done' }, jql: '' },
+      },
+    };
+    const res = resolveDestination({ root: dir, config: cfg });
+    expect(res.mirrors[0].kind).toBe('jira');
+  });
 });
