@@ -49,7 +49,43 @@ export function createFsDestination({ root, name = 'fs' }) {
       return it;
     },
 
-    async createItem() { throw new Error('not implemented yet'); },
+    async createItem(input) {
+      const doc = readDoc(root);
+      const flat = flatten(doc);
+
+      if (input.type === 'sub-task') {
+        const parent = doc.tasks.find(t => t.id === input.parentId);
+        if (!parent) throw Object.assign(new Error(`parent-not-found: ${input.parentId}`), { code: 'parent-not-found' });
+      }
+
+      const prefix = input.type === 'task' ? 't' : 'st';
+      let maxN = 0;
+      for (const i of flat) {
+        const m = new RegExp(`^${prefix}-(\\d+)$`).exec(i.id);
+        if (m) maxN = Math.max(maxN, Number(m[1]));
+      }
+      const id = `${prefix}-${maxN + 1}`;
+
+      const base = {
+        id,
+        title: input.title,
+        description: input.description ?? '',
+        status: input.status ?? 'todo',
+        blockedBy: input.blockedBy ?? [],
+      };
+
+      if (input.type === 'task') {
+        doc.tasks.push({ ...base, subTasks: [] });
+        writeDoc(root, doc);
+        return { ...base, type: 'task', subTasks: [] };
+      } else {
+        const parent = doc.tasks.find(t => t.id === input.parentId);
+        parent.subTasks = parent.subTasks ?? [];
+        parent.subTasks.push(base);
+        writeDoc(root, doc);
+        return { ...base, type: 'sub-task', parentId: input.parentId };
+      }
+    },
     async updateItem() { throw new Error('not implemented yet'); },
   };
 }
