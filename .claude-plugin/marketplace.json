@@ -15,6 +15,11 @@
       "name": "p-flow",
       "source": "./plugins/p-flow",
       "description": "Workflow rules for Claude: deny-permissions for secrets, Conventional Commits + <type>/<slug> branches, spec templates. Skills: init."
+    },
+    {
+      "name": "p-tasks",
+      "source": "./plugins/p-tasks",
+      "description": "Task tracker (task → sub-task) with FS and Jira destinations, one-way sync. Skills: init, add, set, next, summary, sync."
     }
   ]
 }

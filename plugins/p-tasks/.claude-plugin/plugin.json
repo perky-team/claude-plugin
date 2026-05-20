@@ -1,0 +1,9 @@
+{
+  "name": "p-tasks",
+  "version": "0.1.0",
+  "description": "Two-level task tracker (task → sub-task) with FS and Jira destinations, one-way primary→mirrors sync. Skills: init, add, set, next, summary, sync.",
+  "author": {
+    "name": "Andrey Sukharev",
+    "email": "andrey.sukharev@exinity.com"
+  }
+}
