@@ -14,6 +14,7 @@ import { findCycle } from './lib/cycles.mjs';
 import { STATUSES } from './lib/schema.mjs';
 import { pickNext } from './lib/next.mjs';
 import { summarize } from './lib/summary.mjs';
+import { syncAll } from './lib/sync.mjs';
 
 export const VERSION = '0.1.0';
 
@@ -250,6 +251,18 @@ export async function initFs({ root }) {
   return initWithArgs({ root, args: {} });
 }
 
+export async function syncCommand({ root, args, transport }) {
+  const cfg = readConfig(root);
+  const resolved = resolveDestination({ root, config: cfg, transport });
+  try {
+    const results = await syncAll(resolved);
+    const exitCode = results.some(r => r.errors.length > 0) ? 1 : 0;
+    return emitJson({ mirrors: results }, exitCode);
+  } catch (e) {
+    return emitJson({ error: { code: e?.code ?? 'internal', message: e?.message ?? String(e) } }, 1);
+  }
+}
+
 const isMain = process.argv[1] && resolve(fileURLToPath(import.meta.url)) === resolve(process.argv[1]);
 
 if (isMain) {
@@ -285,6 +298,11 @@ if (isMain) {
     if (command === 'summary') {
       const root = findRoot(process.cwd());
       await summaryCommand({ root, args });
+      return;
+    }
+    if (command === 'sync') {
+      const root = findRoot(process.cwd());
+      await syncCommand({ root, args });
       return;
     }
     die(`command ${command} not implemented yet`, 1);
