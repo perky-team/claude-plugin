@@ -12,6 +12,7 @@ import { resolveDestination } from './lib/destination.mjs';
 import { findCycle } from './lib/cycles.mjs';
 import { STATUSES } from './lib/schema.mjs';
 import { pickNext } from './lib/next.mjs';
+import { summarize } from './lib/summary.mjs';
 
 export const VERSION = '0.1.0';
 
@@ -180,6 +181,20 @@ export async function nextCommand({ root, args }) {
   return emitJson({ next: one ?? null }, 0);
 }
 
+export async function summaryCommand({ root, args }) {
+  const cfg = readConfig(root);
+  const { primary } = resolveDestination({ root, config: cfg });
+  await primary.ensureStructure();
+  const items = await primary.listItems();
+  const parentId = args._[0];
+  try {
+    const list = summarize(items, parentId ? { parentId } : {});
+    return emitJson({ items: list }, 0);
+  } catch (e) {
+    return emitJson({ error: { code: 'item-not-found', message: e.message } }, 1);
+  }
+}
+
 export async function initFs({ root }) {
   if (existsSync(configPath(root))) {
     return emitJson({ error: { code: 'already-initialized', message: 'docs/tasks/.ptasks.json already exists' } }, 1);
@@ -224,6 +239,11 @@ if (isMain) {
     if (command === 'next') {
       const root = findRoot(process.cwd());
       await nextCommand({ root, args });
+      return;
+    }
+    if (command === 'summary') {
+      const root = findRoot(process.cwd());
+      await summaryCommand({ root, args });
       return;
     }
     die(`command ${command} not implemented yet`, 1);
