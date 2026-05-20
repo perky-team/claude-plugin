@@ -5,8 +5,9 @@ import { execSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
-import { configPath, writeConfig, defaultConfig } from './lib/config.mjs';
+import { configPath, writeConfig, defaultConfig, validateConfig } from './lib/config.mjs';
 import { createFsDestination } from './lib/destinations/fs.mjs';
+import { createJiraDestination } from './lib/destinations/jira.mjs';
 import { readConfig } from './lib/config.mjs';
 import { resolveDestination } from './lib/destination.mjs';
 import { findCycle } from './lib/cycles.mjs';
@@ -58,6 +59,19 @@ const PLUGIN_ROOT = process.env.CLAUDE_PLUGIN_ROOT ?? dirname(dirname(fileURLToP
 
 function loadTemplate(name) {
   return readFileSync(join(PLUGIN_ROOT, 'skills', '_shared', 'templates', name), 'utf-8');
+}
+
+function jiraBlockFromArgs(args) {
+  const taskType = args['task-type'] ?? 'Task';
+  const subTaskType = args['sub-task-type'] ?? 'Sub-task';
+  return {
+    kind: 'jira',
+    siteUrl: args.site,
+    projectKey: args.project,
+    issueTypes: { task: taskType, subTask: subTaskType },
+    statusMap: { todo: 'To Do', in_progress: 'In Progress', done: 'Done' },
+    jql: `project = ${args.project} AND issuetype in ("${taskType}", "${subTaskType}")`,
+  };
 }
 
 function arrayify(v) {
@@ -184,18 +198,56 @@ export async function summaryCommand({ root, args }) {
   }
 }
 
-export async function initFs({ root }) {
+export async function initWithArgs({ root, args, transport }) {
   if (existsSync(configPath(root))) {
     return emitJson({ error: { code: 'already-initialized', message: 'docs/tasks/.ptasks.json already exists' } }, 1);
   }
+  const primaryKind = args.primary ?? 'fs';
+  const mirrorKind = args.mirror;
+
+  const destinations = {};
+  if (primaryKind === 'fs' || mirrorKind === 'fs') destinations.fs = { kind: 'fs' };
+  if (primaryKind === 'jira' || mirrorKind === 'jira') {
+    if (!process.env.PTASKS_JIRA_EMAIL || !process.env.PTASKS_JIRA_TOKEN) {
+      return emitJson({ error: { code: 'auth-failed', message: 'PTASKS_JIRA_EMAIL and PTASKS_JIRA_TOKEN required' } }, 1);
+    }
+    if (!args.site || !args.project) {
+      return emitJson({ error: { code: 'config-invalid', message: '--site and --project required for jira' } }, 1);
+    }
+    destinations.jira = jiraBlockFromArgs(args);
+    const probe = createJiraDestination({
+      block: destinations.jira,
+      email: process.env.PTASKS_JIRA_EMAIL,
+      token: process.env.PTASKS_JIRA_TOKEN,
+      transport,
+    });
+    try { await probe.ensureStructure(); }
+    catch (e) { return emitJson({ error: { code: 'config-invalid', message: e.message } }, 1); }
+  }
+
+  const cfg = {
+    primary: primaryKind,
+    mirrors: mirrorKind ? [mirrorKind] : [],
+    destinations,
+  };
+  const v = validateConfig(cfg);
+  if (!v.ok) return emitJson({ error: { code: 'internal', message: v.error } }, 1);
+
   mkdirSync(join(root, 'docs', 'tasks'), { recursive: true });
   mkdirSync(join(root, '.claude', 'rules'), { recursive: true });
-  writeConfig(root, defaultConfig());
-  const fs = createFsDestination({ root });
-  await fs.ensureStructure();
+  writeConfig(root, cfg);
+  if (destinations.fs) {
+    const fs = createFsDestination({ root });
+    await fs.ensureStructure();
+  }
   writeFileSync(join(root, 'docs', 'tasks', 'CLAUDE.md'), loadTemplate('CLAUDE.md.tpl'), 'utf-8');
   writeFileSync(join(root, '.claude', 'rules', 'p-tasks.md'), loadTemplate('p-tasks.rule.md.tpl'), 'utf-8');
-  return emitJson({ ok: true, primary: 'fs', mirrors: [] }, 0);
+  return emitJson({ ok: true, primary: primaryKind, mirrors: cfg.mirrors }, 0);
+}
+
+// Backwards compatibility for the FS-only init test from Task 14
+export async function initFs({ root }) {
+  return initWithArgs({ root, args: {} });
 }
 
 const isMain = process.argv[1] && resolve(fileURLToPath(import.meta.url)) === resolve(process.argv[1]);
@@ -212,7 +264,7 @@ if (isMain) {
     if (!KNOWN.includes(command)) die(`unknown command: ${command}`, 1);
     if (command === 'init') {
       const root = findRoot(process.cwd());
-      await initFs({ root });
+      await initWithArgs({ root, args });
       return;
     }
     if (command === 'add') {

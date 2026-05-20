@@ -22,6 +22,22 @@ Check if `docs/tasks/.ptasks.json` exists. If yes, stop and tell the user: "p-ta
 
 Ask: "Where should tasks live? `fs` (default — local `tasks.yml`) or `jira`?"
 
-If `fs`: invoke `node "${CLAUDE_PLUGIN_ROOT}/tools/ptasks.mjs" init`. Report the printed JSON.
+If `jira`:
+- Verify `PTASKS_JIRA_EMAIL` and `PTASKS_JIRA_TOKEN`; if missing, link to https://id.atlassian.com/manage-profile/security/api-tokens and stop.
+- Ask: site URL (e.g. `https://example.atlassian.net`).
+- Ask: project key (e.g. `PROJ`).
+- Confirm/override issue types defaults (`Task` / `Sub-task`).
 
-If `jira`: (Task 27 wires this path — for FS-only initial release, tell the user "Jira primary not yet supported; please choose fs.")
+## Step 3 — Mirror? (optional)
+
+Ask: "Add a mirror? `none` (default) / `fs` / `jira`."
+
+If a Jira mirror is requested, collect site + project (same as Step 2) for the mirror.
+
+## Step 4 — Invoke CLI
+
+```
+node "${CLAUDE_PLUGIN_ROOT}/tools/ptasks.mjs" init [--primary fs|jira] [--mirror fs|jira] [--site=...] [--project=...] [--task-type=...] [--sub-task-type=...] --json
+```
+
+Report the printed JSON. On `auth-failed` or `config-invalid`, explain to the user and stop.
