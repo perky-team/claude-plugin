@@ -1,12 +1,13 @@
 # perky.team plugins
 
-A Claude Code plugin marketplace. Currently ships one plugin; more can land alongside it under `plugins/<name>/`.
+A Claude Code plugin marketplace. Plugins live under `plugins/<name>/`.
 
 ## Plugins
 
 | Plugin | What it does |
 |---|---|
 | [`p-wiki`](./plugins/p-wiki/) | Persistent markdown knowledge wiki under `docs/wiki/`. Skills: `init`, `ingest`, `compile`, `query`, `lint`. |
+| [`p-flow`](./plugins/p-flow/) | Workflow rules for Claude: secret-file deny-permissions, Conventional Commits + `<type>/<slug>` branches, spec templates. Skills: `init`. |
 
 ## Install
 
@@ -52,11 +53,16 @@ Complements `npm test`: tests catch structural drift in our manifests/skills, `v
 ├── .claude-plugin/
 │   └── marketplace.json     ← catalog of plugins in this marketplace
 ├── plugins/
-│   └── p-wiki/              ← one directory per plugin
+│   ├── p-wiki/              ← one directory per plugin
+│   │   ├── .claude-plugin/
+│   │   │   └── plugin.json
+│   │   ├── README.md
+│   │   ├── docs/superpowers/  ← per-plugin design spec + implementation plan
+│   │   └── skills/
+│   └── p-flow/              ← workflow rules + spec templates
 │       ├── .claude-plugin/
 │       │   └── plugin.json
 │       ├── README.md
-│       ├── docs/superpowers/  ← per-plugin design spec + implementation plan
 │       └── skills/
 └── README.md                ← this file
 ```

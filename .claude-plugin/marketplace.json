@@ -10,6 +10,11 @@
       "name": "p-wiki",
       "source": "./plugins/p-wiki",
       "description": "Persistent markdown knowledge wiki under docs/wiki/. Skills: init, ingest, compile, query, lint."
+    },
+    {
+      "name": "p-flow",
+      "source": "./plugins/p-flow",
+      "description": "Workflow rules for Claude: deny-permissions for secrets, Conventional Commits + <type>/<slug> branches, spec templates. Skills: init."
     }
   ]
 }
