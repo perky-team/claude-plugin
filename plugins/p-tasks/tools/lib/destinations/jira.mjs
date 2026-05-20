@@ -1,5 +1,6 @@
 import { createHttpClient } from '../jira/http.mjs';
 import { createIssue, updateIssueFields, transitionIssue, listIssues } from '../jira/issues.mjs';
+import { createBlocksLink, deleteLink, listBlocksLinks } from '../jira/links.mjs';
 import { STATUSES } from '../schema.mjs';
 
 function extractAdfText(adf) {
@@ -84,7 +85,30 @@ export function createJiraDestination({ block, email, token, transport, name = '
       };
     },
 
-    async updateItem() { throw new Error('not implemented yet'); },
+    async updateItem(id, patch) {
+      if ('title' in patch || 'description' in patch) {
+        const fpatch = {};
+        if (patch.title !== undefined) fpatch.title = patch.title;
+        if (patch.description !== undefined) fpatch.description = patch.description;
+        await updateIssueFields(http, id, fpatch);
+      }
+      if ('status' in patch) {
+        await transitionIssue(http, id, statusMap[patch.status]);
+      }
+      if ('blockedBy' in patch) {
+        const existing = await listBlocksLinks(http, id);
+        const existingByKey = new Map(existing.map(e => [e.blockerKey, e.id]));
+        const target = new Set(patch.blockedBy);
+        for (const e of existing) {
+          if (!target.has(e.blockerKey)) await deleteLink(http, e.id);
+        }
+        for (const k of patch.blockedBy) {
+          if (!existingByKey.has(k)) await createBlocksLink(http, { sourceKey: id, targetKey: k });
+        }
+      }
+      // Return a minimal object reflecting the patch — sync callers re-read if they need fresh state
+      return { id, ...patch };
+    },
 
     _http: http,
     _config: { projectKey, issueTypes, statusMap },
