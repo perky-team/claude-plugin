@@ -1,0 +1,9 @@
+{
+  "name": "p-flow",
+  "version": "0.1.0",
+  "description": "Workflow rules for Claude: deny-permissions for secrets, Conventional Commits + <type>/<slug> branches, and spec templates (ADR, Gherkin, full specification). Skills: init.",
+  "author": {
+    "name": "Andrey Sukharev",
+    "email": "andrey.sukharev@exinity.com"
+  }
+}
