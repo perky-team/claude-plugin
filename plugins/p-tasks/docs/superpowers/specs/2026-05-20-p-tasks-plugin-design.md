@@ -85,20 +85,22 @@ tasks:
     description: "OAuth flow with Google"
     status: in_progress           # todo | in_progress | done
     blockedBy: []                 # IDs of other tasks or sub-tasks
-    jiraKey: PROJ-15              # optional, filled by sync when FS is primary + Jira is mirror
+    jiraKeys:                     # optional, populated by sync — one entry per Jira mirror name
+      jira-prod: PROJ-15
+      jira-staging: STAGE-9
     subTasks:
       - id: st-1
         title: "Hash passwords with bcrypt"
         description: ""
         status: todo
         blockedBy: [st-2]
-        jiraKey: PROJ-17
+        jiraKeys: { jira-prod: PROJ-17 }
       - id: st-2
         title: "DB schema for users"
         description: ""
         status: done
         blockedBy: []
-        jiraKey: PROJ-18
+        jiraKeys: { jira-prod: PROJ-18 }
   - id: t-2
     title: "Wire up CI"
     description: ""
@@ -115,8 +117,8 @@ tasks:
 - `subTasks` always present (empty array if none) — uniform parsing.
 - `blockedBy` always present (empty array if none).
 - `description` is a short text (single-line or short paragraph). Long-form descriptions are out of scope for v0.1.0; a future `descriptionFile: <path>.md` field can carry them without breaking the schema.
-- When FS is primary: `id` is a locally generated counter; `jiraKey` is optional mapping populated by sync.
-- When Jira is primary: `id` *is* the Jira issue key (e.g. `PROJ-15`); the `jiraKey` field is omitted to avoid duplication.
+- When FS is primary: `id` is a locally generated counter; `jiraKeys` is an optional `{ <mirrorName>: <jira-key> }` map populated by sync — one entry per Jira mirror that has seen this item. The mirror name keys into `destinations` in `.ptasks.json`, so different Jira mirrors (e.g. `jira-prod`, `jira-staging`) carry independent keys without collision.
+- When Jira is primary: `id` *is* the Jira issue key (e.g. `PROJ-15`); the `jiraKeys` map is omitted to avoid duplication. (FS-mirror items in this configuration carry the Jira key as their `id`, so no separate mapping is needed.)
 
 **ID generation (FS primary).** For a new task: `max(N for id of form 't-N') + 1`, prefixed `t-`. For a new sub-task: same with `st-`. Empty file → starts at `t-1` / `st-1`. The counter is **derived from the file's contents on every create**, never stored separately — there is no `_meta.nextId` block. This works because v0.1.0 has no `delete` operation, so IDs are append-only and reuse is impossible.
 
@@ -169,11 +171,13 @@ interface Destination {
   // identity / read
   listItems(): Promise<Item[]>                                       // flat list, sub-tasks carry { parentId }
   readItem(id: string): Promise<Item>
-  nextLocalId(prefix: 't' | 'st'): Promise<string>                   // implemented only by FS; Jira throws
 
-  // write
+  // write — id assignment is internal to the destination:
+  //   FS chooses the next 't-N' / 'st-N' from the file's contents;
+  //   Jira returns the key issued by the create API.
+  // The CLI never asks for an id ahead of time.
   createItem(input: { type: 'task' | 'sub-task', parentId?: string, title, description?, status?, blockedBy? }): Promise<Item>
-  updateItem(id, patch: { title?, description?, status?, blockedBy?, jiraKey? }): Promise<Item>
+  updateItem(id, patch: { title?, description?, status?, blockedBy?, jiraKeys? }): Promise<Item>
 
   // bootstrap
   ensureStructure(): Promise<void>                                   // FS: create tasks.yml; Jira: validate project/issue-types
@@ -191,7 +195,7 @@ interface Destination {
   description: string
   status: 'todo' | 'in_progress' | 'done'
   blockedBy: string[]                 // ids on the same destination
-  jiraKey?: string                    // present on FS items when mapped to Jira
+  jiraKeys?: Record<string, string>   // present on FS items when FS is primary; keyed by mirror name
 }
 ```
 
@@ -231,8 +235,8 @@ All skills dispatch to the bundled CLI (`node "${CLAUDE_PLUGIN_ROOT}/tools/ptask
 **Algorithm:**
 1. Ask for missing required fields (title; for sub-task — parent-id if not given).
 2. Validate: parent-id exists **and is a task** (`t-*`, not `st-*` — see §2.3 invariant); all blockedBy ids exist; adding these blockers would not create a cycle.
-3. Resolve next id (primary's `nextLocalId` for FS; Jira-issued key for Jira).
-4. Write to primary. Render the created item.
+3. Call `primary.createItem(input)`. The destination assigns the id itself (FS-counter or Jira key) and returns the created item.
+4. Render the created item.
 
 **Cycle check:** before writing blockers, DFS the `blockedBy` graph including the to-be-added edges. Reject with `cycle-detected` on first back-edge.
 
@@ -259,7 +263,9 @@ ptasks add sub-task <parent-id> --title "..." [--description "..."] [--blocked-b
 3. For `--status`: validate against enum (`invalid-status`).
 4. `updateItem(id, patch)` on primary.
 
-Multiple flags in one invocation apply atomically (single write).
+Multiple flags in one invocation are submitted as a single logical update via `updateItem`. On FS that is one file write; on Jira the destination may issue several HTTP calls (e.g. PUT for fields + POST `/transitions` for status + link reconciliation), which are **not atomic** — a transition failure after a successful field write leaves the issue with the new fields but the old status. Failure is reported with the appropriate code; the user can re-run `set` to converge.
+
+**Failure modes specific to Jira primary on `set --status`:** if the workflow exposes no single-hop transition to the mapped target status, `set` exits non-zero with `transition-not-found` (unlike `sync`, where the same condition is a per-item warning that does not stop the run). Direct user intent deserves a hard signal; bulk reconciliation does not.
 
 ### 3.4 `/p-tasks:next`
 
@@ -309,28 +315,37 @@ The skill takes the structured output and produces a natural-language rollup for
 
 `ptasks sync` is the only command that crosses destination boundaries. It is **one-way** — `primary` → each `mirror` — and **idempotent**: re-running on the same state is a no-op (modulo network/version drift).
 
-### 4.1 Passes (per mirror)
+### 4.1 Passes
+
+Primary is read once per `sync` invocation. Mirrors are processed sequentially against that single snapshot. Pass 1 happens once globally; passes 0, 2, 3a, 3b, 4, 5 repeat per mirror.
 
 ```
-Pass 0  mirror.ensureStructure()
-Pass 1  srcItems = primary.listItems()                  // includes parent meta on sub-tasks
-Pass 2  dstItems = mirror.listItems()
-        dstIndex = Map<mappedKey, dstItem>
-Pass 3a Upsert top-level tasks (no blockers yet, no sub-task references)
-Pass 3b Upsert sub-tasks with parent reference
-Pass 4  Reconcile blocker links (delete extras on mirror, add missing — see §4.3)
-Pass 5  Write back mapping keys to primary (jiraKey field) where created
+Pass 1  srcItems = primary.listItems()                  // once per sync — includes parent meta on sub-tasks
+        cycle-check srcItems if primary is Jira (§5.2)
+for each mirror in cfg.mirrors:
+    Pass 0  mirror.ensureStructure()
+    Pass 2  dstItems = mirror.listItems()
+            dstIndex = Map<mappedKey, dstItem>
+    Pass 3a Upsert top-level tasks (no blockers yet, no sub-task references)
+    Pass 3b Upsert sub-tasks with parent reference
+    Pass 4  Reconcile blocker links (delete extras on mirror, add missing — see §4.3)
+    Pass 5  Write back mapping keys to primary (jiraKeys[mirror.name]) where created
 ```
 
 **Why split 3a/3b:** Jira requires a `parent.key` reference that already exists when creating a sub-task issue. On FS-mirror the split is harmless overhead.
 
 **Why pass 4 is separate:** blockers may reference items that have not yet been created at the moment their source item is processed. Create-all-then-link is the same two-pass idea p-wiki uses for cross-links.
 
-**Pass 5 is the only write into primary** during sync. It records the mapping (e.g. the Jira key assigned to a newly created issue) so the next sync skips creation and goes straight to update.
+**Pass 5 is the only write into primary** during sync. For an FS-primary with a Jira mirror, it sets `jiraKeys[mirror.name] = <newly assigned key>` on each item that was created in pass 3. The next sync pass for the same mirror finds the mapping and goes straight to update. Other mirrors' entries in `jiraKeys` are left untouched — each mirror owns its own column in the map.
 
-### 4.1.1 Multiple mirrors — error isolation
+### 4.1.1 Failure scopes — primary vs per-mirror
 
-`sync` iterates mirrors sequentially. A failure on one mirror (network, auth, transition mismatch) is recorded in that mirror's counters object and **does not abort** sync for the next mirror. The CLI's overall exit code is non-zero if any mirror reported a non-empty `errors` field. The returned shape is an array of per-mirror counter objects (§4.6).
+Two distinct failure scopes:
+
+- **Primary-side failures** (cycle in Jira-primary's Blocks graph per §5.2, auth/network failure on `primary.listItems()`, malformed `tasks.yml` from FS-primary) abort the entire sync **before any mirror is touched**. The CLI exits non-zero and the returned shape is `{ "error": { "code": ..., ... } }`, not the per-mirror array.
+- **Per-mirror failures** (mirror auth, mirror network exhaustion, transition mismatch mid-write) are recorded in that mirror's `errors` field and **do not abort** sync for the next mirror. `sync` iterates mirrors sequentially. Overall exit code is non-zero if any mirror reports non-empty `errors`. Shape is the array of per-mirror counter objects (§4.6).
+
+This split keeps a wedged primary from silently corrupting otherwise-healthy mirrors, while letting an unrelated mirror outage not block the others.
 
 ### 4.2 Identity and mapping
 
@@ -338,10 +353,10 @@ How sync decides "this src item corresponds to this dst item":
 
 | primary → mirror | match strategy                                                                 |
 |------------------|--------------------------------------------------------------------------------|
-| FS → Jira        | `srcItem.jiraKey` is the dst id. If absent → no match → create.                |
+| FS → Jira        | `srcItem.jiraKeys[mirror.name]` is the dst id. If absent → no match → create.   |
 | Jira → FS        | `srcItem.id` (which is the Jira key) is the FS id. If absent on FS → create.   |
 
-This asymmetry is deliberate: when FS is primary, the FS id (`t-N`) is the user-facing identity, and `jiraKey` is just routing metadata. When Jira is primary, the Jira key *is* the identity and there is no second namespace.
+This asymmetry is deliberate: when FS is primary, the FS id (`t-N`) is the user-facing identity, and `jiraKeys` is just routing metadata. When Jira is primary, the Jira key *is* the identity and there is no second namespace.
 
 ### 4.3 Field translation
 
@@ -358,14 +373,14 @@ If the Jira workflow does not expose the needed transition (single-hop), the ite
 ### 4.4 Idempotency and partial failures
 
 - Every write is upsert keyed on identity (§4.2). Repeated runs converge to no-ops.
-- A failure mid-sync leaves whatever was written intact, including `jiraKey`s already persisted back to primary. The next run continues from there.
+- A failure mid-sync leaves whatever was written intact, including `jiraKeys` entries already persisted back to primary. The next run continues from there.
 - Network errors / 5xx / 429 — retried with exponential backoff inside `jira/http.mjs`. On exhaustion the CLI exits with `network-error` or `rate-limited`.
 - Jira 409 (version conflict on update) — refetch current version, recompute payload, retry once. Second failure → `version-conflict`.
 
 ### 4.5 What sync does not do (MVP)
 
 - **No deletion on mirror.** Items present on a mirror but absent from primary stay untouched. (No `--prune` flag.) This is consistent with §2.3 — primary itself has no delete.
-- **No two-way sync, no conflict resolution.** Mirrors are write-only sinks for content; the only reverse write is the `jiraKey` mapping.
+- **No two-way sync, no conflict resolution.** Mirrors are write-only sinks for content; the only reverse write is the `jiraKeys` mapping.
 - **No attachments, comments, or history.**
 
 ### 4.6 Output
@@ -448,6 +463,7 @@ Stack: **Vitest** (already in the repo — see `vitest.config.ts`, `package.json
 3. **Integration tests on Jira destination with a fake transport.**
    - `createJiraDestination({transport})` accepts an injected fetch double, similar to `makeRealTransport` in pwiki.
    - Covers: create Task / create Sub-task with parent.key / link Blocks / status transitions / 409 retry / mapping errors.
+   - **`set --status` with no single-hop transition → hard `transition-not-found` error** (distinct from sync's warn-and-skip behavior, per §3.3).
 
 4. **Integration tests on `sync.mjs`.**
    - Two fake destinations (FS on a temp dir; Jira on a fake transport).
