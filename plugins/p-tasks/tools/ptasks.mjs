@@ -10,6 +10,7 @@ import { createFsDestination } from './lib/destinations/fs.mjs';
 import { readConfig } from './lib/config.mjs';
 import { resolveDestination } from './lib/destination.mjs';
 import { findCycle } from './lib/cycles.mjs';
+import { STATUSES } from './lib/schema.mjs';
 
 export const VERSION = '0.1.0';
 
@@ -113,6 +114,55 @@ export async function addCommand({ root, args }) {
   return emitJson(created, 0);
 }
 
+export async function setCommand({ root, args }) {
+  const id = args._[0];
+  if (!id) return emitJson({ error: { code: 'internal', message: 'id required' } }, 1);
+
+  const cfg = readConfig(root);
+  const { primary } = resolveDestination({ root, config: cfg });
+  await primary.ensureStructure();
+  const items = await primary.listItems();
+  const current = items.find(i => i.id === id);
+  if (!current) return emitJson({ error: { code: 'item-not-found', message: `id ${id} not found` } }, 1);
+
+  const patch = {};
+  if (args.title !== undefined) patch.title = args.title;
+  if (args.description !== undefined) patch.description = args.description;
+  if (args.status !== undefined) {
+    if (!STATUSES.includes(args.status)) return emitJson({ error: { code: 'invalid-status', message: `status must be one of ${STATUSES.join('/')}` } }, 1);
+    patch.status = args.status;
+  }
+
+  let newBlockedBy = current.blockedBy.slice();
+  let touchedBlockers = false;
+  if (args['blocked-by'] !== undefined) {
+    newBlockedBy = arrayify(args['blocked-by']);
+    touchedBlockers = true;
+  }
+  for (const b of arrayify(args['add-blocker'])) {
+    if (!newBlockedBy.includes(b)) newBlockedBy.push(b);
+    touchedBlockers = true;
+  }
+  for (const b of arrayify(args['remove-blocker'])) {
+    newBlockedBy = newBlockedBy.filter(x => x !== b);
+    touchedBlockers = true;
+  }
+
+  if (touchedBlockers) {
+    const ids = new Set(items.map(i => i.id));
+    for (const b of newBlockedBy) {
+      if (!ids.has(b)) return emitJson({ error: { code: 'blocker-not-found', message: `id ${b} not found` } }, 1);
+    }
+    const hypothetical = items.map(i => i.id === id ? { id, blockedBy: newBlockedBy } : { id: i.id, blockedBy: i.blockedBy });
+    const cycle = findCycle(hypothetical);
+    if (cycle) return emitJson({ error: { code: 'cycle-detected', message: `would create cycle: ${cycle.join(' → ')}` } }, 1);
+    patch.blockedBy = newBlockedBy;
+  }
+
+  const updated = await primary.updateItem(id, patch);
+  return emitJson(updated, 0);
+}
+
 export async function initFs({ root }) {
   if (existsSync(configPath(root))) {
     return emitJson({ error: { code: 'already-initialized', message: 'docs/tasks/.ptasks.json already exists' } }, 1);
@@ -147,6 +197,11 @@ if (isMain) {
     if (command === 'add') {
       const root = findRoot(process.cwd());
       await addCommand({ root, args });
+      return;
+    }
+    if (command === 'set') {
+      const root = findRoot(process.cwd());
+      await setCommand({ root, args });
       return;
     }
     die(`command ${command} not implemented yet`, 1);
