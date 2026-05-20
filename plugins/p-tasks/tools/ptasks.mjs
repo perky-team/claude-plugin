@@ -7,6 +7,9 @@ import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { configPath, writeConfig, defaultConfig } from './lib/config.mjs';
 import { createFsDestination } from './lib/destinations/fs.mjs';
+import { readConfig } from './lib/config.mjs';
+import { resolveDestination } from './lib/destination.mjs';
+import { findCycle } from './lib/cycles.mjs';
 
 export const VERSION = '0.1.0';
 
@@ -65,6 +68,51 @@ Slash commands: \`/p-tasks:add\`, \`/p-tasks:set\`, \`/p-tasks:next\`, \`/p-task
 \`/p-tasks:init\` is one-shot — do not re-run it.
 `;
 
+function arrayify(v) {
+  if (v === undefined) return [];
+  if (Array.isArray(v)) return v;
+  if (typeof v === 'string') return v.split(',').map(s => s.trim()).filter(Boolean);
+  return [];
+}
+
+export async function addCommand({ root, args }) {
+  const type = args._[0];
+  if (type !== 'task' && type !== 'sub-task') return emitJson({ error: { code: 'internal', message: 'first arg must be "task" or "sub-task"' } }, 1);
+  const parentId = type === 'sub-task' ? args._[1] : undefined;
+  if (type === 'sub-task' && !parentId) return emitJson({ error: { code: 'internal', message: 'sub-task requires <parent-id>' } }, 1);
+  if (!args.title) return emitJson({ error: { code: 'internal', message: '--title required' } }, 1);
+
+  const cfg = readConfig(root);
+  const { primary } = resolveDestination({ root, config: cfg });
+  await primary.ensureStructure();
+
+  const blockedBy = arrayify(args['blocked-by']);
+  const existing = await primary.listItems();
+  const ids = new Set(existing.map(i => i.id));
+  for (const b of blockedBy) {
+    if (!ids.has(b)) return emitJson({ error: { code: 'blocker-not-found', message: `id ${b} not found` } }, 1);
+  }
+
+  // cycle check: hypothetically add a new id with these blockers and run findCycle
+  const newId = `__pending__`;
+  const hypothetical = existing.map(i => ({ id: i.id, blockedBy: i.blockedBy }))
+    .concat([{ id: newId, blockedBy }]);
+  const cycle = findCycle(hypothetical);
+  if (cycle && cycle.includes(newId)) {
+    return emitJson({ error: { code: 'cycle-detected', message: `would create cycle: ${cycle.join(' → ')}` } }, 1);
+  }
+
+  const created = await primary.createItem({
+    type,
+    parentId,
+    title: args.title,
+    description: args.description ?? '',
+    status: args.status ?? 'todo',
+    blockedBy,
+  });
+  return emitJson(created, 0);
+}
+
 export async function initFs({ root }) {
   if (existsSync(configPath(root))) {
     return emitJson({ error: { code: 'already-initialized', message: 'docs/tasks/.ptasks.json already exists' } }, 1);
@@ -94,6 +142,11 @@ if (isMain) {
     if (command === 'init') {
       const root = findRoot(process.cwd());
       await initFs({ root });
+      return;
+    }
+    if (command === 'add') {
+      const root = findRoot(process.cwd());
+      await addCommand({ root, args });
       return;
     }
     die(`command ${command} not implemented yet`, 1);
