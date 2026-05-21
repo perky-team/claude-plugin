@@ -47,19 +47,24 @@ These principles drive every decision below. Trade-offs are revisited against th
 
 ---
 
-## Read-layer architecture
+## Context architecture
 
-How information flows into Claude's context, ordered by cost:
+Two orthogonal techniques keep agent context lean as the repo grows: a **layered read strategy** (load thin, drill in) and **subagent distribution** (delegate slices to fresh contexts).
+
+### Read layers — what the controller reads, ordered by cost
 
 | Layer | Mechanism | Token cost | When |
 |---|---|---|---|
 | **0 — rules** | `.claude/rules/*.md` auto-loaded | ~500 tokens per rule, every turn | Always present |
 | **1 — session map** | `SessionStart` hook injects `wiki/index.md` summary + `/p-tasks:summary` output via `hookSpecificOutput.additionalContext` | ~1k tokens, once per session | Session boot |
 | **2 — drill-down** | Targeted `Read` of one `plan_path` or 1–3 concept pages | 5–15k tokens per artifact | When task identified |
-| **3 — subagent isolation** | `superpowers:subagent-driven-development` dispatches subagents with curated context | Per-subagent budget, parallel-safe | During implementation |
-| **4 — wiki query (on demand)** | `/p-wiki:query "<topic>"` — LLM picks 1–3 concept pages from `index.md`, reads them, returns with citations | Variable; one LLM call per query | When index lookup isn't enough |
+| **3 — wiki query (on demand)** | `/p-wiki:query "<topic>"` — LLM picks 1–3 concept pages from `index.md`, reads them, returns with citations | Variable; one LLM call per query | When index lookup isn't enough |
 
-The design intent: a repo with 50 features should consume the same controller context as a repo with 5, because the controller only ever sees the layer-1 map. Subagents see only their slice.
+### Subagent distribution — how work is parallelised
+
+`superpowers:subagent-driven-development` dispatches each plan-Task to a **fresh subagent** with an isolated context. The controller curates exactly what each subagent receives (the Task text, optionally relevant concept pages, the spec section that applies). The subagent's context never inherits the controller's history; when the subagent finishes, only its summary returns to the controller.
+
+This is the load-bearing part of the scaling story: a repo with 50 features consumes the same controller context as a repo with 5, because the controller only ever holds the layer-1 map. Subagents see only their slice. Our plugins do not implement subagent dispatch — `superpowers` does — but they shape the curated context the controller hands over (via concept pages and task metadata).
 
 ---
 
@@ -147,6 +152,17 @@ Coordinator and convention layer. Owns: security `permissions.deny`, Conventiona
    - **Honest security caveat:** the deny-list in `settings.json` blocks Read/Edit/Write tool calls only. `Bash` can technically bypass it. Do not rely on the deny-list as the only line of defence for secrets; use environment variables or a secret manager.
 4. **`p-flow:init` script:** detects which peer plugins are installed (probe for `docs/wiki/` and `docs/tasks/` or for plugin cache markers) and writes only the relevant glue sections into the project rule file. Sections referencing absent plugins are commented out with a one-line note "uncomment if you install p-wiki later".
 
+### Migration from current p-flow layout
+
+Current `p-flow` users may already have a `specs/<feature-slug>/specification.md` layout from earlier `p-flow` releases. Dropping the layout is a breaking change for them. Handling:
+
+- **No automatic migration.** The plugin will not move files for the user.
+- **`p-flow:init` (re-run after upgrade) emits a one-time advisory** if it detects an existing `specs/` directory: "p-flow no longer manages `specs/` at repo root. Existing files under `specs/` are not touched. New ADR/feature artifacts should be created under `docs/superpowers/specs/<slug>/`. If you want to migrate, move the files manually."
+- **Release notes** for the p-flow update document the change explicitly and link to a one-page migration guide.
+- **Templates remain accessible** under `.claude/templates/p-flow/` for users who explicitly want them; only the default destination changes.
+
+This is the standard "small, breaking, well-communicated" change. Anyone heavily reliant on the old layout can stay on the previous p-flow version until they migrate.
+
 ### Why the rule lives in p-flow, not in each peer plugin
 
 Each peer plugin (`p-wiki`, `p-tasks`) provides its own minimal rule file describing its commands (as today). The **cross-plugin orchestration logic** — "when superpowers writes X, call p-wiki Y, then p-tasks Z" — is a concern of the convention layer. Centralising it in `p-flow` means:
@@ -193,6 +209,7 @@ No more `specs/` at repo root. One layout, owned by `superpowers`, augmented by 
 - **Coexistence with superpowers' own hooks.** Superpowers v4.3.0 uses PostToolUse+Stop hooks for gate-enforcement. Our SessionStart hooks fire on a different event, so direct conflict is unlikely — but the additionalContext from superpowers and from p-wiki/p-tasks combine. We can't dedupe across plugins; we can only mark our injections so problems are diagnosable.
 - **Plugin install order matters for p-flow:init's auto-detection.** If a user installs p-flow before p-wiki, the rule file won't include the wiki glue. Mitigation: `p-flow:init` is idempotent-aware — re-running it (after manually deleting the marker) re-detects peers and re-writes the rule. Document the re-init procedure.
 - **No way to redirect Read.** `PreToolUse` hooks cannot modify tool input, only block/allow/defer. So we cannot transparently "intercept" `superpowers` reading a spec and serve a concept page instead. We rely on SessionStart context injection to put navigation in front of the agent, and on rules to teach drill-down.
+- **CLI failures must not break sessions.** Every hook script that invokes a plugin CLI (`pwiki.mjs`, `ptasks.mjs`) wraps the call in a graceful-degradation pattern: probe for `command -v node` and for the existence of the target store (`docs/wiki/`, `docs/tasks/`); if either is missing, exit 0 silently. If the CLI itself returns non-zero, log to stderr (which surfaces to Claude as advisory, not blocking) but still exit 0 from the hook script. A failing peer plugin should never block the user's session — at worst the SessionStart injection is missing that turn. This pattern is mandatory for all hooks shipped by these plugins.
 
 ---
 
@@ -219,10 +236,10 @@ This document is overarching. Implementation is decomposed into four follow-up s
 
 1. **`p-tasks superpowers integration`** — schema fields, `from-plan` and `link-plan` skills, SessionStart hook, updated CLAUDE.md and rule templates.
 2. **`p-wiki autocompile guardrails and bootstrap`** — SessionStart hook with stale-warning, `bootstrap` skill, `.last-compile` marker, `.pwiki.json` `mode` field, opt-in autocompile flag (stub for future).
-3. **`p-flow orchestration rules`** — rewritten `rules-p-flow.template.md` with cross-plugin glue, layout decision (drop `specs/`), `p-flow:init` peer-detection.
+3. **`p-flow orchestration rules`** — rewritten `rules-p-flow.template.md` with cross-plugin glue, layout decision (drop `specs/` + migration advisory), `p-flow:init` peer-detection.
 4. **`marketplace integration testing`** — end-to-end test scenarios: install all three plugins + superpowers in a fixture repo, run brainstorming → check hooks fired → run writing-plans → check task created → reload session → check stale-warning appears.
 
-Order: implement 1, 2, 3 in parallel where possible (they touch different plugins), then 4 against the combined state. Each gets its own `superpowers:writing-plans` plan.
+**Ordering and dependencies.** Specs 1 and 2 touch different plugins and are independent — they can be implemented in parallel. Spec 3 **depends on 1 and 2** because the p-flow rule fragments reference commands (`/p-tasks:from-plan`, `/p-wiki:compile`, `/p-wiki:bootstrap`) that must exist when the rule is loaded; shipping the rules first would point users at non-existent commands. Spec 4 runs last, against the combined state. Each gets its own `superpowers:writing-plans` plan.
 
 ---
 
@@ -258,9 +275,10 @@ Prior art consulted and what we kept / dropped:
 
 This design is considered accepted when:
 
-1. The decomposition into four follow-up specs is approved.
+1. The decomposition into four follow-up specs is approved (with the 1+2 → 3 → 4 dependency order).
 2. The layout decisions table is approved (especially: drop `specs/`, sibling-file pattern under `docs/superpowers/specs/<slug>/`).
 3. The "not doing" list is approved (no auto-compile, no code-in-wiki, no PreCompact).
-4. The risks are acknowledged (~95% rule compliance, hook-coexistence caveats, known Claude Code bugs).
+4. The risks are acknowledged (~95% rule compliance, hook-coexistence caveats, known Claude Code bugs, CLI graceful-degradation requirement).
+5. The migration path for existing p-flow users (no automatic migration, advisory on re-init, release-notes) is approved as the breaking-change handling.
 
 Approval initiates `superpowers:writing-plans` for the first follow-up spec (`p-tasks superpowers integration`).
