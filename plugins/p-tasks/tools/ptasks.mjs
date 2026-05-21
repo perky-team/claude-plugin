@@ -109,14 +109,19 @@ export async function addCommand({ root, args }) {
     return emitJson({ error: { code: 'cycle-detected', message: `would create cycle: ${cycle.join(' → ')}` } }, 1);
   }
 
-  const created = await primary.createItem({
-    type,
-    parentId,
-    title: args.title,
-    description: args.description ?? '',
-    status: args.status ?? 'todo',
-    blockedBy,
-  });
+  let created;
+  try {
+    created = await primary.createItem({
+      type,
+      parentId,
+      title: args.title,
+      description: args.description ?? '',
+      status: args.status ?? 'todo',
+      blockedBy,
+    });
+  } catch (e) {
+    return emitJson({ error: { code: e?.code ?? 'internal', message: e?.message ?? String(e) } }, 1);
+  }
   return emitJson(created, 0);
 }
 
