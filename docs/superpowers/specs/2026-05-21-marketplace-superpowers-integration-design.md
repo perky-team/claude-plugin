@@ -83,7 +83,11 @@ Indexed markdown knowledge base under `docs/wiki/`. Compile-target for `superpow
    - Marks the injection with a uniquely identifiable header (e.g. `<!-- p-wiki:session-context -->`) so duplicate injection across plugins is detectable.
    - Uses official `hookSpecificOutput.additionalContext` shape, not `systemMessage` (the `task-tracker-plugin` mistake).
    - Silently exits 0 if `docs/wiki/` does not exist (plugin installed but not initialised) or if Node CLI is missing.
-3. **New optional skill: `/p-wiki:bootstrap`.** First-run helper for existing repos. Globs `README*`, `docs/**`, `ARCHITECTURE.md`, `CONTRIBUTING.md`, `*.feature`, `docs/adr/**`, existing `docs/superpowers/specs/**` and `docs/superpowers/plans/**`. Presents the list to the user, asks "compile all / select / skip", then calls `/p-wiki:compile` in a loop.
+3. **New optional skill: `/p-wiki:bootstrap`.** First-run helper for existing repos. Discovers doc-like sources, presents the list to the user, asks "compile all / select / skip", then calls `/p-wiki:compile` in a loop.
+   - **Default discovery patterns:** `README*`, `docs/**/*.md`, `ARCHITECTURE.md`, `CONTRIBUTING.md`, `*.feature`, common ADR locations (`docs/adr/**`, `decisions/**`, `architecture/decisions/**`), and existing `docs/superpowers/specs/**`, `docs/superpowers/plans/**`.
+   - **Configurable.** `.pwiki.json` gains an optional `bootstrapPatterns` array overriding defaults. If absent, defaults apply.
+   - **Explicit exclusions:** never matches source code files (`*.ts`, `*.py`, `*.go`, etc.) even if they happen to live under `docs/`. The skill's responsibility is docs-only.
+   - **Interactive review:** the user always sees the discovered list before any compile runs. No silent enumeration into expensive LLM calls.
 4. **No code compilation.** `compile` continues to accept any path technically, but `/p-wiki:bootstrap` excludes code files. Documentation explicitly states: compile is for doc-like sources (spec, plan, ADR, feature, README, docs/), **not** for source code. See "Not doing" below.
 5. **Existing `compile`, `query`, `lint`, `ingest`, `init` stay as is** with one update: `compile` now writes a marker file (e.g. `docs/wiki/.last-compile`) on successful completion, so the SessionStart stale-check has a reference.
 
@@ -114,7 +118,9 @@ Feature-level persistent task tracker. **Not** a step-level tracker — steps be
 ### What changes
 
 1. **Schema:** add optional `spec_path` and `plan_path` string fields to both `task` and `sub-task` in `tools/lib/schema.mjs`. Validator treats them as opaque relative paths from repo root. No structural change otherwise.
-2. **New skill: `/p-tasks:from-plan <path>`.** Creates a top-level task from a superpowers plan file. Parses the plan header to extract feature name (from `# <Feature> Implementation Plan`) and optionally a `Spec:` reference for `spec_path`. Returns the new task id. Fails with explicit error if the file isn't recognisable as a superpowers plan.
+2. **New skill: `/p-tasks:from-plan <path>`.** Creates a top-level task from a superpowers plan file. Parses the plan header to extract feature name (from `# <Feature> Implementation Plan` per current `writing-plans` template) and optionally a `Spec:` reference for `spec_path`. Returns the new task id.
+   - **Header-format fragility.** The parser depends on superpowers' plan-header template, which is owned upstream and may change. Mitigation: (a) the parser is lenient — if the regex `# (.+) Implementation Plan` doesn't match, fall back to using the filename slug as feature name; (b) the skill always succeeds in creating *a* task, only the `description`/`spec_path` enrichment is best-effort; (c) on header-format change, only enrichment quality degrades, not the core function.
+   - **Failure modes:** explicit error only if the file doesn't exist or isn't readable. Anything else degrades gracefully.
 3. **New skill: `/p-tasks:link-plan <task-id> <path>`.** Attaches a `plan_path` to an existing task. Used when the task was created from a spec earlier and a plan was written later — though in the v1 flow, `from-plan` is the primary entry point. `link-plan` is the manual escape hatch.
 4. **`hooks/hooks.json` — SessionStart only.** Runs `node tools/ptasks.mjs summary --format=json`, emits a compact "active tasks: t-3 (in_progress, blocked by t-1), t-5 (todo) …" string as `hookSpecificOutput.additionalContext`. Silently exits 0 if `docs/tasks/` doesn't exist or Node CLI missing.
 5. **No PostToolUse hook in default config.** Same rationale as p-wiki. Task creation is initiated by Claude under rule guidance, not silently.
