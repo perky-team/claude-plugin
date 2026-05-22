@@ -1,7 +1,7 @@
 # p-statusline plugin — design
 
 **Date:** 2026-05-22
-**Scope:** add a fourth plugin, `p-statusline`, to the `perky.team` marketplace. It packages the author's existing Claude Code status line so other people can install it. The status line script is ported from a bash-wrapped `node -e` one-liner to a standalone Node.js file. A skill, `/p-statusline:init`, wires it into the user's `~/.claude/settings.json`. No behaviour change to the status line itself.
+**Scope:** add a fourth plugin, `p-statusline`, to the `perky.team` marketplace. It packages the author's existing Claude Code status line so other people can install it. The status line script is ported from a bash-wrapped `node -e` one-liner to a standalone Node.js file. A skill, `/p-statusline:install`, wires it into the user's `~/.claude/settings.json`. No behaviour change to the status line itself.
 
 ## Background
 
@@ -31,7 +31,7 @@ Two further researched facts shape the design:
 | Question | Decision |
 |---|---|
 | Where it lives | Fourth plugin, `plugins/p-statusline/`, in this marketplace. |
-| Activation | A skill installer, `/p-statusline:init`. |
+| Activation | A skill installer, `/p-statusline:install`. |
 | Runtime | Pure Node.js (`node ".../statusline.cjs"`) — drops the bash dependency. |
 | Update strategy | Skill copies the script to a stable path (`~/.claude/p-statusline/`); re-run the skill to pick up a newer version. |
 | Configurability | None. The status line ships exactly as-is — all segments always on. |
@@ -47,8 +47,8 @@ plugins/p-statusline/
 ├── statusline/
 │   └── statusline.cjs            # the ported status line script (pure Node, no bash)
 └── skills/
-    └── init/
-        └── SKILL.md             # /p-statusline:init — the installer
+    └── install/
+        └── SKILL.md             # /p-statusline:install — the installer
 ```
 
 `statusline.cjs` lives at the plugin root under `statusline/`, **not** under `skills/_shared/templates/`. The repo's `templates.test.ts` only inspects `skills/_shared/templates/` and would otherwise demand a `${CLAUDE_SKILL_DIR}/../_shared/templates/...` reference for the file. Keeping it under `statusline/` avoids that coupling and lets the test suite import it by a plain path.
@@ -65,9 +65,9 @@ The resulting status line command becomes:
 "statusLine": { "type": "command", "command": "\"<node>\" \"<home>/.claude/p-statusline/statusline.cjs\"" }
 ```
 
-## Component: skill `/p-statusline:init`
+## Component: skill `/p-statusline:install`
 
-Frontmatter: `name: init`, a `description` covering the trigger phrases ("init p-statusline", "install statusline", "setup status line"), `argument-hint: (no arguments)`, and an `allowed-tools` list (`Bash`, `Read`, `Write`).
+Frontmatter: `name: install`, a `description` covering the trigger phrases ("install p-statusline", "install statusline", "setup status line"), `argument-hint: (no arguments)`, and an `allowed-tools` list (`Bash`, `Read`, `Write`).
 
 The skill writes to the **user** settings file, `~/.claude/settings.json`, resolved cross-platform from `$HOME` / `%USERPROFILE%`. Hereafter `<home>` = the resolved home directory.
 
@@ -79,7 +79,7 @@ The skill writes to the **user** settings file, `~/.claude/settings.json`, resol
 
 **Step 4 — Read the settings file.** Read `<home>/.claude/settings.json`.
 - Missing → treat as `{}` (will be created in Step 6).
-- Present but not valid JSON → **stop** with: "Cannot proceed: `<home>/.claude/settings.json` is not valid JSON. Fix it manually and re-run `/p-statusline:init`." (Mirrors `p-flow:init`.)
+- Present but not valid JSON → **stop** with: "Cannot proceed: `<home>/.claude/settings.json` is not valid JSON. Fix it manually and re-run `/p-statusline:install`." (Mirrors `p-flow:init`.)
 - Present but the parsed root is not an object → stop with an equivalent error.
 
 **Step 5 — Protect an existing status line.** Compute the target command string: `"<node>" "<home>/.claude/p-statusline/statusline.cjs"`.
@@ -105,13 +105,13 @@ The skill writes to the **user** settings file, `~/.claude/settings.json`, resol
 - **`plugin.json`** — `name: "p-statusline"`, `version: "0.1.0"`, a `description`, and `author` (`Andrey Sukharev`). Same shape as the sibling plugins. The directory name, `plugin.json` `name`, and the marketplace entry `name` must all be exactly `p-statusline` (kebab-case) — three repo tests assert this agreement.
 - **`.claude-plugin/marketplace.json`** — add a fourth `plugins[]` entry: `{ name, source: "./plugins/p-statusline", description }`.
 - **Root `README.md`** — add a `p-statusline` row to the `| Plugin | What it does |` table. `marketplace.test.ts` asserts every marketplace plugin appears in that table.
-- **`plugins/p-statusline/README.md`** — install steps (`/plugin install` → `/p-statusline:init`), a table of what each segment shows and how the colour ramps read, the requirement (Node.js — present wherever Claude Code runs), and **manual removal** (delete the `statusLine` block from `~/.claude/settings.json`, remove `~/.claude/p-statusline/`). Must be >50 chars (`plugin-manifests.test.ts`).
+- **`plugins/p-statusline/README.md`** — install steps (`/plugin install` → `/p-statusline:install`), a table of what each segment shows and how the colour ramps read, the requirement (Node.js — present wherever Claude Code runs), and **manual removal** (delete the `statusLine` block from `~/.claude/settings.json`, remove `~/.claude/p-statusline/`). Must be >50 chars (`plugin-manifests.test.ts`).
 
 ## Testing
 
 Aligned with the existing suite (`tests/`, Vitest, `helpers.ts`).
 
-**Inherited, no new code.** `marketplace.test.ts`, `plugin-manifests.test.ts`, and `skills.test.ts` iterate every plugin via `findPlugins()` / `findSkills()`. `p-statusline` is picked up automatically and must satisfy: valid manifest, kebab-case semver-versioned name matching the directory, a >50-char README, at least one skill, and a well-formed `init/SKILL.md` (frontmatter `name` = `init`, `description` >30 chars, body >100 chars). `templates.test.ts` does nothing here — there is no `skills/_shared/templates/` directory.
+**Inherited, no new code.** `marketplace.test.ts`, `plugin-manifests.test.ts`, and `skills.test.ts` iterate every plugin via `findPlugins()` / `findSkills()`. `p-statusline` is picked up automatically and must satisfy: valid manifest, kebab-case semver-versioned name matching the directory, a >50-char README, at least one skill, and a well-formed `install/SKILL.md` (frontmatter `name` = `install`, `description` >30 chars, body >100 chars). `templates.test.ts` does nothing here — there is no `skills/_shared/templates/` directory.
 
 **`tests/p-statusline-statusline.test.ts` (new).** Spawns `node plugins/p-statusline/statusline/statusline.cjs`, pipes fixture session JSON to stdin, and asserts the output **per segment**:
 - full data — context, limits, model/effort all present;
@@ -122,7 +122,7 @@ Aligned with the existing suite (`tests/`, Vitest, `helpers.ts`).
 
 Volatile segments (RAM %, live git state, reset countdowns) are matched by structure / regex, not byte-for-byte.
 
-**`tests/p-statusline-init-e2e.test.ts` (new).** Follows the `p-flow-init-e2e.test.ts` pattern: re-implements the `init` algorithm (copy script + merge `statusLine` into `settings.json`) against a temp HOME directory, acting as an executable spec. Cases:
+**`tests/p-statusline-install-e2e.test.ts` (new).** Follows the `p-flow-init-e2e.test.ts` pattern: re-implements the `install` algorithm (copy script + merge `statusLine` into `settings.json`) against a temp HOME directory, acting as an executable spec. Cases:
 - no `settings.json` → file created with only `statusLine`;
 - existing `settings.json` with unrelated keys → those keys preserved, `statusLine` added;
 - existing foreign `statusLine` → previous value backed up to `statusline.prev.json`;
@@ -134,7 +134,7 @@ Volatile segments (RAM %, live git state, reset countdowns) are matched by struc
 ## Out of scope (YAGNI)
 
 - Segment toggles or any user configuration — the status line ships fixed.
-- A SessionStart hook that auto-refreshes the copied script when the plugin updates — re-running `/p-statusline:init` is the documented update path.
+- A SessionStart hook that auto-refreshes the copied script when the plugin updates — re-running `/p-statusline:install` is the documented update path.
 - A `remove` / uninstall skill — removal is documented in the README.
 - Project-scope installation (`.claude/settings.json`) — user scope only.
 

@@ -4,7 +4,7 @@
 
 **Goal:** Ship `p-statusline`, a fourth plugin in the `perky.team` marketplace that packages the author's custom Claude Code status line for installation by other people.
 
-**Architecture:** The status line is a standalone Node.js script (`statusline.cjs`), ported verbatim from the author's existing bash-wrapped `node -e` one-liner. A skill, `/p-statusline:init`, copies the script to a stable user-owned path (`~/.claude/p-statusline/`) and writes a `statusLine` block into the user's `~/.claude/settings.json` — a plugin cannot set the main status line directly. Two new Vitest files cover the script and the install algorithm; the repo's existing static tests pick the plugin up automatically.
+**Architecture:** The status line is a standalone Node.js script (`statusline.cjs`), ported verbatim from the author's existing bash-wrapped `node -e` one-liner. A skill, `/p-statusline:install`, copies the script to a stable user-owned path (`~/.claude/p-statusline/`) and writes a `statusLine` block into the user's `~/.claude/settings.json` — a plugin cannot set the main status line directly. Two new Vitest files cover the script and the install algorithm; the repo's existing static tests pick the plugin up automatically.
 
 **Tech Stack:** Node.js (built-in modules only — `fs`, `os`, `child_process`), Vitest + TypeScript for tests, JSON manifests, Markdown SKILL.md.
 
@@ -17,13 +17,13 @@
 | File | Responsibility |
 |---|---|
 | `plugins/p-statusline/statusline/statusline.cjs` | The status line renderer. Reads session JSON on stdin, prints a two-line ANSI status line. Created by porting the existing script. |
-| `plugins/p-statusline/skills/init/SKILL.md` | The `/p-statusline:init` installer — copy script + merge `settings.json`. |
+| `plugins/p-statusline/skills/install/SKILL.md` | The `/p-statusline:install` installer — copy script + merge `settings.json`. |
 | `plugins/p-statusline/.claude-plugin/plugin.json` | Plugin manifest (name, version, description, author). |
 | `plugins/p-statusline/README.md` | Per-plugin docs: install, segment reference, removal. |
 | `.claude-plugin/marketplace.json` | Marketplace catalog — gains a fourth entry. |
 | `README.md` (repo root) | Plugins table — gains a `p-statusline` row. |
 | `tests/p-statusline-statusline.test.ts` | Spawns `statusline.cjs` with fixture stdin, asserts output per segment. |
-| `tests/p-statusline-init-e2e.test.ts` | Re-implements the `init` algorithm against a temp HOME — executable spec. |
+| `tests/p-statusline-install-e2e.test.ts` | Re-implements the `install` algorithm against a temp HOME — executable spec. |
 
 **Task ordering rationale:** the repo's `findPlugins()` helper skips any directory under `plugins/` that lacks `.claude-plugin/plugin.json`. So Tasks 1–2 can create the script, skill, and tests without the plugin becoming visible to `plugin-manifests.test.ts` / `skills.test.ts` / `marketplace.test.ts`. Task 3 adds the manifest + marketplace entry + READMEs in one commit, at which point the plugin becomes visible and complete. `npm test` stays green after every commit.
 
@@ -203,27 +203,27 @@ Expected: PASS — the new file passes; existing tests are unaffected (`plugins/
 
 ---
 
-## Task 2: Create the `init` skill and its E2E test
+## Task 2: Create the `install` skill and its E2E test
 
 **Files:**
-- Create: `plugins/p-statusline/skills/init/SKILL.md`
-- Test: `tests/p-statusline-init-e2e.test.ts`
+- Create: `plugins/p-statusline/skills/install/SKILL.md`
+- Test: `tests/p-statusline-install-e2e.test.ts`
 
 This task depends on Task 1: the E2E test copies the real `plugins/p-statusline/statusline/statusline.cjs`.
 
-- [ ] **Step 1: Write the `init` skill**
+- [ ] **Step 1: Write the `install` skill**
 
-Create `plugins/p-statusline/skills/init/SKILL.md` with this exact content:
+Create `plugins/p-statusline/skills/install/SKILL.md` with this exact content:
 
 ````markdown
 ---
-name: init
-description: Install the p-statusline status line into Claude Code. Copies statusline.cjs to a stable path and writes the statusLine block into the user's ~/.claude/settings.json. Use when the user says "init p-statusline", "install statusline", or "set up the status line".
+name: install
+description: Install the p-statusline status line into Claude Code. Copies statusline.cjs to a stable path and writes the statusLine block into the user's ~/.claude/settings.json. Use when the user says "install p-statusline", "install statusline", or "set up the status line".
 argument-hint: (no arguments)
 allowed-tools: Bash(echo:*) Bash(node:*) Bash(mkdir:*) Bash(cp:*) Read Write
 ---
 
-# /p-statusline:init
+# /p-statusline:install
 
 You are installing the `p-statusline` status line for the current user. This
 writes to the **user-level** `~/.claude/settings.json`, not a project file —
@@ -267,10 +267,10 @@ Read `<home>/.claude/settings.json`.
   the file in Step 6.
 - **Present but not valid JSON** → stop with: "Cannot proceed:
   `<home>/.claude/settings.json` is not valid JSON. Fix it manually and
-  re-run `/p-statusline:init`."
+  re-run `/p-statusline:install`."
 - **Present but the parsed root is not a JSON object** (e.g. an array) → stop
   with: "Cannot proceed: `<home>/.claude/settings.json` root is not an
-  object. Fix it manually and re-run `/p-statusline:init`."
+  object. Fix it manually and re-run `/p-statusline:install`."
 
 ## Step 5 — Protect an existing status line
 
@@ -314,7 +314,7 @@ Tell the user, in this order:
 3. If a previous status line was backed up, where the backup is.
 4. They must **restart Claude Code** for the status line to appear.
 5. To update later (after a plugin update) or to repair the config, just run
-   `/p-statusline:init` again.
+   `/p-statusline:install` again.
 
 ## Edge cases
 
@@ -332,13 +332,13 @@ Tell the user, in this order:
 
 - [ ] **Step 2: Write the E2E test**
 
-This test re-implements the `init` algorithm and runs it against a temp HOME — an executable spec, in the style of `tests/p-flow-init-e2e.test.ts`. Create `tests/p-statusline-init-e2e.test.ts` with this exact content:
+This test re-implements the `install` algorithm and runs it against a temp HOME — an executable spec, in the style of `tests/p-flow-init-e2e.test.ts`. Create `tests/p-statusline-install-e2e.test.ts` with this exact content:
 
 ```typescript
-// E2E for p-statusline's /p-statusline:init.
+// E2E for p-statusline's /p-statusline:install.
 //
-// p-statusline has no CLI binary — the init flow is documented in
-// `plugins/p-statusline/skills/init/SKILL.md` and executed by Claude itself
+// p-statusline has no CLI binary — the install flow is documented in
+// `plugins/p-statusline/skills/install/SKILL.md` and executed by Claude itself
 // (via Bash + Read + Write). This test programmatically re-implements that
 // algorithm against a real temp filesystem and asserts on the result. It is
 // an executable spec: if SKILL.md changes, this test should change with it.
@@ -354,7 +354,7 @@ const PLUGIN_ROOT = resolve(__dirname, '..', 'plugins', 'p-statusline');
 // SKILL.md Step 2 resolves the node binary; the test fixes it to the runner's.
 const NODE = process.execPath;
 
-interface InitResult {
+interface InstallResult {
   created: boolean;
   backedUp: boolean;
   alreadyInstalled: boolean;
@@ -362,7 +362,7 @@ interface InitResult {
 
 // Re-implementation of SKILL.md Steps 3-6 (Steps 1-2, 7 are environment /
 // messaging and not exercised here).
-function runInit(home: string): InitResult {
+function runInstall(home: string): InstallResult {
   const claudeDir = join(home, '.claude');
   const targetDir = join(claudeDir, 'p-statusline');
   const script = join(targetDir, 'statusline.cjs');
@@ -418,12 +418,12 @@ function runInit(home: string): InitResult {
 }
 
 let home: string;
-beforeEach(() => { home = mkdtempSync(join(tmpdir(), 'p-statusline-init-e2e-')); });
+beforeEach(() => { home = mkdtempSync(join(tmpdir(), 'p-statusline-install-e2e-')); });
 afterEach(() => rmSync(home, { recursive: true, force: true }));
 
-describe('p-statusline init E2E', () => {
+describe('p-statusline install E2E', () => {
   it('creates settings.json with only statusLine when none exists', () => {
-    const r = runInit(home);
+    const r = runInstall(home);
     expect(r.created).toBe(true);
     const s = JSON.parse(readFileSync(join(home, '.claude', 'settings.json'), 'utf-8'));
     expect(Object.keys(s)).toEqual(['statusLine']);
@@ -432,7 +432,7 @@ describe('p-statusline init E2E', () => {
   });
 
   it('copies statusline.cjs into ~/.claude/p-statusline/', () => {
-    runInit(home);
+    runInstall(home);
     expect(existsSync(join(home, '.claude', 'p-statusline', 'statusline.cjs'))).toBe(true);
   });
 
@@ -443,7 +443,7 @@ describe('p-statusline init E2E', () => {
       JSON.stringify({ model: 'opus', theme: 'dark-ansi' }, null, 2),
       'utf-8',
     );
-    runInit(home);
+    runInstall(home);
     const s = JSON.parse(readFileSync(join(home, '.claude', 'settings.json'), 'utf-8'));
     expect(s.model).toBe('opus');
     expect(s.theme).toBe('dark-ansi');
@@ -458,7 +458,7 @@ describe('p-statusline init E2E', () => {
       JSON.stringify({ statusLine: foreign }, null, 2),
       'utf-8',
     );
-    const r = runInit(home);
+    const r = runInstall(home);
     expect(r.backedUp).toBe(true);
     const prev = JSON.parse(
       readFileSync(join(home, '.claude', 'p-statusline', 'statusline.prev.json'), 'utf-8'),
@@ -467,8 +467,8 @@ describe('p-statusline init E2E', () => {
   });
 
   it('is idempotent when already pointing at our script', () => {
-    runInit(home);
-    const r = runInit(home);
+    runInstall(home);
+    const r = runInstall(home);
     expect(r.alreadyInstalled).toBe(true);
     expect(existsSync(join(home, '.claude', 'p-statusline', 'statusline.prev.json'))).toBe(false);
   });
@@ -476,31 +476,31 @@ describe('p-statusline init E2E', () => {
   it('rejects a settings.json that is not valid JSON', () => {
     mkdirSync(join(home, '.claude'), { recursive: true });
     writeFileSync(join(home, '.claude', 'settings.json'), '{not json', 'utf-8');
-    expect(() => runInit(home)).toThrow(/not valid JSON/);
+    expect(() => runInstall(home)).toThrow(/not valid JSON/);
   });
 
   it('rejects a settings.json whose root is not an object', () => {
     mkdirSync(join(home, '.claude'), { recursive: true });
     writeFileSync(join(home, '.claude', 'settings.json'), '["array"]', 'utf-8');
-    expect(() => runInit(home)).toThrow(/not an object/);
+    expect(() => runInstall(home)).toThrow(/not an object/);
   });
 });
 ```
 
 - [ ] **Step 3: Run the E2E test**
 
-Run: `npx vitest run tests/p-statusline-init-e2e.test.ts`
+Run: `npx vitest run tests/p-statusline-install-e2e.test.ts`
 Expected: PASS — all 7 tests green. (This test is self-contained — it exercises its own re-implementation of the algorithm, so it passes as soon as it is written, given Task 1's `statusline.cjs` exists.)
 
 - [ ] **Step 4: Verify the SKILL.md and the E2E test agree**
 
-Re-read `plugins/p-statusline/skills/init/SKILL.md` Steps 3–6 against the `runInit()` function. Confirm they describe the same behaviour: copy to the stable path, read+validate settings, the same target-command shape, the same idempotency marker (`p-statusline/statusline.cjs`), the same backup file (`statusline.prev.json`). Fix SKILL.md if they drift.
+Re-read `plugins/p-statusline/skills/install/SKILL.md` Steps 3–6 against the `runInstall()` function. Confirm they describe the same behaviour: copy to the stable path, read+validate settings, the same target-command shape, the same idempotency marker (`p-statusline/statusline.cjs`), the same backup file (`statusline.prev.json`). Fix SKILL.md if they drift.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add plugins/p-statusline/skills/init/SKILL.md tests/p-statusline-init-e2e.test.ts
-git commit -m "feat(p-statusline): add init skill and E2E coverage" -m "Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
+git add plugins/p-statusline/skills/install/SKILL.md tests/p-statusline-install-e2e.test.ts
+git commit -m "feat(p-statusline): add install skill and E2E coverage" -m "Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
 ```
 
 - [ ] **Step 6: Confirm the full suite is still green**
@@ -528,7 +528,7 @@ Create `plugins/p-statusline/.claude-plugin/plugin.json` with this exact content
 {
   "name": "p-statusline",
   "version": "0.1.0",
-  "description": "Custom Claude Code status line: context %, rate limits with reset countdowns, git, task progress, model/effort, RAM. Skills: init.",
+  "description": "Custom Claude Code status line: context %, rate limits with reset countdowns, git, task progress, model/effort, RAM. Skills: install.",
   "author": {
     "name": "Andrey Sukharev",
     "email": "andrey.sukharev@exinity.com"
@@ -578,7 +578,7 @@ uses only Node built-in modules.
 2. Activate the status line:
 
    ```text
-   /p-statusline:init
+   /p-statusline:install
    ```
 
    This copies the status line script to `~/.claude/p-statusline/` and adds a
@@ -590,7 +590,7 @@ uses only Node built-in modules.
 
 ## Updating
 
-After the plugin updates, run `/p-statusline:init` again to copy the newer
+After the plugin updates, run `/p-statusline:install` again to copy the newer
 script into place.
 
 ## Removing
@@ -609,7 +609,7 @@ Edit `.claude-plugin/marketplace.json`. The `plugins` array currently ends with 
     {
       "name": "p-statusline",
       "source": "./plugins/p-statusline",
-      "description": "Custom Claude Code status line (context, rate limits, git, tasks, RAM). Skills: init."
+      "description": "Custom Claude Code status line (context, rate limits, git, tasks, RAM). Skills: install."
     }
 ```
 
@@ -620,7 +620,7 @@ The resulting `plugins` array has four entries: `p-wiki`, `p-flow`, `p-tasks`, `
 Edit `README.md` (repo root). In the `## Plugins` table, add this row immediately after the `p-tasks` row:
 
 ```markdown
-| [`p-statusline`](./plugins/p-statusline/) | Custom Claude Code status line — context %, rate limits with reset countdowns, git, task progress, model/effort, RAM. Skills: `init`. |
+| [`p-statusline`](./plugins/p-statusline/) | Custom Claude Code status line — context %, rate limits with reset countdowns, git, task progress, model/effort, RAM. Skills: `install`. |
 ```
 
 - [ ] **Step 5: Run the full suite to verify everything passes**
@@ -628,7 +628,7 @@ Edit `README.md` (repo root). In the `## Plugins` table, add this row immediatel
 Run: `npm test`
 Expected: PASS. The plugin is now visible to the static suite and must satisfy:
 - `plugin-manifests.test.ts` — name `p-statusline` matches the directory, is kebab-case, version `0.1.0` is valid semver, README exists and is > 50 chars.
-- `skills.test.ts` — the plugin has the `init` skill; its frontmatter `name` is `init`, `description` is > 30 chars, body is > 100 chars.
+- `skills.test.ts` — the plugin has the `install` skill; its frontmatter `name` is `install`, `description` is > 30 chars, body is > 100 chars.
 - `marketplace.test.ts` — the entry name matches `plugin.json`, `source` resolves to a directory containing `.claude-plugin/plugin.json`, no duplicate names, and the root README plugins table mentions `p-statusline`.
 - `templates.test.ts` — no-op (the plugin has no `skills/_shared/templates/`).
 - The two new test files still pass.
