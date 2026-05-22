@@ -9,6 +9,7 @@ A Claude Code plugin marketplace. Plugins live under `plugins/<name>/`.
 | [`p-wiki`](./plugins/p-wiki/) | Persistent markdown knowledge wiki under `docs/wiki/`. Skills: `init`, `ingest`, `compile`, `query`, `lint`. |
 | [`p-flow`](./plugins/p-flow/) | Workflow rules for Claude: secret-file deny-permissions, Conventional Commits + `<type>/<slug>` branches, spec templates. Skills: `init`. |
 | [`p-tasks`](./plugins/p-tasks/) | Two-level task tracker (`task` → `sub-task`) with FS and Jira destinations, one-way primary→mirrors sync. Skills: `init`, `add`, `set`, `next`, `summary`, `sync`. |
+| [`p-statusline`](./plugins/p-statusline/) | Custom Claude Code status line — context %, rate limits with reset countdowns, git, task progress, model/effort, RAM. Skills: `init`. |
 
 ## Install
 
