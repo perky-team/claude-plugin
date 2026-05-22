@@ -32,7 +32,7 @@ Two further researched facts shape the design:
 |---|---|
 | Where it lives | Fourth plugin, `plugins/p-statusline/`, in this marketplace. |
 | Activation | A skill installer, `/p-statusline:init`. |
-| Runtime | Pure Node.js (`node ".../statusline.js"`) — drops the bash dependency. |
+| Runtime | Pure Node.js (`node ".../statusline.cjs"`) — drops the bash dependency. |
 | Update strategy | Skill copies the script to a stable path (`~/.claude/p-statusline/`); re-run the skill to pick up a newer version. |
 | Configurability | None. The status line ships exactly as-is — all segments always on. |
 | Install scope | User scope (`~/.claude/settings.json`) — a status line is a personal, global setting. |
@@ -45,24 +45,24 @@ plugins/p-statusline/
 │   └── plugin.json              # name: p-statusline, version: 0.1.0, description, author
 ├── README.md                    # install / segment reference / requirements / removal
 ├── statusline/
-│   └── statusline.js            # the ported status line script (pure Node, no bash)
+│   └── statusline.cjs            # the ported status line script (pure Node, no bash)
 └── skills/
     └── init/
         └── SKILL.md             # /p-statusline:init — the installer
 ```
 
-`statusline.js` lives at the plugin root under `statusline/`, **not** under `skills/_shared/templates/`. The repo's `templates.test.ts` only inspects `skills/_shared/templates/` and would otherwise demand a `${CLAUDE_SKILL_DIR}/../_shared/templates/...` reference for the file. Keeping it under `statusline/` avoids that coupling and lets the test suite import it by a plain path.
+`statusline.cjs` lives at the plugin root under `statusline/`, **not** under `skills/_shared/templates/`. The repo's `templates.test.ts` only inspects `skills/_shared/templates/` and would otherwise demand a `${CLAUDE_SKILL_DIR}/../_shared/templates/...` reference for the file. Keeping it under `statusline/` avoids that coupling and lets the test suite import it by a plain path.
 
-## Component: `statusline/statusline.js`
+## Component: `statusline/statusline.cjs`
 
-A mechanical port. The current `.sh` file is `exec node -e '<JS>'`; the port lifts that exact JS body into a standalone `statusline.js`. **No logic changes** — same segments, same colours, same graceful degradation (every block is wrapped in `try/catch`; on any failure the script prints an empty line or a partial line).
+A mechanical port. The current `.sh` file is `exec node -e '<JS>'`; the port lifts that exact JS body into a standalone `statusline.cjs`. **No logic changes** — same segments, same colours, same graceful degradation (every block is wrapped in `try/catch`; on any failure the script prints an empty line or a partial line).
 
 The script is already self-contained: it takes the cwd and transcript path from the stdin JSON, shells out to `git`, and reads RAM via `node:os`. Nothing is hard-coded to the author's machine. `node`, `fs`, `os`, and `child_process` are all built-ins — no `npm install`, no dependencies.
 
 The resulting status line command becomes:
 
 ```json
-"statusLine": { "type": "command", "command": "\"<node>\" \"<home>/.claude/p-statusline/statusline.js\"" }
+"statusLine": { "type": "command", "command": "\"<node>\" \"<home>/.claude/p-statusline/statusline.cjs\"" }
 ```
 
 ## Component: skill `/p-statusline:init`
@@ -75,16 +75,16 @@ The skill writes to the **user** settings file, `~/.claude/settings.json`, resol
 
 **Step 2 — Resolve the `node` binary.** Run `where node` (Windows) / `which node` (POSIX). If found, capture the absolute path as `<node>`. If not found, fall back to the bare string `node` and warn the user that the status line will only work if `node` is on `PATH` (a status line set by the native-installer build of Claude Code may otherwise silently print nothing).
 
-**Step 3 — Copy the script.** `mkdir -p <home>/.claude/p-statusline/`. Copy `${CLAUDE_PLUGIN_ROOT}/statusline/statusline.js` to `<home>/.claude/p-statusline/statusline.js`, overwriting any existing copy (this is how a re-run picks up a newer plugin version). If the source file cannot be read, stop and tell the user the plugin install may be corrupted.
+**Step 3 — Copy the script.** `mkdir -p <home>/.claude/p-statusline/`. Copy `${CLAUDE_PLUGIN_ROOT}/statusline/statusline.cjs` to `<home>/.claude/p-statusline/statusline.cjs`, overwriting any existing copy (this is how a re-run picks up a newer plugin version). If the source file cannot be read, stop and tell the user the plugin install may be corrupted.
 
 **Step 4 — Read the settings file.** Read `<home>/.claude/settings.json`.
 - Missing → treat as `{}` (will be created in Step 6).
 - Present but not valid JSON → **stop** with: "Cannot proceed: `<home>/.claude/settings.json` is not valid JSON. Fix it manually and re-run `/p-statusline:init`." (Mirrors `p-flow:init`.)
 - Present but the parsed root is not an object → stop with an equivalent error.
 
-**Step 5 — Protect an existing status line.** Compute the target command string: `"<node>" "<home>/.claude/p-statusline/statusline.js"`.
+**Step 5 — Protect an existing status line.** Compute the target command string: `"<node>" "<home>/.claude/p-statusline/statusline.cjs"`.
 - If `statusLine` is absent → proceed.
-- If `statusLine` already points at our script (`...p-statusline/statusline.js`) → report "p-statusline is already installed" and still rewrite the command (so a moved home or a changed `<node>` path is corrected). Idempotent.
+- If `statusLine` already points at our script (`...p-statusline/statusline.cjs`) → report "p-statusline is already installed" and still rewrite the command (so a moved home or a changed `<node>` path is corrected). Idempotent.
 - If `statusLine` exists and is something else → save the existing value to `<home>/.claude/p-statusline/statusline.prev.json` and warn the user that their previous status line was replaced and where the backup is.
 
 **Step 6 — Write the settings file.** Set `statusLine` to `{ "type": "command", "command": "<target command>" }`. Preserve every other key untouched (`{ ...existing }` spread, exactly as `p-flow:init` does for `permissions`). Write with 2-space indentation and a trailing newline. If the file did not exist, create it with just the `statusLine` key.
@@ -95,7 +95,7 @@ The skill writes to the **user** settings file, `~/.claude/settings.json`, resol
 
 - `~/.claude/settings.json` invalid JSON → stop (Step 4).
 - Root JSON is not an object → stop (Step 4).
-- `statusline.js` source unreadable → stop, "plugin install may be corrupted" (Step 3).
+- `statusline.cjs` source unreadable → stop, "plugin install may be corrupted" (Step 3).
 - `node` not on `PATH` → proceed with bare `node`, warn (Step 2).
 - `mkdir` / write fails (permissions) → stop, show the exact shell error.
 - Re-run after a plugin update → Step 3 overwrites the copy, Step 5 detects "already installed", command is refreshed. Safe.
@@ -113,7 +113,7 @@ Aligned with the existing suite (`tests/`, Vitest, `helpers.ts`).
 
 **Inherited, no new code.** `marketplace.test.ts`, `plugin-manifests.test.ts`, and `skills.test.ts` iterate every plugin via `findPlugins()` / `findSkills()`. `p-statusline` is picked up automatically and must satisfy: valid manifest, kebab-case semver-versioned name matching the directory, a >50-char README, at least one skill, and a well-formed `init/SKILL.md` (frontmatter `name` = `init`, `description` >30 chars, body >100 chars). `templates.test.ts` does nothing here — there is no `skills/_shared/templates/` directory.
 
-**`tests/p-statusline-statusline.test.ts` (new).** Spawns `node plugins/p-statusline/statusline/statusline.js`, pipes fixture session JSON to stdin, and asserts the output **per segment**:
+**`tests/p-statusline-statusline.test.ts` (new).** Spawns `node plugins/p-statusline/statusline/statusline.cjs`, pipes fixture session JSON to stdin, and asserts the output **per segment**:
 - full data — context, limits, model/effort all present;
 - no `rate_limits` — limits segment falls back to `5h n/a 7d n/a`;
 - cwd is not a git repository — git segment absent;
@@ -129,7 +129,7 @@ Volatile segments (RAM %, live git state, reset countdowns) are matched by struc
 - already pointing at our script → idempotent, no duplication;
 - invalid JSON → throws;
 - root JSON not an object → throws;
-- the script is copied to `<home>/.claude/p-statusline/statusline.js`.
+- the script is copied to `<home>/.claude/p-statusline/statusline.cjs`.
 
 ## Out of scope (YAGNI)
 
