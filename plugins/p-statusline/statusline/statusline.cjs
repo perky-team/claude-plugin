@@ -195,14 +195,21 @@ process.stdin.on("end", () => {
 
     // Segment 1: context %  +  consumed tokens  +  cache hit % — "8% 80k c99%"
     // The % and token count share the 10-step green->red gradient keyed on context usage.
-    const ctxBits = [];
-    if (pct != null)  ctxBits.push(`${gradColor(pct)}${Math.round(pct)}%${C.reset}`);
-    if (used != null) ctxBits.push(`${gradColor(pct != null ? pct : 0)}${fmtK(used)}${C.reset}`);
-    // Cache hit % — always dim gray: it is informational, not a warning.
-    if (cachePct != null) {
-      ctxBits.push(`${C.sep}c${Math.round(cachePct)}%${C.reset}`);
+    // Before the first API response of the session nothing has been consumed
+    // yet (`pct` and `used` are both 0/absent) — show a dim "-%" placeholder
+    // rather than a misleading "0".
+    if (!pct && !used) {
+      parts.push(`${C.sep}-%${C.reset}`);
+    } else {
+      const ctxBits = [];
+      if (pct != null)  ctxBits.push(`${gradColor(pct)}${Math.round(pct)}%${C.reset}`);
+      if (used != null) ctxBits.push(`${gradColor(pct != null ? pct : 0)}${fmtK(used)}${C.reset}`);
+      // Cache hit % — always dim gray: it is informational, not a warning.
+      if (cachePct != null) {
+        ctxBits.push(`${C.sep}c${Math.round(cachePct)}%${C.reset}`);
+      }
+      if (ctxBits.length) parts.push(ctxBits.join(" "));
     }
-    if (ctxBits.length) parts.push(ctxBits.join(" "));
 
     // Segment 2: rate limits with reset countdowns
     parts.push(limitsSeg);
@@ -222,16 +229,30 @@ process.stdin.on("end", () => {
       }
     } catch (_) {}
 
+    // Visible width of a string, ignoring ANSI escape sequences.
+    const vlen = s => s.replace(/\x1b\[[0-9;]*m/g, "").length;
+
     // Line 1: context / limits / git joined by " | ".
-    // Line 2: model + effort, then RAM, then the project path.
-    let out = parts.join(SEP);
-    const line2 = [];
+    // Line 2: model + effort, then the project path, then RAM.
     const modelEffort = [];
     if (model)  modelEffort.push(`\x1b[90m${model}${C.reset}`);
     if (effort) modelEffort.push(`\x1b[90m${effort}${C.reset}`);
-    if (modelEffort.length) line2.push(modelEffort.join(" "));
-    if (ramSeg)             line2.push(ramSeg);
-    if (dirPath)            line2.push(`${C.dir}${dirPath}${C.reset}`);
+    let modelSeg = modelEffort.join(" ");
+
+    // Pad the narrower of the two leading segments — context on line 1,
+    // model+effort on line 2 — with trailing spaces so the first " | "
+    // separator lines up vertically across both lines.
+    if (parts.length && modelSeg) {
+      const w = Math.max(vlen(parts[0]), vlen(modelSeg));
+      parts[0] += " ".repeat(w - vlen(parts[0]));
+      modelSeg += " ".repeat(w - vlen(modelSeg));
+    }
+
+    let out = parts.join(SEP);
+    const line2 = [];
+    if (modelSeg) line2.push(modelSeg);
+    if (dirPath)  line2.push(`${C.dir}${dirPath}${C.reset}`);
+    if (ramSeg)   line2.push(ramSeg);
     if (line2.length) out += "\n" + line2.join(SEP);
 
     process.stdout.write(out);

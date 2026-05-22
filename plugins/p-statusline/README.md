@@ -6,6 +6,7 @@ terminal. At a glance it shows:
 **Line 1**
 - **Context window** — usage percentage, token count, and cache-hit %. The %
   and token count share a green → red ramp that warms as the window fills.
+  Shows `-%` before the first API response, when nothing has been consumed yet.
 - **Rate limits** — the 5-hour and 7-day usage windows, each with a countdown
   to reset. `n/a` until Claude Code reports the data.
 - **Git** — branch name, `*` for uncommitted changes, a `wt:` marker inside a
@@ -13,8 +14,11 @@ terminal. At a glance it shows:
 
 **Line 2**
 - Model and effort level.
-- System RAM usage.
 - The project directory.
+- System RAM usage.
+
+The leading segments of both lines are padded to equal width so the first
+`|` separator lines up vertically.
 
 ## Requirements
 
