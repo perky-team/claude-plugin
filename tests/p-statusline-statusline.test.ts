@@ -46,7 +46,7 @@ let nonGit: string;
 beforeAll(() => { nonGit = makeNonGitDir(); });
 afterAll(() => { for (const d of tempDirs) rmSync(d, { recursive: true, force: true }); });
 
-describe('p-statusline statusline.js', () => {
+describe('p-statusline statusline.cjs', () => {
   it('renders context %, token count, and cache % from context_window', () => {
     const out = plain(run({
       context_window: { used_percentage: 8, context_window_size: 200000, total_input_tokens: 80000 },
