@@ -76,7 +76,10 @@ process.stdin.on("end", () => {
         }
       } catch (_) {}
     }
-    const model = (j.model && j.model.display_name) || "";
+    // Strip any trailing parenthetical from the display name (e.g. the
+    // "(1M context)" suffix Claude Code appends in 1M-context sessions) so
+    // line 2 shows just the bare model name.
+    const model = ((j.model && j.model.display_name) || "").replace(/\s*\([^)]*\)\s*$/, "");
     const effort = (j.effort && j.effort.level) || "";
     const cwd = (j.workspace && j.workspace.current_dir) || j.cwd || "";
     // Displayed name = the session launch directory (workspace.project_dir);
@@ -198,17 +201,23 @@ process.stdin.on("end", () => {
     // Before the first API response of the session nothing has been consumed
     // yet (`pct` and `used` are both 0/absent) — show a dim "-%" placeholder
     // rather than a misleading "0".
+    // `cacheBit` is tracked apart from the left bits so the alignment padding
+    // below can be inserted between them — keeping "c99%" flush against the
+    // following " | " separator.
+    let seg1Left = "";
+    let cacheBit = "";
     if (!pct && !used) {
-      parts.push(`${C.sep}-%${C.reset}`);
+      seg1Left = `${C.sep}-%${C.reset}`;
     } else {
       const ctxBits = [];
       if (pct != null)  ctxBits.push(`${gradColor(pct)}${Math.round(pct)}%${C.reset}`);
       if (used != null) ctxBits.push(`${gradColor(pct != null ? pct : 0)}${fmtK(used)}${C.reset}`);
+      seg1Left = ctxBits.join(" ");
       // Cache hit % — always dim gray: it is informational, not a warning.
-      if (cachePct != null) {
-        ctxBits.push(`${C.sep}c${Math.round(cachePct)}%${C.reset}`);
-      }
-      if (ctxBits.length) parts.push(ctxBits.join(" "));
+      if (cachePct != null) cacheBit = `${C.sep}c${Math.round(cachePct)}%${C.reset}`;
+    }
+    if (seg1Left || cacheBit) {
+      parts.push(seg1Left + (seg1Left && cacheBit ? " " : "") + cacheBit);
     }
 
     // Segment 2: rate limits with reset countdowns
@@ -240,11 +249,15 @@ process.stdin.on("end", () => {
     let modelSeg = modelEffort.join(" ");
 
     // Pad the narrower of the two leading segments — context on line 1,
-    // model+effort on line 2 — with trailing spaces so the first " | "
-    // separator lines up vertically across both lines.
+    // model+effort on line 2 — so the first " | " separator lines up
+    // vertically across both lines. On line 1 the gap goes before the cache
+    // bit, so "c99%" stays right-aligned flush against the separator.
     if (parts.length && modelSeg) {
       const w = Math.max(vlen(parts[0]), vlen(modelSeg));
-      parts[0] += " ".repeat(w - vlen(parts[0]));
+      const gap = " ".repeat(w - vlen(parts[0]));
+      parts[0] = cacheBit
+        ? seg1Left + (seg1Left ? " " : "") + gap + cacheBit
+        : parts[0] + gap;
       modelSeg += " ".repeat(w - vlen(modelSeg));
     }
 
