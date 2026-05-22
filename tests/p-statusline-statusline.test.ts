@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path';
 
 const SCRIPT = resolve(__dirname, '..', 'plugins', 'p-statusline', 'statusline', 'statusline.cjs');
 
-// Run statusline.js with `input` piped to stdin; return stdout.
+// Run statusline.cjs with `input` piped to stdin; return stdout.
 function run(input: object): string {
   return execFileSync(process.execPath, [SCRIPT], {
     input: JSON.stringify(input),
@@ -108,6 +108,8 @@ describe('p-statusline statusline.cjs', () => {
     execFileSync('git', ['checkout', '--detach'], { cwd: repo, stdio: 'ignore' });
     const out = plain(run({ workspace: { current_dir: repo, project_dir: repo } }));
     expect(out).toContain(hash);
+    // Extended timeout: this test spawns a git repo and the script then runs
+    // several git subprocesses — slow enough on Windows to exceed the 5s default.
   }, 15000);
 
   it('produces output without throwing on an empty input object', () => {
