@@ -10,8 +10,8 @@ terminal. At a glance it shows:
   to reset. `n/a` until Claude Code reports the data.
 - **Git** — branch name, `*` for uncommitted changes, a `wt:` marker inside a
   linked worktree, and `↑/↓` commits ahead of / behind upstream.
-- **Task progress** — `▸ done/total` from the most recent TodoWrite, plus the
-  in-progress task name.
+- **Task progress** — `todo ▸ done/total` from the most recent TodoWrite, plus
+  the in-progress task name.
 
 **Line 2**
 - Model and effort level.

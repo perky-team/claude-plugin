@@ -58,8 +58,8 @@ describe('p-statusline statusline.cjs', () => {
 
   it('falls back to "n/a" when rate_limits is absent', () => {
     const out = plain(run({ workspace: { current_dir: nonGit, project_dir: nonGit } }));
-    expect(out).toContain('5hn/a');
-    expect(out).toContain('7dn/a');
+    expect(out).toContain('5h n/a');
+    expect(out).toContain('7d n/a');
   });
 
   it('renders rate-limit percentages when rate_limits is present', () => {
@@ -71,8 +71,8 @@ describe('p-statusline statusline.cjs', () => {
       },
       workspace: { current_dir: nonGit, project_dir: nonGit },
     }));
-    expect(out).toMatch(/5h20%/);
-    expect(out).toMatch(/7d5%/);
+    expect(out).toMatch(/5h 20%/);
+    expect(out).toMatch(/7d 5%/);
   });
 
   it('omits the git segment when cwd is not a git repository', () => {
@@ -80,9 +80,9 @@ describe('p-statusline statusline.cjs', () => {
     expect(out).not.toContain('⎇'); // git glyph
   });
 
-  it('shows the "0/0" task default when no transcript is provided', () => {
+  it('shows the "todo ▸ 0/0" task default when no transcript is provided', () => {
     const out = plain(run({ workspace: { current_dir: nonGit, project_dir: nonGit } }));
-    expect(out).toContain('▸ 0/0'); // todo default
+    expect(out).toContain('todo ▸ 0/0'); // labelled todo default
   });
 
   it('renders model, effort, and a RAM percentage', () => {

@@ -54,7 +54,7 @@ process.stdin.on("end", () => {
 
     // Cache hit % and task progress, both from the transcript
     let cachePct = null;
-    let todoSeg = "\x1b[90m▸ 0/0\x1b[0m";   // default until a TodoWrite is found
+    let todoSeg = "\x1b[90mtodo ▸ 0/0\x1b[0m";   // default until a TodoWrite is found
     const tp = j.transcript_path;
     if (tp) {
       try {
@@ -95,7 +95,7 @@ process.stdin.on("end", () => {
           const active = todos.find(t => t && t.status === "in_progress");
           let name = active ? (active.activeForm || active.content || "") : "";
           if (name.length > 40) name = name.slice(0, 39) + "…";
-          todoSeg = `\x1b[90m▸ \x1b[97m${done}/${todos.length}\x1b[0m`;
+          todoSeg = `\x1b[90mtodo ▸ \x1b[97m${done}/${todos.length}\x1b[0m`;
           if (name) todoSeg += ` \x1b[90m${name}\x1b[0m`;
         }
       } catch (_) {}
@@ -178,7 +178,7 @@ process.stdin.on("end", () => {
     // NOTE: do NOT query the GET /api/oauth/usage HTTP endpoint instead — it
     // rate-limits (HTTP 429) aggressively and stays stuck for the whole
     // session. The stdin field is the supported, request-free source.
-    let limitsSeg = "\x1b[90m5hn/a 7dn/a\x1b[0m";
+    let limitsSeg = "\x1b[90m5h n/a 7d n/a\x1b[0m";
     (() => {
       try {
         const rl = j.rate_limits || {};
@@ -200,8 +200,8 @@ process.stdin.on("end", () => {
           return `${m % 60}m`;
         };
         const seg = (label, p, epoch) => p == null
-          ? `\x1b[90m${label}n/a\x1b[0m`
-          : `\x1b[90m${label}\x1b[0m${limitColor(p)}${p}%\x1b[0m\x1b[90m[\x1b[0m${resetColor(label, epoch)}${fmtReset(epoch)}\x1b[0m\x1b[90m]\x1b[0m`;
+          ? `\x1b[90m${label} n/a\x1b[0m`
+          : `\x1b[90m${label} \x1b[0m${limitColor(p)}${p}%\x1b[0m\x1b[90m[\x1b[0m${resetColor(label, epoch)}${fmtReset(epoch)}\x1b[0m\x1b[90m]\x1b[0m`;
         limitsSeg = `${seg("5h", fiveHr, fh && fh.resets_at)} ${seg("7d", sevenDay, sd && sd.resets_at)}`;
       } catch (_) {}
     })();
