@@ -80,11 +80,6 @@ describe('p-statusline statusline.cjs', () => {
     expect(out).not.toContain('⎇'); // git glyph
   });
 
-  it('shows the "todo ▸ 0/0" task default when no transcript is provided', () => {
-    const out = plain(run({ workspace: { current_dir: nonGit, project_dir: nonGit } }));
-    expect(out).toContain('todo ▸ 0/0'); // labelled todo default
-  });
-
   it('renders model, effort, and a RAM percentage', () => {
     const out = plain(run({
       model: { display_name: 'Opus 4.7' },

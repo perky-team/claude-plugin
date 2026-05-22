@@ -218,7 +218,7 @@ Create `plugins/p-statusline/skills/install/SKILL.md` with this exact content:
 ````markdown
 ---
 name: install
-description: Install the p-statusline status line into Claude Code's settings.
+description: Install the p-statusline status line.
 argument-hint: (no arguments)
 allowed-tools: Bash(echo:*) Bash(node:*) Bash(mkdir:*) Bash(cp:*) Read Write
 disable-model-invocation: true

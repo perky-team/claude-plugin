@@ -52,9 +52,8 @@ process.stdin.on("end", () => {
       return `\x1b[38;5;${RESET_RAMP[idx]}m`;
     };
 
-    // Cache hit % and task progress, both from the transcript
+    // Cache hit %, read from the transcript.
     let cachePct = null;
-    let todoSeg = "\x1b[90mtodo ▸ 0/0\x1b[0m";   // default until a TodoWrite is found
     const tp = j.transcript_path;
     if (tp) {
       try {
@@ -74,29 +73,6 @@ process.stdin.on("end", () => {
           const cc = u.cache_creation_input_tokens || 0;
           const it = u.input_tokens || 0;
           if (cr + cc + it > 0) cachePct = (cr / (cr + cc + it)) * 100;
-        }
-        // Task progress: scan back for the most recent TodoWrite tool call.
-        // Its `todos` array holds each task with a `status`; show
-        // "▸ <completed>/<total>" plus the in-progress task name.
-        let todos = null;
-        for (let i = objs.length - 1; i >= 0 && !todos; i--) {
-          const m = objs[i].message;
-          if (objs[i].type === "assistant" && m && Array.isArray(m.content)) {
-            for (const blk of m.content) {
-              if (blk && blk.type === "tool_use" && blk.name === "TodoWrite"
-                  && blk.input && Array.isArray(blk.input.todos)) {
-                todos = blk.input.todos;
-              }
-            }
-          }
-        }
-        if (todos && todos.length) {
-          const done = todos.filter(t => t && t.status === "completed").length;
-          const active = todos.find(t => t && t.status === "in_progress");
-          let name = active ? (active.activeForm || active.content || "") : "";
-          if (name.length > 40) name = name.slice(0, 39) + "…";
-          todoSeg = `\x1b[90mtodo ▸ \x1b[97m${done}/${todos.length}\x1b[0m`;
-          if (name) todoSeg += ` \x1b[90m${name}\x1b[0m`;
         }
       } catch (_) {}
     }
@@ -234,9 +210,6 @@ process.stdin.on("end", () => {
     // Segment 3: git branch — "*" marks uncommitted changes
     if (gitSeg)  parts.push(`${C.git}${gitSeg}${C.reset}`);
 
-    // Segment 4: task progress from TodoWrite — end of line 1
-    if (todoSeg) parts.push(todoSeg);
-
     // System RAM fill — "RAM 59%", the percentage coloured by the limit ramp
     // (greener when free, redder as it fills). os.freemem() reports available
     // physical memory, so used% = (total - free) / total.
@@ -244,12 +217,12 @@ process.stdin.on("end", () => {
     try {
       const totalB = os.totalmem(), freeB = os.freemem();
       if (totalB > 0) {
-        const pct = Math.round((totalB - freeB) / totalB * 100);
-        ramSeg = `\x1b[90mRAM ${limitColor(pct)}${pct}%${C.reset}`;
+        const ramPct = Math.round((totalB - freeB) / totalB * 100);
+        ramSeg = `\x1b[90mRAM ${limitColor(ramPct)}${ramPct}%${C.reset}`;
       }
     } catch (_) {}
 
-    // Line 1: context / limits / git / todo joined by " | ".
+    // Line 1: context / limits / git joined by " | ".
     // Line 2: model + effort, then RAM, then the project path.
     let out = parts.join(SEP);
     const line2 = [];
