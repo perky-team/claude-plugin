@@ -35,7 +35,7 @@ uses only Node built-in modules.
 2. Activate the status line:
 
    ```text
-   /p-statusline:init
+   /p-statusline:install
    ```
 
    This copies the status line script to `~/.claude/p-statusline/` and adds a
@@ -47,7 +47,7 @@ uses only Node built-in modules.
 
 ## Updating
 
-After the plugin updates, run `/p-statusline:init` again to copy the newer
+After the plugin updates, run `/p-statusline:install` again to copy the newer
 script into place.
 
 ## Removing

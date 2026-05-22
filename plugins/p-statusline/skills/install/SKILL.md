@@ -1,11 +1,11 @@
 ---
-name: init
-description: Install the p-statusline status line into Claude Code. Copies statusline.cjs to a stable path and writes the statusLine block into the user's ~/.claude/settings.json. Use when the user says "init p-statusline", "install statusline", or "set up the status line".
+name: install
+description: Install the p-statusline status line into Claude Code. Copies statusline.cjs to a stable path and writes the statusLine block into the user's ~/.claude/settings.json. Use when the user says "install p-statusline", "install statusline", or "set up the status line".
 argument-hint: (no arguments)
 allowed-tools: Bash(echo:*) Bash(node:*) Bash(mkdir:*) Bash(cp:*) Read Write
 ---
 
-# /p-statusline:init
+# /p-statusline:install
 
 You are installing the `p-statusline` status line for the current user. This
 writes to the **user-level** `~/.claude/settings.json`, not a project file —
@@ -49,10 +49,10 @@ Read `<home>/.claude/settings.json`.
   the file in Step 6.
 - **Present but not valid JSON** → stop with: "Cannot proceed:
   `<home>/.claude/settings.json` is not valid JSON. Fix it manually and
-  re-run `/p-statusline:init`."
+  re-run `/p-statusline:install`."
 - **Present but the parsed root is not a JSON object** (e.g. an array) → stop
   with: "Cannot proceed: `<home>/.claude/settings.json` root is not an
-  object. Fix it manually and re-run `/p-statusline:init`."
+  object. Fix it manually and re-run `/p-statusline:install`."
 
 ## Step 5 — Protect an existing status line
 
@@ -90,7 +90,7 @@ Tell the user, in this order:
 3. If a previous status line was backed up, where the backup is.
 4. They must **restart Claude Code** for the status line to appear.
 5. To update later (after a plugin update) or to repair the config, just run
-   `/p-statusline:init` again.
+   `/p-statusline:install` again.
 
 ## Edge cases
 

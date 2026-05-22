@@ -1,7 +1,7 @@
-// E2E for p-statusline's /p-statusline:init.
+// E2E for p-statusline's /p-statusline:install.
 //
-// p-statusline has no CLI binary — the init flow is documented in
-// `plugins/p-statusline/skills/init/SKILL.md` and executed by Claude itself
+// p-statusline has no CLI binary — the install flow is documented in
+// `plugins/p-statusline/skills/install/SKILL.md` and executed by Claude itself
 // (via Bash + Read + Write). This test programmatically re-implements that
 // algorithm against a real temp filesystem and asserts on the result. It is
 // an executable spec: if SKILL.md changes, this test should change with it.
@@ -17,7 +17,7 @@ const PLUGIN_ROOT = resolve(__dirname, '..', 'plugins', 'p-statusline');
 // SKILL.md Step 2 resolves the node binary; the test fixes it to the runner's.
 const NODE = process.execPath;
 
-interface InitResult {
+interface InstallResult {
   created: boolean;
   backedUp: boolean;
   alreadyInstalled: boolean;
@@ -25,7 +25,7 @@ interface InitResult {
 
 // Re-implementation of SKILL.md Steps 3-6 (Steps 1-2, 7 are environment /
 // messaging and not exercised here).
-function runInit(home: string): InitResult {
+function runInstall(home: string): InstallResult {
   const claudeDir = join(home, '.claude');
   const targetDir = join(claudeDir, 'p-statusline');
   const script = join(targetDir, 'statusline.cjs');
@@ -87,12 +87,12 @@ function runInit(home: string): InitResult {
 }
 
 let home: string;
-beforeEach(() => { home = mkdtempSync(join(tmpdir(), 'p-statusline-init-e2e-')); });
+beforeEach(() => { home = mkdtempSync(join(tmpdir(), 'p-statusline-install-e2e-')); });
 afterEach(() => rmSync(home, { recursive: true, force: true }));
 
-describe('p-statusline init E2E', () => {
+describe('p-statusline install E2E', () => {
   it('creates settings.json with only statusLine when none exists', () => {
-    const r = runInit(home);
+    const r = runInstall(home);
     expect(r.created).toBe(true);
     const s = JSON.parse(readFileSync(join(home, '.claude', 'settings.json'), 'utf-8'));
     expect(Object.keys(s)).toEqual(['statusLine']);
@@ -102,7 +102,7 @@ describe('p-statusline init E2E', () => {
   });
 
   it('copies statusline.cjs into ~/.claude/p-statusline/', () => {
-    runInit(home);
+    runInstall(home);
     expect(existsSync(join(home, '.claude', 'p-statusline', 'statusline.cjs'))).toBe(true);
   });
 
@@ -113,7 +113,7 @@ describe('p-statusline init E2E', () => {
       JSON.stringify({ model: 'opus', theme: 'dark-ansi' }, null, 2),
       'utf-8',
     );
-    runInit(home);
+    runInstall(home);
     const s = JSON.parse(readFileSync(join(home, '.claude', 'settings.json'), 'utf-8'));
     expect(s.model).toBe('opus');
     expect(s.theme).toBe('dark-ansi');
@@ -128,7 +128,7 @@ describe('p-statusline init E2E', () => {
       JSON.stringify({ statusLine: foreign }, null, 2),
       'utf-8',
     );
-    const r = runInit(home);
+    const r = runInstall(home);
     expect(r.backedUp).toBe(true);
     const prev = JSON.parse(
       readFileSync(join(home, '.claude', 'p-statusline', 'statusline.prev.json'), 'utf-8'),
@@ -145,7 +145,7 @@ describe('p-statusline init E2E', () => {
       JSON.stringify({ statusLine: 'legacy-string-value' }, null, 2),
       'utf-8',
     );
-    const r = runInit(home);
+    const r = runInstall(home);
     expect(r.backedUp).toBe(true);
     const prev = JSON.parse(
       readFileSync(join(home, '.claude', 'p-statusline', 'statusline.prev.json'), 'utf-8'),
@@ -154,8 +154,8 @@ describe('p-statusline init E2E', () => {
   });
 
   it('is idempotent when already pointing at our script', () => {
-    runInit(home);
-    const r = runInit(home);
+    runInstall(home);
+    const r = runInstall(home);
     expect(r.alreadyInstalled).toBe(true);
     expect(existsSync(join(home, '.claude', 'p-statusline', 'statusline.prev.json'))).toBe(false);
   });
@@ -163,12 +163,12 @@ describe('p-statusline init E2E', () => {
   it('rejects a settings.json that is not valid JSON', () => {
     mkdirSync(join(home, '.claude'), { recursive: true });
     writeFileSync(join(home, '.claude', 'settings.json'), '{not json', 'utf-8');
-    expect(() => runInit(home)).toThrow(/not valid JSON/);
+    expect(() => runInstall(home)).toThrow(/not valid JSON/);
   });
 
   it('rejects a settings.json whose root is not an object', () => {
     mkdirSync(join(home, '.claude'), { recursive: true });
     writeFileSync(join(home, '.claude', 'settings.json'), '["array"]', 'utf-8');
-    expect(() => runInit(home)).toThrow(/not an object/);
+    expect(() => runInstall(home)).toThrow(/not an object/);
   });
 });

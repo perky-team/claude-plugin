@@ -24,7 +24,7 @@
     {
       "name": "p-statusline",
       "source": "./plugins/p-statusline",
-      "description": "Custom Claude Code status line (context, rate limits, git, tasks, RAM). Skills: init."
+      "description": "Custom Claude Code status line (context, rate limits, git, tasks, RAM). Skills: install."
     }
   ]
 }
