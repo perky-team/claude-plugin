@@ -1,8 +1,9 @@
 ---
 name: install
-description: Install the p-statusline status line into Claude Code. Copies statusline.cjs to a stable path and writes the statusLine block into the user's ~/.claude/settings.json. Use when the user says "install p-statusline", "install statusline", or "set up the status line".
+description: Install the p-statusline status line into Claude Code's settings.
 argument-hint: (no arguments)
 allowed-tools: Bash(echo:*) Bash(node:*) Bash(mkdir:*) Bash(cp:*) Read Write
+disable-model-invocation: true
 ---
 
 # /p-statusline:install

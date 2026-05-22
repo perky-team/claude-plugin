@@ -67,7 +67,7 @@ The resulting status line command becomes:
 
 ## Component: skill `/p-statusline:install`
 
-Frontmatter: `name: install`, a `description` covering the trigger phrases ("install p-statusline", "install statusline", "setup status line"), `argument-hint: (no arguments)`, and an `allowed-tools` list (`Bash`, `Read`, `Write`).
+Frontmatter: `name: install`, a short human-facing `description`, `argument-hint: (no arguments)`, an `allowed-tools` list (`Bash`, `Read`, `Write`), and `disable-model-invocation: true` — the installer mutates the user's `settings.json`, so it must run only on an explicit `/p-statusline:install`, never be auto-selected by the model.
 
 The skill writes to the **user** settings file, `~/.claude/settings.json`, resolved cross-platform from `$HOME` / `%USERPROFILE%`. Hereafter `<home>` = the resolved home directory.
 
