@@ -23,6 +23,13 @@ describe('templates', () => {
       }
     }
 
+    // Only emit a describe block when there is something to test.
+    // A plugin with no templates and no template references in its skills
+    // has nothing for this suite to check — skip to avoid an empty-suite error.
+    // `referenced` (built above) is the union of every template ref across
+    // this plugin's skills, so an empty set means no skill references any.
+    if (templates.length === 0 && referenced.size === 0) continue;
+
     describe(`plugin: ${plugin.name}`, () => {
       if (templates.length > 0) {
         for (const tpl of templates) {

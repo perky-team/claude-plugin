@@ -20,6 +20,11 @@
       "name": "p-tasks",
       "source": "./plugins/p-tasks",
       "description": "Task tracker (task → sub-task) with FS and Jira destinations, one-way sync. Skills: init, add, set, next, summary, sync."
+    },
+    {
+      "name": "p-statusline",
+      "source": "./plugins/p-statusline",
+      "description": "Custom Claude Code status line (context, rate limits, git, tasks, RAM). Skills: install."
     }
   ]
 }
