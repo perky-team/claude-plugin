@@ -71,8 +71,11 @@ describe('p-statusline statusline.cjs', () => {
       },
       workspace: { current_dir: nonGit, project_dir: nonGit },
     }));
-    expect(out).toMatch(/5h 20%/);
-    expect(out).toMatch(/7d 5%/);
+    // Percentages are right-aligned to 3 chars inside the fixed-width
+    // limits sub-segment, so there may be leading spaces between the label
+    // and the number (e.g. "5h  20%", "7d   5%").
+    expect(out).toMatch(/5h\s+20%/);
+    expect(out).toMatch(/7d\s+5%/);
   });
 
   it('omits the git segment when cwd is not a git repository', () => {

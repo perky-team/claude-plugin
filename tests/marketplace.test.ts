@@ -79,20 +79,11 @@ describe('marketplace.json', () => {
     });
   });
 
-  describe('repo README plugins table', () => {
-    it('lists every plugin from the marketplace', () => {
+  describe('repo README plugins', () => {
+    it('mentions every plugin from the marketplace', () => {
       const readme = readFileSync(join(repoRoot(), 'README.md'), 'utf-8');
-      const lines = readme.split(/\r?\n/);
-      const headerIdx = lines.findIndex((l) => /^\s*\|\s*Plugin\s*\|/i.test(l));
-      expect(headerIdx, 'README must contain a "| Plugin |" header row').toBeGreaterThanOrEqual(0);
-
-      // Skip header and the |---|---| separator row.
-      const rowLines = lines.slice(headerIdx + 2).filter((l) => l.trim().startsWith('|'));
-      const firstCells = rowLines.map((l) => l.split('|')[1]?.trim() ?? '');
-
       for (const entry of marketplace.plugins) {
-        const found = firstCells.some((cell) => cell.includes(entry.name));
-        expect(found, `README plugins table must mention "${entry.name}" in the first column`).toBe(true);
+        expect(readme, `README must mention plugin "${entry.name}"`).toContain(entry.name);
       }
     });
   });

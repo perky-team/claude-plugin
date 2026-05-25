@@ -157,7 +157,13 @@ process.stdin.on("end", () => {
     // NOTE: do NOT query the GET /api/oauth/usage HTTP endpoint instead — it
     // rate-limits (HTTP 429) aggressively and stays stuck for the whole
     // session. The stdin field is the supported, request-free source.
-    let limitsSeg = "\x1b[90m5h n/a 7d n/a\x1b[0m";
+    // Fixed-width sub-segment: "5h XXX%[XXXXXX]" or padded "5h n/a" — 15
+    // visible chars. Right-align the percentage (max "100") and the countdown
+    // (max "23h59m" in the 7d window between 1h and 24h before reset) so the
+    // visual landmarks ('%', '[', ']') stay in fixed columns.
+    const LIM_SEG_W = 15;
+    const padLim = s => s + " ".repeat(Math.max(0, LIM_SEG_W - s.length));
+    let limitsSeg = `\x1b[90m${padLim("5h n/a")} ${padLim("7d n/a")}\x1b[0m`;
     (() => {
       try {
         const rl = j.rate_limits || {};
@@ -179,8 +185,8 @@ process.stdin.on("end", () => {
           return `${m % 60}m`;
         };
         const seg = (label, p, epoch) => p == null
-          ? `\x1b[90m${label} n/a\x1b[0m`
-          : `\x1b[90m${label} \x1b[0m${limitColor(p)}${p}%\x1b[0m\x1b[90m[\x1b[0m${resetColor(label, epoch)}${fmtReset(epoch)}\x1b[0m\x1b[90m]\x1b[0m`;
+          ? `\x1b[90m${padLim(`${label} n/a`)}\x1b[0m`
+          : `\x1b[90m${label} \x1b[0m${limitColor(p)}${String(p).padStart(3)}%\x1b[0m\x1b[90m[\x1b[0m${resetColor(label, epoch)}${fmtReset(epoch).padStart(6)}\x1b[0m\x1b[90m]\x1b[0m`;
         limitsSeg = `${seg("5h", fiveHr, fh && fh.resets_at)} ${seg("7d", sevenDay, sd && sd.resets_at)}`;
       } catch (_) {}
     })();
@@ -234,7 +240,7 @@ process.stdin.on("end", () => {
       const totalB = os.totalmem(), freeB = os.freemem();
       if (totalB > 0) {
         const ramPct = Math.round((totalB - freeB) / totalB * 100);
-        ramSeg = `\x1b[90mRAM ${limitColor(ramPct)}${ramPct}%${C.reset}`;
+        ramSeg = `${limitColor(ramPct)}RAM ${ramPct}%${C.reset}`;
       }
     } catch (_) {}
 
@@ -262,10 +268,21 @@ process.stdin.on("end", () => {
     }
 
     let out = parts.join(SEP);
+    // Cap the path width at the limits-section width so the second " | "
+    // separator lines up vertically with line 1. The path is truncated from
+    // the start with a "..." prefix, keeping the folder name (end of path)
+    // visible. Short paths are left as-is — no trailing pad.
+    const limitsVlen = parts[1] ? vlen(parts[1]) : 0;
+    let dirDisplay = dirPath;
+    if (dirPath && limitsVlen > 0 && dirPath.length > limitsVlen) {
+      dirDisplay = limitsVlen <= 3
+        ? dirPath.slice(dirPath.length - limitsVlen)
+        : "..." + dirPath.slice(dirPath.length - (limitsVlen - 3));
+    }
     const line2 = [];
-    if (modelSeg) line2.push(modelSeg);
-    if (dirPath)  line2.push(`${C.dir}${dirPath}${C.reset}`);
-    if (ramSeg)   line2.push(ramSeg);
+    if (modelSeg)    line2.push(modelSeg);
+    if (dirDisplay)  line2.push(`${C.dir}${dirDisplay}${C.reset}`);
+    if (ramSeg)      line2.push(ramSeg);
     if (line2.length) out += "\n" + line2.join(SEP);
 
     process.stdout.write(out);
