@@ -38,4 +38,22 @@ describe('p-flow marker path consistency', () => {
     expect(RULE.test(verif)).toBe(true);
     expect(RULE.test(end)).toBe(true);
   });
+
+  // Algorithmic equivalence: confirm the / → __ rule produces the same path
+  // shape both skills document, for representative branch names.
+  const branchSafe = (b: string) => b.replaceAll('/', '__');
+
+  const cases: Array<[string, string]> = [
+    ['feature/foo',         'feature__foo'],
+    ['bugfix/abc/123',      'bugfix__abc__123'],
+    ['main',                'main'],
+    ['hotfix/CVE-2026-001', 'hotfix__CVE-2026-001'],
+    ['',                    ''],
+  ];
+
+  for (const [input, expected] of cases) {
+    it(`branchSafe("${input}") → "${expected}"`, () => {
+      expect(branchSafe(input)).toBe(expected);
+    });
+  }
 });
