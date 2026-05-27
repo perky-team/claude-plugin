@@ -108,14 +108,28 @@ Complements `npm test`: tests catch structural drift in our manifests/skills, `v
 │   │   │   └── plugin.json
 │   │   ├── README.md
 │   │   ├── docs/superpowers/  ← per-plugin design spec + implementation plan
+│   │   ├── skills/
+│   │   └── tools/           ← Node-based CLI helpers used by skills
+│   ├── p-flow/              ← task development flow + spec templates
+│   │   ├── .claude-plugin/
+│   │   │   └── plugin.json
+│   │   ├── README.md
+│   │   ├── agents/          ← read-only review subagents
+│   │   ├── docs/superpowers/  ← per-plugin design spec + implementation plan
 │   │   └── skills/
-│   └── p-flow/              ← task development flow + spec templates
+│   ├── p-tasks/             ← two-level task tracker with FS / Jira destinations
+│   │   ├── .claude-plugin/
+│   │   │   └── plugin.json
+│   │   ├── README.md
+│   │   ├── docs/
+│   │   ├── skills/
+│   │   └── tools/
+│   └── p-statusline/        ← custom Claude Code status line renderer
 │       ├── .claude-plugin/
 │       │   └── plugin.json
 │       ├── README.md
-│       ├── agents/          ← read-only review subagents
-│       ├── docs/superpowers/  ← per-plugin design spec + implementation plan
-│       └── skills/
+│       ├── skills/
+│       └── statusline/      ← the renderer script copied to ~/.claude/p-statusline/
 └── README.md                ← this file
 ```
 

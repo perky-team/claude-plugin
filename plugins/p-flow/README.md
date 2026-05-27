@@ -51,6 +51,12 @@ specs/<slug>/
 └── plan.md               ← written by writing-plan; review follow-ups appended after each review
 ```
 
+## Known limitations
+
+- **Reviewer scope-discipline is best-effort.** `code-reviewer` and `task-reviewer` ship with strict negative-scope rules + a final self-check pass, but the line between code quality and spec alignment isn't always crisp. In practice, on Sonnet the two reports may have ~20% topical overlap (e.g. `code-reviewer` may surface a plan/impl mismatch as a *Suggestion* with a self-noted "doc consistency" caveat). Read both reports as potentially complementary rather than strictly orthogonal.
+- **Sonnet or stronger is required for review agents.** Weaker models (e.g. Haiku) do not reliably honour the scope-discipline directives — they tend to ignore the negative-scope rule entirely and emit cross-domain findings. The agent frontmatter declares `model: sonnet`; if you fork and downgrade, expect noisier reports.
+- **No automated validation of agent prompt behaviour.** Structural invariants (read-only `tools:`, presence of `## What is NOT your scope`, severity model consistency) are covered by `tests/agents.test.ts`. Behavioural compliance is validated by the manual smoke test in `docs/plans/2026-05-27-task-flow-followups.md` and re-runs whenever a review agent's prompt changes.
+
 ## Install
 
 ```text
