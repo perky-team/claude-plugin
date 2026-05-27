@@ -8,6 +8,8 @@ allowed-tools: Bash(git worktree:*) Bash(git rev-parse:*) Bash(git branch:*) Bas
 
 A worktree is a second checkout of the same repository at a different filesystem path. Useful when you want isolation (different branch + different files on disk) without losing your current checkout's state.
 
+**Announce at start:** *"I'm using the `using-git-worktrees` skill to set up an isolated worktree for this work."*
+
 ## When to use
 
 - Long-running feature work where you also need to fix urgent bugs in the main checkout.

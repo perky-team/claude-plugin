@@ -8,6 +8,8 @@ allowed-tools: Bash Read Glob Grep Edit Write
 
 Treat every review finding as a hypothesis, not a directive. For each one — verify it's correct, decide whether to fix or push back with evidence, then act.
 
+**Announce at start:** *"I'm using the `receiving-code-review` skill to process the review findings rigorously — verify first, then fix or reject with evidence."*
+
 ## When to use
 
 - Working through a `## Review follow-ups — <date>` item in `specs/<slug>/plan.md` (the primary path — these were written by `requesting-*-review`).

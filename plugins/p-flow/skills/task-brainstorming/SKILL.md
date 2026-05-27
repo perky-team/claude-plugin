@@ -8,6 +8,8 @@ allowed-tools: Read Write Edit
 
 Elicit requirements and materialize them in `specs/<slug>/` using p-flow templates. Terminal action: offer to invoke `writing-plan` after user approves.
 
+**Announce at start:** *"I'm using the `task-brainstorming` skill to produce the specification for this task."*
+
 ## Inputs
 
 - `<slug>` — required. Ask if missing.

@@ -8,6 +8,8 @@ allowed-tools: Bash Read Write Edit Glob Grep
 
 Before writing any production code, write a test that fails for the right reason. Then write the minimum code to make it pass. Then refactor with the test as a safety net.
 
+**Announce at start:** *"I'm using the `test-driven-development` skill to enforce RED-GREEN-REFACTOR for this change."*
+
 ## When to use
 
 - About to add a new function / endpoint / class / handler / pipeline stage that has observable behavior.

@@ -8,6 +8,8 @@ allowed-tools: Bash Read Write Edit
 
 Before any claim of completion ("done", "fixed", "ready", "implemented", "should work", "ready for review"), or before any `git commit`, run real checks and **quote concrete output**. Never claim success from intuition.
 
+**Announce at start:** *"I'm using the `verification-before-completion` skill to confirm tests and lints pass before claiming this is done."*
+
 ## When to run
 
 - Any assertion of completion in chat.

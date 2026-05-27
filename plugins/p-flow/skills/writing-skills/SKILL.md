@@ -8,6 +8,8 @@ allowed-tools: Read Write Edit Glob
 
 A skill in p-flow is a Markdown file at `skills/<name>/SKILL.md` with YAML frontmatter + body. This skill documents what makes a good p-flow skill.
 
+**Announce at start:** *"I'm using the `writing-skills` skill to author a new p-flow skill per the plugin's conventions."*
+
 ## When to use
 
 - Creating a new skill (new directory under `plugins/p-flow/skills/`).

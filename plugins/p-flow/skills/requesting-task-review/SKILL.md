@@ -8,6 +8,8 @@ allowed-tools: Bash(git diff:*) Bash(git status:*) Bash(git log:*) Bash(git rev-
 
 Run a spec-alignment review on the current branch's diff against `specs/<slug>/*`, triage findings, and integrate accepted findings into `plan.md`.
 
+**Announce at start:** *"I'm using the `requesting-task-review` skill to check the diff against the spec/plan for alignment."*
+
 ## Preconditions
 
 1. **Resolve the base branch** as in `requesting-code-review` precondition 1 (try `main`, then `master`, then `git remote show origin | grep 'HEAD branch'`, then ask). Call the result `<base>`.

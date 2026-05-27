@@ -8,6 +8,8 @@ allowed-tools: Read Write Edit
 
 Turn the brainstorm artifact into a concrete, ordered plan. One file: `specs/<slug>/plan.md`.
 
+**Announce at start:** *"I'm using the `writing-plan` skill to turn the spec into an implementation plan."*
+
 ## Inputs
 
 - `specs/<slug>/specification.md` — required. If missing, stop and tell the user to run `task-brainstorming` first.

@@ -8,6 +8,8 @@ allowed-tools: Bash(git diff:*) Bash(git status:*) Bash(git log:*) Bash(git rev-
 
 Run a code-quality review on the current branch's diff, triage the findings, and integrate accepted findings into `plan.md`.
 
+**Announce at start:** *"I'm using the `requesting-code-review` skill to run a code-quality review on the branch diff."*
+
 ## Preconditions
 
 1. **Resolve the base branch** for the diff: try `main` first, then `master`. If neither exists locally → run `git remote show origin | grep 'HEAD branch'` to read the remote's default; use that. If that also fails → ask the user for the base branch name. Call the result `<base>`.
