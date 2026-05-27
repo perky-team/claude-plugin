@@ -119,3 +119,32 @@ export const findTemplates = (pluginDir: string): Template[] => {
       };
     });
 };
+
+export interface Agent {
+  filename: string;
+  name: string;
+  agentMdPath: string;
+  frontmatter: Record<string, unknown>;
+  body: string;
+  raw: string;
+}
+
+export const findAgents = (pluginDir: string): Agent[] => {
+  const agentsDir = join(pluginDir, 'agents');
+  if (!existsSync(agentsDir)) return [];
+  return readdirSync(agentsDir, { withFileTypes: true })
+    .filter((e) => e.isFile() && e.name.endsWith('.md'))
+    .map((e) => {
+      const agentMdPath = join(agentsDir, e.name);
+      const raw = readFileSync(agentMdPath, 'utf-8');
+      const parsed = matter(raw);
+      return {
+        filename: e.name,
+        name: e.name.replace(/\.md$/, ''),
+        agentMdPath,
+        frontmatter: parsed.data,
+        body: parsed.content,
+        raw,
+      };
+    });
+};
