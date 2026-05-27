@@ -10,7 +10,7 @@ Disciplined task development flow for Claude Code: skills + subagents that walk 
 | `/p-flow:task-start <slug> [--worktree]` | Open a new task: ask branch type, create `<type>/<slug>` branch (and optional worktree), open `specs/<slug>/`, invoke brainstorming. |
 | `/p-flow:task-end` | Finalize: pre-check the plan and verification marker, push the branch, recommend an MR with copy-ready `gh` and `glab` commands. |
 
-## Skills (auto-invoked)
+## Skills (invoked by commands or context)
 
 | Skill | When |
 |---|---|
