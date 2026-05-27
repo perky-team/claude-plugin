@@ -9,6 +9,8 @@ allowed-tools: Bash(git rev-parse:*) Bash(git status:*) Bash(git branch:*) Bash(
 
 Open a new task in the p-flow flow. Always read-only checks first, then atomic state changes.
 
+**Announce at start:** *"I'm using the `task-start` skill to open a new task — branch, spec dir, brainstorming."*
+
 ## Arguments
 
 - `<slug>` — kebab-case, lowercase, ≤ 50 chars. Required. If missing — ask the user.

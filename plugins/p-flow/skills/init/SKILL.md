@@ -9,6 +9,8 @@ allowed-tools: Bash(git rev-parse:*) Bash(mkdir:*) Bash(test:*) Read Write
 
 You are scaffolding the `p-flow` workflow ruleset inside the current repo.
 
+**Announce at start:** *"I'm using the `init` skill to scaffold p-flow rules + templates + secret-deny-list into this repo."*
+
 ## Step 1 — Find the repo root
 
 Run `git rev-parse --show-toplevel` via Bash. If it fails (not a git repo), ask the user **once** whether to use the current working directory as the root. If they decline, stop. If they accept, use CWD.
