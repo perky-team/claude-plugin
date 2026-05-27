@@ -14,7 +14,7 @@
     {
       "name": "p-flow",
       "source": "./plugins/p-flow",
-      "description": "Workflow rules for Claude: deny-permissions for secrets, Conventional Commits + <type>/<slug> branches, spec templates. Skills: init."
+      "description": "Task development flow for Claude: secrets deny-list, Conventional Commits + <type>/<slug> branches, spec templates, brainstorm → plan → verify → review → push pipeline. Commands: init, task-start, task-end. Skills: init, task-brainstorming, writing-plan, verification-before-completion, requesting-code-review, requesting-task-review. Subagents: code-reviewer, task-reviewer."
     },
     {
       "name": "p-tasks",
