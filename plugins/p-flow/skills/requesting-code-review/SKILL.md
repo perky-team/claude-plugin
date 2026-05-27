@@ -1,7 +1,7 @@
 ---
 name: requesting-code-review
-description: Use after `verification-before-completion` passes and there is a diff worth reviewing. Dispatches the `code-reviewer` subagent on the branch diff, then leads the user through severity-aware triage and writes accepted findings into `plan.md` as follow-up steps with audit-tracked decisions.
-allowed-tools: Bash(git diff:*) Bash(git status:*) Bash(git log:*) Bash(git rev-parse:*) Bash(git merge-base:*) Read Write Edit Glob Agent
+description: Use after `verification-before-completion` passes and there is a diff worth reviewing. Dispatches a code-review subagent (via Task tool with `general-purpose` + inline template) on the branch diff, then leads the user through severity-aware triage and writes accepted findings into `plan.md` as follow-up steps with audit-tracked decisions.
+allowed-tools: Bash(git diff:*) Bash(git status:*) Bash(git log:*) Bash(git rev-parse:*) Bash(git merge-base:*) Read Write Edit Glob Task
 ---
 
 # requesting-code-review
@@ -27,7 +27,12 @@ Capture:
 
 ### 2. Dispatch the agent
 
-Use the Agent tool with `subagent_type: code-reviewer`. Pass the brief composed above plus the literal paths to `specification.md` and `plan.md` so the agent can read them for context.
+Use the Task tool with `subagent_type: general-purpose`. The prompt MUST be assembled in this order:
+
+1. Read the template at `${CLAUDE_SKILL_DIR}/code-reviewer.md` (the file colocated with this SKILL.md) and inline its full content verbatim at the top of the prompt.
+2. Append a `---` separator and then a `## Brief` section containing the goal, what-was-done, focus areas, diff command, and the literal paths to `specification.md` and `plan.md` composed above.
+
+This dispatches `general-purpose` with code-reviewer instructions — works whether or not the p-flow plugin is installed in the target session.
 
 ### 3. Receive findings
 
