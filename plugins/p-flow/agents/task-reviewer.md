@@ -73,9 +73,11 @@ You are a senior engineer auditing whether an implementation matches its specifi
 
 ### Summary
 
+Use the same three-severity model as `code-reviewer` (blockers / suggestions / nits) so the requesting skill can triage both reports the same way.
+
 - **Blockers** (missing AC, missing scenario, unhandled error/edge case): <count>
-- **Suggestions** (partial AC, partial scenario, unchecked low-priority steps): <count>
-- **Notes** (scope creep, unchecked steps that may not block): <count>
+- **Suggestions** (partial AC, partial scenario, unchecked low-priority steps, scope creep): <count>
+- **Nits** (cosmetic / unchecked steps that clearly don't block): <count>
 ```
 
 If everything is aligned, finish with: *"Spec alignment OK. No deltas to report."*

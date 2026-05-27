@@ -10,8 +10,9 @@ Run a code-quality review on the current branch's diff, triage the findings, and
 
 ## Preconditions
 
-1. There is a diff to review. Check: `git diff main...HEAD` (or `git diff master...HEAD`) shows non-empty output. If empty — say: *"No diff to review. Run after implementing some steps."*
-2. `specs/<slug>/specification.md` and `specs/<slug>/plan.md` exist. Determine `<slug>` from the current branch name (strip the `<type>/` prefix) or ask the user.
+1. **Resolve the base branch** for the diff: try `main` first, then `master`. If neither exists locally → run `git remote show origin | grep 'HEAD branch'` to read the remote's default; use that. If that also fails → ask the user for the base branch name. Call the result `<base>`.
+2. There is a diff to review. Check: `git diff <base>...HEAD` shows non-empty output. If empty — say: *"No diff to review. Run after implementing some steps."*
+3. `specs/<slug>/specification.md` and `specs/<slug>/plan.md` exist. Determine `<slug>` from the current branch name (strip the `<type>/` prefix) or ask the user.
 
 ## Procedure
 
@@ -22,7 +23,7 @@ Capture:
 - **Goal**: one paragraph distilled from `specification.md` "Overview / Problem Statement / Proposed Solution".
 - **What was done**: the list of checked items under `## Steps` in `plan.md` (do not include follow-ups or audit entries).
 - **Focus areas**: by default — correctness, security, dead code, style consistency. If the user requested specific focus, prepend it.
-- **Diff command**: `git diff $(git merge-base main HEAD)...HEAD` (use `master` if no `main` branch). Use `git rev-parse --abbrev-ref HEAD` to know the current branch.
+- **Diff command**: `git diff $(git merge-base <base> HEAD)...HEAD` where `<base>` is the branch resolved in precondition 1. Use `git rev-parse --abbrev-ref HEAD` to know the current branch.
 
 ### 2. Dispatch the agent
 
@@ -36,7 +37,7 @@ The agent returns a structured Markdown report with `### Blockers`, `### Suggest
 
 For each severity, follow exactly this protocol:
 
-- **Blockers**: one at a time. For each, ask the user with three buttons: `fix` / `defer` / `reject`. If `defer` or `reject` — require a one-line reason. No defaults — user must answer.
+- **Blockers**: one at a time. For each, ask the user with three options: `fix` / `defer` / `reject`. If `defer` or `reject` — require a one-line reason. No defaults — user must answer.
 
 - **Suggestions**: present as a numbered list (up to 10 per batch). Ask the user once: *"Reply with comma-separated indices to fix (e.g. `1,3,5`), or `all`, or `none`. Items not selected default to `defer` with reason 'not selected'. You may add explicit reject reasons inline like `2:reject (false positive: X)`."*
 

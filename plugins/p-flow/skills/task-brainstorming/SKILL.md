@@ -35,7 +35,7 @@ If the user's repo has no `.claude/templates/p-flow/` (i.e. `/p-flow:init` was n
 
 - Dir does not exist → create it. Go to from-scratch flow.
 - Dir exists, no `specification.md` → from-scratch flow.
-- `specification.md` exists with no `{{PLACEHOLDERS}}` left → switch to **refinement** mode: read the file, ask the user what to revise, edit in place.
+- `specification.md` exists with no `{{PLACEHOLDERS}}` left → ask the user: refine in place / discard and restart / cancel. On *refine in place* → enter **refinement** mode (read the file, ask what to revise, edit in place). On *discard* → delete the existing spec contents and re-enter from-scratch flow.
 - `specification.md` exists with `{{PLACEHOLDERS}}` still present → ask: resume filling / discard and restart / cancel.
 
 ### 2. Dialog

@@ -41,8 +41,8 @@ Before any claim of completion ("done", "fixed", "ready", "implemented", "should
    ```
 
 5. **Special cases:**
-   - No tests found → say literally: "This repo has no test suite I can detect. I cannot verify by running tests."
-   - Tests fail → say literally: "Verification failed." Do NOT claim done. List the failing tests. Suggest re-entering implementation or `systematic-debugging` (Wave 2).
+   - No tests found → say literally: "This repo has no test suite I can detect. I cannot verify by running tests." **Do NOT write the success marker** — there is nothing to verify; skip steps 6 and 7. Stop.
+   - Tests fail → say literally: "Verification failed." Do NOT claim done. List the failing tests. Suggest re-entering implementation or `systematic-debugging` (Wave 2). **Do NOT write the success marker.** Stop.
    - Tests pass + lint passes → proceed to step 6.
    - User-facing feature changed (UI, CLI, endpoint) → also actually exercise the feature once. Quote the result.
 
@@ -75,7 +75,7 @@ Before any claim of completion ("done", "fixed", "ready", "implemented", "should
 ## Hard rules
 
 - **Never fake success.** Never say "tests pass" without running them. Never paraphrase output.
-- **Never write the marker on failure.** Marker presence means "last verification succeeded".
+- **Marker is written only when at least one verification command actually ran and returned exit code 0.** "No tests detected" and "tests failed" both leave the marker untouched. Marker presence means "last verification succeeded".
 - **Never bypass** the deny-list in `.claude/settings.json`.
 
 ## What this skill does NOT do

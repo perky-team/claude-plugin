@@ -10,8 +10,9 @@ Run a spec-alignment review on the current branch's diff against `specs/<slug>/*
 
 ## Preconditions
 
-1. There is a diff to review. Same check as `requesting-code-review`.
-2. `specs/<slug>/specification.md` and `specs/<slug>/plan.md` exist. Determine `<slug>` from the current branch name (strip the `<type>/` prefix) or ask the user.
+1. **Resolve the base branch** as in `requesting-code-review` precondition 1 (try `main`, then `master`, then `git remote show origin | grep 'HEAD branch'`, then ask). Call the result `<base>`.
+2. There is a diff to review. Check: `git diff <base>...HEAD` is non-empty. If empty — say: *"No diff to review."*
+3. `specs/<slug>/specification.md` and `specs/<slug>/plan.md` exist. Determine `<slug>` from the current branch name (strip the `<type>/` prefix) or ask the user.
 
 ## Procedure
 
@@ -23,7 +24,7 @@ Capture:
 - **Feature path**: `specs/<slug>/feature.feature` (only if exists).
 - **ADR path**: `specs/<slug>/adr.md` (only if exists).
 - **Plan path**: `specs/<slug>/plan.md` (required).
-- **Diff command**: `git diff $(git merge-base main HEAD)...HEAD` (use `master` if no `main`).
+- **Diff command**: `git diff $(git merge-base <base> HEAD)...HEAD` where `<base>` is the branch resolved in precondition 1.
 
 ### 2. Dispatch the agent
 
@@ -35,11 +36,11 @@ The agent returns a Markdown report with sections: Acceptance criteria coverage,
 
 ### 4. Triage protocol
 
-Same severity-aware protocol as `requesting-code-review` (§4):
+Same severity-aware protocol as `requesting-code-review` (§4). The three severities are **blocker / suggestion / nit** — the same model the code review uses. Map task-review findings as:
 
 - "missing AC" / "missing scenario" / "unhandled @error" → severity **blocker**, one at a time.
 - "partial AC" / "partial scenario" / "unchecked low-priority step" → severity **suggestion**, batch with indices.
-- "scope creep" / "note" → severity **note**, default `defer` with reason "acknowledged"; user opts in to convert to plan step.
+- "scope creep" → severity **suggestion** as well (so it lands in the audit log on `defer`/`reject` and can be converted to a follow-up on `fix`). Default action: `defer` with reason "acknowledged" if the user replies with `none`.
 
 For each triage outcome:
 

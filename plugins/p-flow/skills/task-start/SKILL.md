@@ -2,7 +2,7 @@
 name: task-start
 description: Entry point to the p-flow task development flow. Resolves slug + branch type + optional worktree, runs all conflict checks BEFORE any side effects, then atomically creates the branch (and worktree), opens `specs/<slug>/`, and invokes `task-brainstorming`. Usage `/p-flow:task-start <slug> [--worktree]`.
 argument-hint: <slug> [--worktree]
-allowed-tools: Bash(git rev-parse:*) Bash(git status:*) Bash(git branch:*) Bash(git checkout:*) Bash(git switch:*) Bash(git worktree:*) Bash(mkdir:*) Bash(test:*) Read Write
+allowed-tools: Bash(git rev-parse:*) Bash(git status:*) Bash(git branch:*) Bash(git switch:*) Bash(git worktree:*) Bash(mkdir:*) Bash(test:*) Read Write
 ---
 
 # /p-flow:task-start
@@ -47,13 +47,16 @@ Open a new task in the p-flow flow. Always read-only checks first, then atomic s
 
 Only after Phase A completes without `cancel`:
 
-7. **Create the branch.** Run `git branch <branch> <base-ref>` then `git switch <branch>` (or skip `switch` if `--worktree` will check out elsewhere).
+7. **Create or check out the branch.** Two cases:
 
-   If user chose "check out existing" in Phase A — instead run `git switch <branch>`.
+   - **User chose "check out existing"** in Phase A → run **only** `git switch <branch>`. Do NOT run `git branch` — the branch already exists, and `git branch <branch>` would fail with `fatal: A branch named '<branch>' already exists`.
+   - **Otherwise** (new branch) → run `git branch <branch> <base-ref>` to create it. Then run `git switch <branch>` — UNLESS `--worktree` is in play, in which case skip `switch` (the worktree will check out the branch elsewhere in step 8).
 
-8. **(if `--worktree`) Create the worktree.** Run `git worktree add <worktree-path> <branch>`. Print the path:
+8. **(if `--worktree`) Create the worktree and hand off.** Run `git worktree add <worktree-path> <branch>`, then print:
 
-   *"Worktree created at `<worktree-path>`. Open a new terminal there to work on this task."*
+   *"Worktree created at `<worktree-path>`. Open a new Claude Code session in that directory and run `/p-flow:task-start <slug>` (without `--worktree`) again — or just `task-brainstorming` directly — to continue. This session stays in the original checkout."*
+
+   **Stop here.** Do NOT proceed to steps 9–10 in this session — they would write `specs/<slug>/` and invoke brainstorming in the *original* checkout, defeating worktree isolation. The new session in the worktree picks up from step 9.
 
 9. **Ensure `specs/<slug>/` exists.** `mkdir -p specs/<slug>/`. If the user chose "continue editing existing" — leave its contents alone.
 
