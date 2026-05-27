@@ -14,7 +14,7 @@
     {
       "name": "p-flow",
       "source": "./plugins/p-flow",
-      "description": "Task development flow for Claude: secrets deny-list, Conventional Commits + <type>/<slug> branches, spec templates, brainstorm → plan → TDD → verify → review → push pipeline (review skills dispatch general-purpose with inline reviewer templates). Commands: init, task-start, task-end. Skills: using-p-flow, init, task-brainstorming, writing-plan (TDD-aligned or generic), test-driven-development, verification-before-completion, requesting-code-review, requesting-task-review, receiving-code-review. Discoverable via SessionStart hook."
+      "description": "Task development flow for Claude: secrets deny-list, Conventional Commits + <type>/<slug> branches, spec templates, brainstorm → plan → TDD → verify → review → push pipeline (review skills dispatch general-purpose with inline reviewer templates). Commands: init, task-start, task-end. Skills: using-p-flow, init, task-brainstorming, writing-plan (TDD-aligned or generic), test-driven-development, verification-before-completion, requesting-code-review, requesting-task-review, receiving-code-review, using-git-worktrees, writing-skills. Discoverable via SessionStart hook."
     },
     {
       "name": "p-tasks",
