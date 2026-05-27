@@ -82,6 +82,7 @@ Each test file defends one invariant; if you change behaviour that affects an in
 | `tests/p-flow-verification-e2e.test.ts` | executable spec for marker-write + .gitignore-append logic (re-implementation; update in lockstep with `verification-before-completion/SKILL.md`) |
 | `tests/p-flow-cross-skill-consistency.test.ts` | plan.md canonical section spellings per file; branch type list |
 | `tests/review-template-refs.test.ts` | Reviewer template files exist + contain `## What is NOT your scope` |
+| `tests/p-flow-init-phase2.test.ts` | `init/SKILL.md` Step 2 state-machine has 4 rows + uses `grep -q .` (not the broken `head -1`); README Idempotency table matches the SKILL state-machine cell-for-cell; Step 9 placeholder names exist in `specification.template.md` |
 
 ## How to add a new skill
 
