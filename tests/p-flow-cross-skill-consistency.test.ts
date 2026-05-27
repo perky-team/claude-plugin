@@ -12,10 +12,17 @@ const read = (rel: string) => readFileSync(join(repoRoot(), rel), 'utf-8');
 // heading from the named file → test failure.
 
 const PLAN_SECTION_CONTRACTS: Record<string, string[]> = {
-  // writing-plan WRITES the initial template; references only the sections
-  // it actually emits. `## Review follow-ups` / `## Review decisions (audit)`
-  // are created lazily by the review skills, not by writing-plan.
-  'plugins/p-flow/skills/writing-plan/SKILL.md': [
+  // Post-Wave-C: writing-plan no longer inlines a template; it delegates to
+  // `_shared/templates/plan-{generic,tdd}.template.md`. Those files emit
+  // the canonical section headings; writing-plan only references them by
+  // path. The two template files are now the source of truth for plan
+  // section names.
+  'plugins/p-flow/skills/_shared/templates/plan-generic.template.md': [
+    '## Steps',
+    '## Open questions',
+    '## Risks',
+  ],
+  'plugins/p-flow/skills/_shared/templates/plan-tdd.template.md': [
     '## Steps',
     '## Open questions',
     '## Risks',
