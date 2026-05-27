@@ -36,8 +36,8 @@ Write this content into `specs/<slug>/plan.md`:
    - **Files**: <expected affected files>
 
 2. [ ] <action>
-   - **Acceptance**: ...
-   - **Files**: ...
+   - **Acceptance**: <how to know this step is done — concrete and checkable>
+   - **Files**: <expected affected files>
 
 ## Open questions
 
