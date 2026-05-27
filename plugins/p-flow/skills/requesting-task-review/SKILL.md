@@ -1,7 +1,7 @@
 ---
 name: requesting-task-review
-description: Use after `verification-before-completion` passes and the implementation should be checked against the spec. Dispatches the `task-reviewer` subagent with paths to spec, feature.feature, adr.md, plan.md, and the branch diff. Triages findings into `plan.md` follow-ups with audit-tracked decisions. Orthogonal to `requesting-code-review` (code quality vs spec alignment).
-allowed-tools: Bash(git diff:*) Bash(git status:*) Bash(git log:*) Bash(git rev-parse:*) Bash(git merge-base:*) Read Write Edit Glob Agent
+description: Use after `verification-before-completion` passes and the implementation should be checked against the spec. Dispatches a task-review subagent (via Task tool with `general-purpose` + inline template) with paths to spec, feature.feature, adr.md, plan.md, and the branch diff. Triages findings into `plan.md` follow-ups with audit-tracked decisions. Orthogonal to `requesting-code-review` (code quality vs spec alignment).
+allowed-tools: Bash(git diff:*) Bash(git status:*) Bash(git log:*) Bash(git rev-parse:*) Bash(git merge-base:*) Read Write Edit Glob Task
 ---
 
 # requesting-task-review
@@ -28,7 +28,12 @@ Capture:
 
 ### 2. Dispatch the agent
 
-Use the Agent tool with `subagent_type: task-reviewer`. Pass the four paths and the diff command.
+Use the Task tool with `subagent_type: general-purpose`. Assemble the prompt in this order:
+
+1. Read the template at `${CLAUDE_SKILL_DIR}/task-reviewer.md` (the file colocated with this SKILL.md) and inline its full content verbatim at the top.
+2. Append a `---` separator and then a `## Brief` section containing the four spec/plan paths and the diff command.
+
+This dispatches `general-purpose` with task-reviewer instructions — works whether or not the p-flow plugin is installed in the target session.
 
 ### 3. Receive findings
 
