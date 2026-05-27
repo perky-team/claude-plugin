@@ -6,7 +6,7 @@ Disciplined task development flow for Claude Code: skills + subagents that walk 
 
 | Command | Purpose |
 |---|---|
-| `/p-flow:init` | One-time per repo. Writes `.claude/settings.json` (secrets deny-list), `.claude/rules/p-flow.md` (rules), and `.claude/templates/p-flow/` (spec/feature/ADR templates). |
+| `/p-flow:init` | Bootstrap p-flow into a new repo. Phase 1 — scaffold rules, templates, secret-deny-list. Phase 2 — brainstorm initial feature list with the user and create stub specs in `specs/<slug>/`. One-time per repo (state-machine guard). |
 | `/p-flow:task-start <slug> [--worktree]` | Open a new task: ask branch type, create `<type>/<slug>` branch (and optional worktree), open `specs/<slug>/`, invoke brainstorming. |
 | `/p-flow:task-end` | Finalize: pre-check the plan and verification marker, push the branch, recommend an MR with copy-ready `gh` and `glab` commands. |
 
