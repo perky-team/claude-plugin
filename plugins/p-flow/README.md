@@ -10,10 +10,17 @@ Disciplined task development flow for Claude Code: skills + subagents that walk 
 | `/p-flow:task-start <slug> [--worktree]` | Open a new task: ask branch type, create `<type>/<slug>` branch (and optional worktree), open `specs/<slug>/`, invoke brainstorming. |
 | `/p-flow:task-end` | Finalize: pre-check the plan and verification marker, push the branch, recommend an MR with copy-ready `gh` and `glab` commands. |
 
+## Discovery
+
+p-flow ships a `SessionStart` hook (`hooks/hooks.json` + `hooks/session-start`) that surfaces the `using-p-flow` skill as a `<system-reminder>` whenever a Claude Code session starts, after `/clear`, and after auto-compaction. This is how Claude finds p-flow's surface without keyword guessing.
+
+To disable: remove the `SessionStart` entry from `hooks/hooks.json`, or globally remove the plugin.
+
 ## Skills (invoked by commands or context)
 
 | Skill | When |
 |---|---|
+| `using-p-flow` | Auto-emitted by the SessionStart hook on every fresh session / `/clear` / auto-compact. Establishes the p-flow surface for the model — lists commands, skills, hard rules. |
 | `task-brainstorming` | Right after `/p-flow:task-start`. Produces `specs/<slug>/{specification.md, feature.feature?, adr.md?}`. |
 | `writing-plan` | After spec is approved. Produces `specs/<slug>/plan.md` (5–15 steps, each with acceptance criteria). |
 | `verification-before-completion` | Before any "done" claim or commit. Quotes test/lint output. Writes a state marker so `task-end` knows verification ran. |
