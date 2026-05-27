@@ -9,6 +9,10 @@ allowed-tools: Bash(git status:*) Bash(git rev-parse:*) Bash(git log:*) Bash(git
 
 Finalize the task: verify discipline, push the branch, recommend an MR.
 
+## Design note
+
+task-end deliberately offers no options menu (no "merge / open PR / cleanup / cancel" branching, unlike `superpowers:finishing-a-development-branch`). The skill does push + MR-recommend, then stops. Rationale: `git merge` / `gh pr merge` / branch cleanup are user-driven decisions made outside the AI loop; offering a menu inside the skill conflates "what to recommend" (this skill's job) with "what to do next" (the user's call). If you find yourself wanting a menu here, use the host's web UI or `gh` / `glab` CLI directly — both produce a clearer audit trail than a chat-driven decision.
+
 ## Pre-checks
 
 1. **Not on a protected branch.** Run `git rev-parse --abbrev-ref HEAD`. If output is `main`, `master`, or `develop` — refuse: *"You're on a protected branch. `/p-flow:task-end` only finalizes feature branches."*
