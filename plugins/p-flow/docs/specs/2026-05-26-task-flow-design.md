@@ -99,9 +99,13 @@ A layered architecture:
                               │
                               ▼
 ┌──────────────────────────────────────────────────────────────┐
-│ Subagents (isolated, read-only review jobs)                  │
-│   code-reviewer       (used by requesting-code-review)       │
-│   task-reviewer       (used by requesting-task-review)       │
+│ Reviewer templates (inline, dispatched as general-purpose)   │
+│   skills/requesting-code-review/code-reviewer.md             │
+│   skills/requesting-task-review/task-reviewer.md             │
+│                                                              │
+│   (Wave A 2026-05-27: migrated from registered agents/ to    │
+│    colocated templates per superpowers v5.1.0 pattern; works │
+│    without plugin install at the target session.)            │
 └──────────────────────────────────────────────────────────────┘
                               │
                               ▼

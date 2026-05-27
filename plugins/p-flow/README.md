@@ -17,15 +17,19 @@ Disciplined task development flow for Claude Code: skills + subagents that walk 
 | `task-brainstorming` | Right after `/p-flow:task-start`. Produces `specs/<slug>/{specification.md, feature.feature?, adr.md?}`. |
 | `writing-plan` | After spec is approved. Produces `specs/<slug>/plan.md` (5–15 steps, each with acceptance criteria). |
 | `verification-before-completion` | Before any "done" claim or commit. Quotes test/lint output. Writes a state marker so `task-end` knows verification ran. |
-| `requesting-code-review` | After verification passes. Dispatches `code-reviewer` subagent; triages findings into `plan.md` follow-ups. |
-| `requesting-task-review` | Same trigger as code review, orthogonal lens. Dispatches `task-reviewer` subagent; checks spec/plan alignment. |
+| `requesting-code-review` | After verification passes. Dispatches `general-purpose` with the colocated `code-reviewer.md` template; triages findings into `plan.md` follow-ups. |
+| `requesting-task-review` | Same trigger as code review, orthogonal lens. Dispatches `general-purpose` with the colocated `task-reviewer.md` template; checks spec/plan alignment. |
 
-## Subagents
+## Reviewer templates
 
-| Agent | Purpose | Tools |
+The `requesting-code-review` and `requesting-task-review` skills dispatch the **`general-purpose`** subagent via the `Task` tool, inlining a reviewer prompt template from the skill's own directory:
+
+| Template | Used by | Purpose |
 |---|---|---|
-| `code-reviewer` | Code-quality review of the branch diff. Returns findings by severity (blocker/suggestion/nit). | Read-only. |
-| `task-reviewer` | Spec-alignment review: acceptance criteria, feature scenarios, plan-step coverage, scope creep. | Read-only. |
+| [`skills/requesting-code-review/code-reviewer.md`](./skills/requesting-code-review/code-reviewer.md) | `requesting-code-review` | Code-quality review of the branch diff. Returns findings by severity (blocker / suggestion / nit). Read-only. |
+| [`skills/requesting-task-review/task-reviewer.md`](./skills/requesting-task-review/task-reviewer.md) | `requesting-task-review` | Spec-alignment review: acceptance criteria, feature scenarios, plan-step coverage, scope creep. Read-only. |
+
+This pattern (inline templates rather than registered subagents) means the review skills work in any Claude Code session — no plugin install required at the target.
 
 ## What `/p-flow:init` writes
 

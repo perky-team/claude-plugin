@@ -1,7 +1,7 @@
 {
   "name": "p-flow",
   "version": "0.2.0",
-  "description": "Disciplined task development flow for Claude Code: secrets deny-list, Conventional Commits + <type>/<slug> branches, spec templates, and a skill+agent stack for brainstorm → plan → verify → review → push. Commands: init, task-start, task-end. Skills: init, task-brainstorming, writing-plan, verification-before-completion, requesting-code-review, requesting-task-review. Subagents: code-reviewer, task-reviewer.",
+  "description": "Disciplined task development flow for Claude Code: secrets deny-list, Conventional Commits + <type>/<slug> branches, spec templates, and a skill stack for brainstorm → plan → verify → review → push (review skills dispatch general-purpose subagents with inline reviewer templates). Commands: init, task-start, task-end. Skills: init, task-brainstorming, writing-plan, verification-before-completion, requesting-code-review, requesting-task-review.",
   "author": {
     "name": "Andrey Sukharev",
     "email": "andrey.sukharev@exinity.com"
