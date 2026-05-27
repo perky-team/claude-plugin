@@ -14,6 +14,36 @@ Open a new task in the p-flow flow. Always read-only checks first, then atomic s
 - `<slug>` — kebab-case, lowercase, ≤ 50 chars. Required. If missing — ask the user.
 - `--worktree` — optional flag. If present, the new branch is checked out in a fresh git worktree at `<repo-parent>/<repo-dir>-<slug>` instead of switching the current checkout.
 
+## Flow
+
+```dot
+digraph task_start {
+    "Verify git repo + clean tree" [shape=box];
+    "Ask branch type" [shape=diamond];
+    "Compute targets (branch, spec-dir, optional worktree)" [shape=box];
+    "Conflict scan" [shape=diamond];
+    "Determine branch base" [shape=diamond];
+    "Cancel" [shape=doublecircle];
+    "Create or checkout branch" [shape=box];
+    "Worktree?" [shape=diamond];
+    "Create worktree, stop session" [shape=doublecircle];
+    "mkdir specs/<slug>/" [shape=box];
+    "Invoke task-brainstorming" [shape=doublecircle];
+
+    "Verify git repo + clean tree" -> "Ask branch type";
+    "Ask branch type" -> "Compute targets (branch, spec-dir, optional worktree)";
+    "Compute targets (branch, spec-dir, optional worktree)" -> "Conflict scan";
+    "Conflict scan" -> "Cancel" [label="cancel"];
+    "Conflict scan" -> "Determine branch base" [label="ok / resolved"];
+    "Determine branch base" -> "Cancel" [label="cancel"];
+    "Determine branch base" -> "Create or checkout branch" [label="confirmed"];
+    "Create or checkout branch" -> "Worktree?";
+    "Worktree?" -> "Create worktree, stop session" [label="--worktree"];
+    "Worktree?" -> "mkdir specs/<slug>/" [label="no"];
+    "mkdir specs/<slug>/" -> "Invoke task-brainstorming";
+}
+```
+
 ## Phase A — read-only resolution (no side effects)
 
 1. **Verify git repo.** Run `git rev-parse --show-toplevel`. If it fails — stop and tell the user: *"Not a git repo. Run `git init` first."*
