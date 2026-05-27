@@ -69,3 +69,25 @@ Specs live under `specs/`. Each non-trivial feature gets its own subdirectory:
 2. **When reading** a spec: expect this structure (headings, sections, Gherkin tags `@happy-path` / `@error` / `@edge-case`). If the file structure does not match, flag it as "not in p-flow format" and do not make false assumptions about missing or extra content.
 3. **ADR numbers** are monotonic within a single file. A new file starts at `ADR-001`. Status ∈ `Proposed | Accepted | Deprecated | Superseded by ADR-XXX`.
 4. **Templates** under `.claude/templates/p-flow/` are the team's source of truth. The team may adapt them per project, but only in a **backwards-compatible** way: do not delete required sections (skills and other agents depend on the headings being present).
+
+## 4. Skills and flow
+
+This plugin provides a task development flow. From any non-trivial idea to a pushed branch with an MR recommendation, the sequence is:
+
+| Phase | Skill / command | Output |
+|---|---|---|
+| Entry | `/p-flow:task-start <slug>` | Branch `<type>/<slug>` created (+ optional worktree), `specs/<slug>/` opened, brainstorming invoked. |
+| Design | `task-brainstorming` skill | `specs/<slug>/specification.md` (always), optionally `feature.feature`, optionally `adr.md`. |
+| Plan | `writing-plan` skill | `specs/<slug>/plan.md`. |
+| Verify | `verification-before-completion` skill | Concrete test/lint output is quoted before any "done" claim. Writes `.claude/.p-flow-state/<branch>/last-verification`. |
+| Review (code) | `requesting-code-review` skill + `code-reviewer` agent | Code-quality findings, triaged into `plan.md` follow-ups. |
+| Review (spec) | `requesting-task-review` skill + `task-reviewer` agent | Spec-alignment findings, triaged into `plan.md` follow-ups. |
+| Exit | `/p-flow:task-end` | `git push -u origin <branch>` + MR title/body recommendation with both `gh` and `glab` commands ready to copy. |
+
+### Note on §3 "N/A" rule
+
+The rule in §3.1 — "if a section doesn't apply, write `N/A` and a one-line reason — do not delete the heading" — applies to **feature** specs. For bugfix / hotfix / chore / tech-task specs, sections that don't apply may be **omitted entirely**. Skills produce specs that drop irrelevant sections rather than filling them with `N/A`.
+
+### State directory
+
+`task-end` reads a marker at `.claude/.p-flow-state/<branch>/last-verification` to detect whether verification ran. This directory is added to `.gitignore` on first write by `verification-before-completion`.
