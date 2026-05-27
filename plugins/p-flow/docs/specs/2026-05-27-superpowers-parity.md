@@ -12,7 +12,31 @@
 
 ## Summary
 
-*(filled at Task 6 synthesis)*
+Total gaps surfaced: **24** across 5 dimensions. Roll-up by priority:
+
+| Priority | Count | Items |
+|---|---|---|
+| **High** | 6 | B1 (agent dispatch pattern), A-5 (`receiving-code-review`), A-9 (`test-driven-development`), A-11 (`using-p-flow` discovery skill), E4 (writing-plan not TDD-aligned), E5 (task-end no options menu) |
+| **Medium** | 8 | A-2 (`dispatching-parallel-agents`), A-4 (broaden `finishing-a-development-branch` analog), A-10 (extract `using-git-worktrees`), A-14 (`writing-skills`), B2 (session-start hook), C-2 (`allowed-tools` over-declaration), C-3 (verification dispatches agent — investigate), D-7 (Graphviz adoption) |
+| **Low** | 7 | A-13 (plural rename), B7 (`RELEASE-NOTES.md`), B10 (plugin-level `CLAUDE.md`), B12 (`assets/`), C-4 (Agent vs Task tool name), D-6 (`<EXTREMELY-IMPORTANT>` on discovery skill), D-8 ("Announce at start") |
+| **Acceptable / divergence-by-design** | 11 | A-3 + A-8 (Wave 2 deferrals), A-7 (subagent-driven-development — use sp's), B3–B6, B8, B9, B11 (multi-host / `_shared` / refs / scripts / docs), D-1 + D-2 (frontmatter conventions, slash-command exposure), D-4 (skill dir layouts) |
+
+**Headline findings:**
+
+1. **superpowers v5.1.0 explicitly migrated AWAY from registered subagents** to inline-template Task dispatch. p-flow chose the opposite (Dim B1). High-impact architectural divergence — and the smoke-test from earlier showed our agents are unreachable without plugin install. **This is the single most consequential gap.**
+
+2. **p-flow is post-hoc verification, not TDD** (Dim A-9 + E4). superpowers' `writing-plans` template bakes RED-GREEN-REFACTOR into every step; p-flow's template is action-result without test-first discipline. Major capability difference, originally flagged as a non-goal in the design spec.
+
+3. **No discovery skill / session-start hook** (Dim A-11 + B2). p-flow is invisible until the user mentions a `/p-flow:*` command or matching keyword. superpowers loads `using-superpowers` via session-start hook for active discoverability.
+
+4. **Two complementary review skills missing** (Dim A-5 + the existing `requesting-code-review`). superpowers ships `receiving-code-review` to teach Claude to PROCESS feedback rigorously, not just request it. p-flow only handles the request side.
+
+**Encouraging findings:**
+
+- The architectural choices p-flow makes intentionally (strict `allowed-tools`, centralized `_shared/templates/`, registered agents) are *defensible* — they trade portability for safety + maintainability. The audit doesn't say p-flow is wrong, only that several gaps are unintentional.
+- Both plugins independently ignore `AskUserQuestion`, `TaskCreate`, `TaskUpdate`. Earlier conversation framed this as a p-flow oversight — actually the conventional pattern. **Corrected.**
+
+---
 
 ---
 
@@ -324,10 +348,95 @@ p-flow dirs are minimal: each skill dir has only `SKILL.md`. Reusable content li
 
 ## Open questions
 
-*(consolidated at Task 6 from `unclear` verdicts across dimensions)*
+The audit surfaced 4 questions that need a user decision before remediation can proceed:
+
+1. **Agent dispatch — migrate or stay?** (Dim B1) p-flow's registered-subagent pattern works only when the plugin is installed. superpowers explicitly removed this pattern in v5.1.0. Migrating to inline-template Task dispatch is a breaking change to `agents/code-reviewer.md` + `agents/task-reviewer.md` + the two `requesting-*-review` skills. Worth it for portability, or keep registered for cleaner abstraction?
+
+2. **TDD discipline — adopt or stay non-goal?** (Dim A-9 + E4) The original design spec listed TDD as a non-goal. Reaffirm — or revise the spec and adopt? Revising touches `writing-plan` template fundamentally + adds a new `test-driven-development` skill.
+
+3. **task-end menu — broaden to options or stay narrow?** (Dim E5 + A-4) `finishing-a-development-branch` presents merge/PR/cleanup options; `task-end` does just push+MR-recommend. Was the narrowing intentional, or just unaware?
+
+4. **Verification subagent — investigate?** (Dim C-3) superpowers' `verification-before-completion` dispatches an Agent. We don't know what for (the SKILL.md body mentions it but the audit didn't drill into why). One-time read needed before deciding to follow.
+
+---
+
+
 
 ---
 
 ## Recommended follow-up plans
 
-*(synthesized at Task 6)*
+Proposed remediation grouped into 5 plans. Numbered by suggested execution order (dependencies first, breaking changes batched, cosmetics last).
+
+### Plan 1 — `migrate-agents-to-inline-templates` (high priority)
+
+**Scope:** B1 (sole driver). Convert `plugins/p-flow/agents/code-reviewer.md` and `task-reviewer.md` from registered subagents to inline templates colocated with their requesting skills (`skills/requesting-code-review/code-reviewer.md`, `skills/requesting-task-review/task-reviewer.md`). Update the two `requesting-*-review` SKILL.md files to dispatch via `Task tool` with `general-purpose` + template content instead of `Agent` with `subagent_type:`. Remove the empty `agents/` directory. Update `tests/agents.test.ts` to point at the new location OR replace with a "review-template structural test."
+
+**Why first:** Unblocks portability (smoke-test showed agents unreachable without install). Breaks current contract — needs to land before any new skill adopts the old pattern.
+
+**Effort:** ~2 hours. ~6 file changes. Test suite needs minor refactor.
+
+### Plan 2 — `add-using-p-flow-discovery` (high priority, depends on hook decision)
+
+**Scope:** A-11 + B2 + D-6. Create `skills/using-p-flow/SKILL.md` mirroring `superpowers:using-superpowers` (with `<EXTREMELY-IMPORTANT>` tag). Add `hooks/hooks.json` + `hooks/session-start` script to emit the skill as a `<system-reminder>` on session start. Document discovery contract in `plugins/p-flow/CLAUDE.md` (new file).
+
+**Why second:** Hook + discovery skill come together — adoption of one without the other is half-done. Independent of Plan 1; can run in parallel.
+
+**Effort:** ~3 hours. Mostly content authoring + one platform hook script.
+
+### Plan 3 — `adopt-tdd-and-receiving-review` (high priority — pairs)
+
+**Scope:** A-5 + A-9 + E4. Two new skills:
+- `skills/test-driven-development/SKILL.md` — RED-GREEN-REFACTOR enforcement
+- `skills/receiving-code-review/SKILL.md` — how to process review findings rigorously
+
+Plus: revise `skills/writing-plan/SKILL.md`'s Plan template to enforce test-first step structure (each Step begins "Write failing test for X" + "Verify it fails" + "Implement" + "Verify it passes" — copy superpowers' shape).
+
+**Why third:** Touches writing-plan template AND adds 2 skills. Breaking change to plan format (existing plans won't have TDD structure). Should land as a major behavior shift, separately from Plans 1+2.
+
+**Effort:** ~4 hours. Mostly content authoring + template restructure + 1 test update.
+
+**Open question dependency**: requires user direction on Question #2 above.
+
+### Plan 4 — `broaden-task-end-options-menu` (high priority, isolated)
+
+**Scope:** A-4 + E5. Add to `task-end` SKILL.md: environment detection step (local-only / fork / direct-push), options menu (push / open PR / merge-and-delete / push-and-cleanup / cancel), execute-choice handlers. Or document explicitly why p-flow chose to stay narrow (in a `## Design note` block at top of skill).
+
+**Why fourth:** Independent of Plans 1–3. Can run any time.
+
+**Effort:** ~2 hours. One skill file change.
+
+**Open question dependency**: requires user direction on Question #3.
+
+### Plan 5 — `cleanup-and-conventions` (medium + low priority, batch)
+
+**Scope:** A-2 (`dispatching-parallel-agents`), A-10 (extract `using-git-worktrees`), A-14 (`writing-skills`), C-2 (allowed-tools over-declaration cleanup), C-4 (Agent → Task naming), D-7 (Graphviz adoption — backport to task-start at minimum), D-8 ("Announce at start" backport), B7 (RELEASE-NOTES.md), B10 (plugin-level CLAUDE.md).
+
+**Why fifth:** Lots of small, independent items. Best as a single sweep release rather than per-item patches. Some require Plans 1–3 to land first (e.g. D-6 `<EXTREMELY-IMPORTANT>` on discovery skill needs Plan 2 first).
+
+**Effort:** ~4 hours batched. ~12 file changes.
+
+### Verdict on plan size
+
+If user approves all 4 high-priority plans: ~11 hours of work spread across ~25 file changes + 1 major test refactor. Realistic as 2–3 release cycles (v4.6.x → v4.7.x → v4.8.x), not one big bang.
+
+### What this audit explicitly recommends NOT doing
+
+- **Don't migrate p-flow to multi-host** (B3, B4, B6) without a real need. perky.team is Claude-Code-only by intent.
+- **Don't switch from `_shared/templates/` to colocated** (B5). p-flow's pattern is well-tested and has a real "dead template" check.
+- **Don't rename `writing-plan` → `writing-plans`** (A-13, D-9) standalone — it's a breaking name change with no functional benefit. Batch with Plan 3 if at all.
+- **Don't add `AskUserQuestion` / `TaskCreate` integrations.** Both plugins agree these aren't the right pattern. Stay aligned.
+
+---
+
+## Audit completion checklist
+
+- [x] All 14 superpowers skills classified (Dim A — 24 verdicts incl. p-flow-only)
+- [x] 12 architectural areas audited (Dim B)
+- [x] 8 p-flow skills + 11 superpowers analogs audited for tool usage (Dim C)
+- [x] Frontmatter census + body conventions audited (Dim D)
+- [x] 5 analog pairs structurally diffed (Dim E)
+- [x] Summary table aggregates all gaps by priority
+- [x] Open questions section lists 4 user-decisions needed
+- [x] 5 follow-up plans proposed with scope + effort + dependencies
+- [x] Explicit "don't do this" list to prevent over-correction
