@@ -152,7 +152,93 @@ The two architectural gaps with real impact (B1 + B2) **share a common root caus
 
 ## Dimension D — Naming + frontmatter conventions
 
-*(filled at Task 4)*
+### Frontmatter field census
+
+| Field | superpowers (n=14) | p-flow (n=8) | Verdict |
+|---|---|---|---|
+| `name` | 14/14 | 8/8 | parity |
+| `description` | 14/14 | 8/8 | parity |
+| `allowed-tools` | **0/14** | 8/8 | structural divergence (see C-3 / observation) |
+| `argument-hint` | **0/14** | 3/8 (init, task-start, task-end) | structural divergence (p-flow uses some skills as slash commands; superpowers doesn't) |
+| `model:` (in SKILL) | 0/14 | 0/8 | parity (only agents declare model) |
+
+**Observation**: superpowers' frontmatter is dead-minimal (just `name` + `description`). p-flow's is structured (always `allowed-tools` for sandbox safety, sometimes `argument-hint` for slash-command exposure). Both choices are valid.
+
+### Slash-command exposure
+
+- **superpowers**: never declares `argument-hint`. Per the v5.1.0 RELEASE-NOTES: *"Legacy slash commands removed — `/brainstorm`, `/execute-plan`, and `/write-plan` are gone. They were deprecated stubs that did nothing but tell the user to invoke the corresponding skill."* All invocation goes through `Skill` tool now.
+- **p-flow**: 3 skills (`init`, `task-start`, `task-end`) are first-class slash commands. The other 5 are model-invoked.
+- **Verdict**: **divergence-by-design (acceptable)**. p-flow's flow-entry-points need to be user-driven (you start a task explicitly, not by mentioning a keyword). The other 5 can stay model-invoked.
+
+### Body section heading conventions
+
+| superpowers top headings (frequency) | p-flow top headings (frequency) |
+|---|---|
+| `## Overview` (11) | `## Procedure` (5) |
+| `## When to Use` (5) | `## What this skill does NOT do` (5) |
+| `## Red Flags` (5) | `## Preconditions` (2) |
+| `## Common Mistakes` (5) | `## Inputs` (2) |
+| `## The Process` (4) | `## Out of scope` (2) |
+| `## Quick Reference` (4) | `## When to run` (1) |
+| `## The Iron Law` (3) | per-step headings (init only) |
+
+**Different DNA**: superpowers writes *pedagogically* (Overview → When to Use → The Process → Red Flags → Common Mistakes). p-flow writes *specification-style* (Preconditions → Procedure → Out of scope → What this skill does NOT do). 
+
+Functional analogs exist:
+- `## When to Use` ≈ `## Preconditions`
+- `## Red Flags` / `## Common Mistakes` ≈ `## What this skill does NOT do`
+- `## The Process` ≈ `## Procedure`
+- `## Overview` — no p-flow analog (p-flow skills jump straight into Procedure)
+
+**Verdict**: **divergence-by-design (acceptable)**. Don't refactor. Worth documenting the convention in plugins/p-flow/CLAUDE.md (gap B10) so future p-flow skills stay consistent.
+
+### Skill directory layouts
+
+superpowers per-skill dirs are RICH with auxiliary files (per B5):
+- `subagent-driven-development/` ships 4 prompt templates alongside SKILL.md (one per role)
+- `systematic-debugging/` ships 6 reference docs + scripts + a `CREATION-LOG.md`
+- `writing-skills/` ships `anthropic-best-practices.md` + examples/ + `graphviz-conventions.dot` + `persuasion-principles.md` + `render-graphs.js` + `testing-skills-with-subagents.md`
+- `brainstorming/` ships an interactive HTTP server (`scripts/server.cjs`) for visual diagrams
+
+p-flow dirs are minimal: each skill dir has only `SKILL.md`. Reusable content lives in `_shared/templates/`. Agents are at plugin-level `agents/`.
+
+**Verdict**: **divergence-by-design (acceptable for now)** — p-flow's skills are simpler and don't need supporting docs/scripts. But if we adopt `writing-skills` (per Dimension A), we'll likely need a similar aux-file pattern. Re-evaluate then.
+
+### XML emphasis tags
+
+- `<EXTREMELY-IMPORTANT>` / `<SUBAGENT-STOP>` in superpowers: used in 1 file (`using-superpowers/SKILL.md`) — the highest-criticality skill (loaded on session start, must be obeyed).
+- p-flow: 0 occurrences.
+
+**Verdict**: **adopt-on-demand** — useful for top-of-funnel skills (e.g. if we add `using-p-flow` discovery skill per Dimension A). Not a generic style choice.
+
+### Graphviz diagrams
+
+- superpowers uses `digraph` blocks (DOT notation) in 6/14 skills to visualize flow logic.
+- p-flow: 0 skills.
+
+**Verdict**: **adopt — medium priority**. Graphviz is a powerful documentation pattern — flow logic in DOT is readable by humans AND parseable by tools. Worth adopting on next non-trivial skill body change. Could backport to `task-start` Phase A/B (which already has a 2-phase structure that diagrams well).
+
+### "Announce at start" convention
+
+- superpowers: 4 skills have `Announce at start: "I'm using the X skill to ..."` instruction.
+- p-flow: 0 skills.
+
+**Verdict**: **adopt — low priority**. Helps users understand what's happening in long-running skills. Easy to backport.
+
+### Skill naming plurals
+
+- superpowers: `writing-plans`, `executing-plans`, `dispatching-parallel-agents` (plural).
+- p-flow: `writing-plan` (singular), no equivalent for others yet.
+
+**Verdict**: **cosmetic — defer**. Renaming `writing-plan` → `writing-plans` is a breaking change for any skill or doc that references it. Not worth a release unless we batch with other breaking changes.
+
+### Dimension D roll-up
+
+- **adopt — medium**: Graphviz diagrams (D-7), use on next significant skill edit
+- **adopt — low**: "Announce at start" (D-8), `<EXTREMELY-IMPORTANT>` on discovery skill (D-6)
+- **document — low**: section-heading conventions (D-3) in `plugins/p-flow/CLAUDE.md`
+- **cosmetic — defer**: plural rename (D-9)
+- **divergence-by-design**: minimal frontmatter (D-1, D-2), slash-command exposure (D-2), skill dir layouts (D-4)
 
 ---
 
