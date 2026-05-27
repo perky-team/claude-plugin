@@ -32,7 +32,7 @@ Branch on the result:
 
 | rules | specs | Action |
 |---|---|---|
-| no | no | Run **Phase 1** (Steps 3–5) then **Phase 2** (Steps 6–7). Greenfield path. |
+| no | no | Run **Phase 1** (Steps 3–5) then **Phase 2** (Steps 6–9). Greenfield path. |
 | yes | no | **Skip Phase 1.** Tell the user: *"Scaffolding already in place. Resuming with the feature brainstorm."* Then run Phase 2 only. |
 | yes | yes | **Refuse.** Tell the user: *"p-flow is already initialised and at least one feature spec exists under `specs/`. To add a new feature use `/p-flow:task-start <type>/<slug>`. To regenerate everything from scratch, delete `.claude/rules/p-flow.md` AND all `specs/<slug>/` folders manually first."* Stop. |
 | no | yes | **Refuse.** Tell the user: *"Inconsistent state: feature folders exist under `specs/` but the p-flow rules file is missing. Resolve manually — either restore `.claude/rules/p-flow.md` (e.g. via git) or remove the orphaned `specs/<slug>/` folders — then re-run."* Stop. |
