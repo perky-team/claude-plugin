@@ -43,9 +43,11 @@ Skills: `init`, `ingest`, `compile`, `query`, `lint`.
 
 ### [`p-flow`](./plugins/p-flow/)
 
-Workflow rules for Claude: deny-permissions for secret files (`.env`, credentials), Conventional Commits + `<type>/<slug>` branch naming, and spec templates (ADR, Gherkin, full specification).
+Disciplined task development flow for Claude: secrets deny-list, Conventional Commits + `<type>/<slug>` branch naming, spec templates (ADR, Gherkin, full specification), and a skill+agent stack for brainstorm → plan → verify → review → push.
 
-Skills: `init`.
+Commands: `init`, `task-start`, `task-end`.
+Skills: `init`, `task-brainstorming`, `writing-plan`, `verification-before-completion`, `requesting-code-review`, `requesting-task-review`.
+Subagents: `code-reviewer`, `task-reviewer`.
 
 ### [`p-tasks`](./plugins/p-tasks/)
 
@@ -107,10 +109,12 @@ Complements `npm test`: tests catch structural drift in our manifests/skills, `v
 │   │   ├── README.md
 │   │   ├── docs/superpowers/  ← per-plugin design spec + implementation plan
 │   │   └── skills/
-│   └── p-flow/              ← workflow rules + spec templates
+│   └── p-flow/              ← task development flow + spec templates
 │       ├── .claude-plugin/
 │       │   └── plugin.json
 │       ├── README.md
+│       ├── agents/          ← read-only review subagents
+│       ├── docs/superpowers/  ← per-plugin design spec + implementation plan
 │       └── skills/
 └── README.md                ← this file
 ```
