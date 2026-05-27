@@ -59,7 +59,8 @@ In the current git repo (or current working directory if not a git repo):
 |---|---|---|
 | missing | none | runs both phases (scaffolding + brainstorm) |
 | present | none | skips scaffolding, runs brainstorm only (resume interrupted dialog) |
-| any | ≥ 1 | refuses — use `/p-flow:task-start` to add new features, or delete the folders manually to regenerate from scratch |
+| present | ≥ 1 | refuses — already initialised; use `/p-flow:task-start` to add new features, or delete `.claude/rules/p-flow.md` AND the `specs/<slug>/` folders manually to regenerate |
+| missing | ≥ 1 | refuses — inconsistent state; restore `.claude/rules/p-flow.md` (e.g. via git) or remove the orphaned `specs/<slug>/` folders, then re-run |
 
 ## Spec directory layout
 

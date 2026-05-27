@@ -1,6 +1,6 @@
 ---
 name: init
-description: Initialize Claude-Code workflow rules in the current repo AND brainstorm the initial high-level feature breakdown. Phase 1 — scaffold `.claude/settings.json` (secret deny-list), `.claude/rules/p-flow.md`, and four templates under `.claude/templates/p-flow/`. Phase 2 — dialog with the user to identify vision + features, then create `specs/<slug>/specification.md` stubs for each. Use when the user says "init p-flow", "setup p-flow", or asks to bootstrap a new repo.
+description: Initialize Claude-Code workflow rules in the current repo AND brainstorm the initial high-level feature breakdown. Phase 1 — scaffold `.claude/settings.json` (secret deny-list), `.claude/rules/p-flow.md`, and three templates under `.claude/templates/p-flow/`. Phase 2 — dialog with the user to identify vision + features, then create `specs/<slug>/specification.md` stubs for each. Use when the user says "init p-flow", "setup p-flow", or asks to bootstrap a new repo.
 argument-hint: (no arguments)
 allowed-tools: Bash(git rev-parse:*) Bash(mkdir:*) Bash(test:*) Bash(ls:*) Read Write
 ---
@@ -138,7 +138,7 @@ For each agreed feature:
    - `{{ONE_LINE_DESCRIPTION}}` — the one-line summary.
    - `{{STATUS}}` — literal string `planned`.
    - `{{DATE}}` — today's date in `YYYY-MM-DD`.
-   - `{{AUTHOR}}` — leave empty or fill from `git config user.name` if easily available.
+   - `{{AUTHOR}}` — leave empty. (`task-brainstorming`'s refine-mode can fill this later if needed; the `init` skill does not have `git config` in its `allowed-tools`.)
    - `{{PROBLEM_STATEMENT}}` — derived from the project-level Problem (Step 7 question 2) narrowed to what this feature addresses. 1–3 sentences. If unclear from dialog, leave the placeholder literal.
    - `{{USER_STORY}}` — *"As a <target user>, I want <one-line summary>, so that <project-level problem narrowed to this feature>."* Best-effort; leave placeholder if dialog didn't yield enough.
    - `{{ACCEPTANCE_CRITERIA}}` — the 1–3 bullets captured in Step 7 question 6, as a markdown bulleted list. If user said "skip", leave the placeholder literal.
@@ -172,5 +172,5 @@ Tell the user, in this order:
 - **`.claude/settings.json` exists but is invalid JSON** → stop, ask user to fix and retry (covered in Step 5 Case B).
 - **`permissions` / `permissions.deny` of wrong shape** → stop with a clear error (covered in Step 5 Case B).
 - **User interrupts mid-dialog in Phase 2** → no rollback. Folders created so far stay. On re-run, the state machine (Step 2) will detect "rules:yes, specs:yes" if any stub was written and refuse — the user has to delete the partial `specs/<slug>/` folders manually to resume. This is acceptable: a partial brainstorm is rare, and explicit cleanup beats implicit overwrite.
-- **`git config user.name` not set** → leave `{{AUTHOR}}` empty in stubs; don't prompt.
+- **`{{AUTHOR}}` value** → always left empty; this skill has no `git config` permission. The user can fill it manually later, or it'll be filled by `task-brainstorming` refine-mode.
 - **Phase 2 dialog produces 0 features** (user said skip on the decomposition question, or removed every candidate during iteration) → write no stubs, jump to Step 10 with the "skipped OR produced no stubs" message variant (item 3).
