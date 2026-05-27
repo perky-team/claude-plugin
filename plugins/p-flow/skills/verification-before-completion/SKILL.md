@@ -1,7 +1,7 @@
 ---
 name: verification-before-completion
 description: Use before claiming any task is done, fixed, ready, implemented, or before any commit. Runs detected tests/lints, quotes concrete output, and writes a state marker at `.claude/.p-flow-state/<branch>/last-verification` so `/p-flow:task-end` can detect that verification ran. Evidence before assertions, always.
-allowed-tools: Bash Read Glob Grep Write Edit
+allowed-tools: Bash Read Write Edit
 ---
 
 # verification-before-completion

@@ -1,7 +1,7 @@
 ---
 name: writing-plan
 description: Use after a spec exists at `specs/<slug>/specification.md` to produce a step-by-step implementation plan at `specs/<slug>/plan.md`. Refuses to write a step without an acceptance criterion. Decomposes work into 5–15 steps; flags larger work for sub-task split.
-allowed-tools: Read Write Edit Glob
+allowed-tools: Read Write Edit
 ---
 
 # writing-plan

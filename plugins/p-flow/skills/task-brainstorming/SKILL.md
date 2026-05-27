@@ -1,7 +1,7 @@
 ---
 name: task-brainstorming
 description: Use when starting a new non-trivial task to elicit requirements through dialog and produce `specs/<slug>/specification.md` (always) plus optional `feature.feature` and `adr.md`. Invoked by `/p-flow:task-start`. Hard gate — does not invoke `writing-plan` or any implementation skill until the user approves the written spec.
-allowed-tools: Read Write Edit Glob Bash(git rev-parse:*)
+allowed-tools: Read Write Edit
 ---
 
 # task-brainstorming
