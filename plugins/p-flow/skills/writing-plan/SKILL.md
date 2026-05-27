@@ -17,36 +17,27 @@ Turn the brainstorm artifact into a concrete, ordered plan. One file: `specs/<sl
 ## Procedure
 
 1. **Read the spec(s)** in full.
-2. **Decompose into 5–15 steps.** If you find yourself with more than 15, stop and tell the user the work is too large for one plan — suggest splitting into sub-tasks, each via its own `/p-flow:task-start`.
-3. **Every step must have an acceptance criterion.** Concrete and checkable: "tests `X.py::test_foo` and `X.py::test_bar` pass", "endpoint `GET /foo` returns 200 with body matching schema Y", "file `bar.ts` exports the function `baz`". Refuse to write a step without one — ask the user for a criterion instead.
-4. **Self-review:** scan the produced file for placeholders (`TBD`, `TODO`, `...`), steps without AC, internal contradictions. Fix inline.
-5. **Show to user.** Ask: "Plan written to `specs/<slug>/plan.md`. Review and tell me what to amend before we move to execution."
+2. **Detect plan type and ask the user.** Examine the spec to suggest a variant:
+   - If `specs/<slug>/feature.feature` exists OR `specification.md` Acceptance Criteria mention function / endpoint / class / handler / script behaviours → suggest **TDD plan** (template: `${CLAUDE_SKILL_DIR}/../_shared/templates/plan-tdd.template.md`).
+   - Otherwise → suggest **generic plan** (template: `${CLAUDE_SKILL_DIR}/../_shared/templates/plan-generic.template.md`).
 
-## Plan template
+   Ask the user (in prose, no AskUserQuestion):
+   *"Based on the spec, I'd suggest a **<TDD|generic>** plan. Confirm, or override with the other variant?"*
 
-Write this content into `specs/<slug>/plan.md`:
+   Wait for explicit answer before proceeding.
+3. **Decompose into 5–15 steps.** If you find yourself with more than 15, stop and tell the user the work is too large for one plan — suggest splitting into sub-tasks, each via its own `/p-flow:task-start`.
+4. **Every step must have an acceptance criterion.** Concrete and checkable: "tests `X.py::test_foo` and `X.py::test_bar` pass", "endpoint `GET /foo` returns 200 with body matching schema Y", "file `bar.ts` exports the function `baz`". Refuse to write a step without one — ask the user for a criterion instead. For TDD plans, each step also requires `Test first` / `Implement` / `Verify` sub-bullets.
+5. **Self-review:** scan the produced file for placeholders (`TBD`, `TODO`, leftover `<...>` markers from the template, steps without AC, internal contradictions). Fix inline.
+6. **Show to user.** Ask: "Plan written to `specs/<slug>/plan.md`. Review and tell me what to amend before we move to execution."
 
-```markdown
-# Plan — <slug>
+## Plan templates
 
-## Steps
+Two variants live in `_shared/templates/`:
 
-1. [ ] <action — what to do>
-   - **Acceptance**: <how to know this step is done — concrete and checkable>
-   - **Files**: <expected affected files>
+- `${CLAUDE_SKILL_DIR}/../_shared/templates/plan-generic.template.md` — for docs / research / non-code tasks. Each Step has `Acceptance` + `Files`.
+- `${CLAUDE_SKILL_DIR}/../_shared/templates/plan-tdd.template.md` — for code tasks (the default when behaviour testing is feasible). Each Step has `Test first` (RED) + `Implement` (GREEN) + `Verify` (REFACTOR-safe) + `Acceptance` + `Files`.
 
-2. [ ] <action>
-   - **Acceptance**: <how to know this step is done — concrete and checkable>
-   - **Files**: <expected affected files>
-
-## Open questions
-
-- <questions that block or could change the plan>
-
-## Risks
-
-- <known risks, with mitigation if any>
-```
+The skill reads the chosen template, substitutes `{{SLUG}}`, and writes the result to `specs/<slug>/plan.md`.
 
 ## Numbering convention
 
@@ -59,3 +50,4 @@ Write this content into `specs/<slug>/plan.md`:
 - No code writing.
 - No git operations.
 - No follow-up step generation — that's `requesting-code-review` / `requesting-task-review`.
+- Does not enforce TDD discipline during execution — that's the `test-driven-development` skill, invoked by Claude when actually writing code for a Step.
