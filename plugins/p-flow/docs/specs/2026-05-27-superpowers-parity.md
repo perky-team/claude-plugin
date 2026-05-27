@@ -88,7 +88,65 @@ The two architectural gaps with real impact (B1 + B2) **share a common root caus
 
 ## Dimension C — Native CC tool integration
 
-*(filled at Task 3)*
+### Per-skill tool census (p-flow side)
+
+| skill | declared `allowed-tools` | body mentions | drift |
+|---|---|---|---|
+| `init` | Bash(narrow) + Read + Write | Bash, Read, Write | OK |
+| `task-brainstorming` | Read + Write + Edit + Glob + Bash(narrow) | Read, Write, Skill tool | Edit declared but never used; Skill tool used but not declared (only used as protocol verb "via the Skill tool") |
+| `writing-plan` | Read + Write + Edit + Glob | Read, Write | Edit + Glob unused |
+| `verification-before-completion` | Bash + Read + Glob + Grep + Write + Edit | Bash, Write | Read/Glob/Grep/Edit declared but body doesn't use |
+| `requesting-code-review` | Bash(narrow) + Read + Write + Edit + Glob + Agent | Agent, "AskUserQuestion" (as anti-pattern note) | OK — extra tools (Read/Edit/Glob) cover plan.md edits |
+| `requesting-task-review` | same as above | Agent | OK |
+| `task-start` | Bash(narrow) + Read + Write | "Skill tool" | OK (Skill is protocol verb) |
+| `task-end` | Bash(narrow) + Read + Glob | (none — body uses verbs like "Run `git push`") | OK — natural-language verbs, all Bash usage covered |
+
+### Per-skill tool census (superpowers side)
+
+**Critical convention difference**: **superpowers skills do NOT declare `allowed-tools` at all** in any of the 11 skills examined. All rely on default tool availability.
+
+| skill | body mentions |
+|---|---|
+| `brainstorming` | Write |
+| `writing-plans` | Write |
+| `verification-before-completion` | Read, Write, Agent (dispatches verifier subagent — different shape!) |
+| `requesting-code-review` | Read, **Task tool** (= older name for Agent) |
+| `finishing-a-development-branch` | (none — pure narrative) |
+| `test-driven-development` | Write |
+| `using-superpowers` | Read, Write, Skill tool |
+| `using-git-worktrees` | Read, Glob |
+| `dispatching-parallel-agents` | Read, Agent |
+| `receiving-code-review` | Grep |
+| `writing-skills` | Read, Write, Edit, Agent |
+
+### Pair-by-pair diff
+
+| pair | p-flow tools | superpowers tools | divergence | verdict |
+|---|---|---|---|---|
+| brainstorming | strict allowlist + Read/Write/Edit/Glob/Bash(git rev-parse) | (no allowlist) + Write | shape | acceptable — p-flow tighter |
+| writing-plan(s) | Read/Write/Edit/Glob | Write | over-declaration | low-priority cleanup — remove unused tools |
+| verification-before-completion | Bash/Read/Glob/Grep/Write/Edit | Read/Write/**Agent** | **structural** — sp dispatches a verifier subagent; p-flow runs tests directly | unclear — does superpowers dispatch a verifier for safety isolation? If so, worth understanding before next prompt change. |
+| requesting-code-review | Agent + Bash + Read/Write/Edit | Task tool + Read | tool-name divergence (`Agent` vs `Task tool` — same tool, two names) | **gap — low priority** — align to superpowers naming since "Task tool" is the older established name (or stay with "Agent" — Claude Code accepts both) |
+| finishing-a-development-branch vs task-end | strict allowlist | none in body | same shape (both rely on declared) | acceptable |
+
+### Systemic patterns
+
+| Pattern | superpowers | p-flow |
+|---|---|---|
+| Declares `allowed-tools` | never | always (every skill) |
+| Uses `AskUserQuestion` | never | never (only as anti-pattern note in requesting-code-review) |
+| Uses `TaskCreate` / `TaskUpdate` | never | never |
+| Uses `ExitPlanMode` / `EnterPlanMode` | never (grep) | never |
+| Uses `WebFetch` / `WebSearch` | never (in this scan) | never |
+| Uses `Skill tool` (cross-skill dispatch) | yes (using-superpowers) | yes (task-start → task-brainstorming, task-brainstorming → writing-plan) |
+| Tool dispatch terminology | `Task tool` (consistently, post v5.1.0 cleanup) | `Agent` (newer name) |
+
+### Dimension C roll-up
+
+- **gap — medium**: `allowed-tools` over-declaration in 3 p-flow skills (task-brainstorming, writing-plan, verification-before-completion) — declared tools not used in body. Tightening would catch mismatched intent. Low complexity fix.
+- **gap — low (unclear)**: superpowers' verification-before-completion dispatches an agent — why? Worth one-time read before deciding to follow.
+- **gap — low**: tool-name terminology (`Agent` vs `Task tool`) — pure cosmetic, both work.
+- **observation**: both plugins independently ignore `AskUserQuestion` and `TaskCreate`. The "missed integration" claim from earlier conversation was **wrong** — staying out of them is the conventional pattern, not an oversight.
 
 ---
 
