@@ -346,9 +346,22 @@ p-flow dirs are minimal: each skill dir has only `SKILL.md`. Reusable content li
 
 ---
 
-## Open questions
+## User decisions (2026-05-27)
 
-The audit surfaced 4 questions that need a user decision before remediation can proceed:
+The 4 open questions below were resolved in a follow-up review immediately after the audit synthesis:
+
+| # | Question | Decision |
+|---|---|---|
+| Q1 | Agent dispatch — migrate or stay? | **Migrate inline** — convert `agents/*` into colocated templates inside `skills/requesting-*/`. Matches superpowers v5.1.0; smoke-test confirmed registered-subagent unreachability in dev sessions. |
+| Q2 | TDD discipline — adopt or stay non-goal? | **Partial adopt** — add `test-driven-development` and `receiving-code-review` skills; `writing-plan` template OFFERS TDD-shape by default for code tasks but stays generic for docs/research plans. |
+| Q3 | task-end menu — broaden or stay narrow? | **Stay narrow** — add a `## Design note` block to task-end documenting *why* we don't present a merge/PR/cleanup menu (git merge is a manual step; p-flow's role is push + recommend, not menu navigation). |
+| Q4 | Verification subagent — investigate? | **Investigated; resolved** — sp doesn't dispatch a verifier; "Agent" mentions in its body are pedagogical anti-patterns, not dispatch actions. No remediation needed. |
+
+---
+
+## Open questions (original — historical)
+
+The audit surfaced 4 questions; all are now resolved above. Kept for traceability:
 
 1. **Agent dispatch — migrate or stay?** (Dim B1) p-flow's registered-subagent pattern works only when the plugin is installed. superpowers explicitly removed this pattern in v5.1.0. Migrating to inline-template Task dispatch is a breaking change to `agents/code-reviewer.md` + `agents/task-reviewer.md` + the two `requesting-*-review` skills. Worth it for portability, or keep registered for cleaner abstraction?
 
@@ -356,7 +369,7 @@ The audit surfaced 4 questions that need a user decision before remediation can 
 
 3. **task-end menu — broaden to options or stay narrow?** (Dim E5 + A-4) `finishing-a-development-branch` presents merge/PR/cleanup options; `task-end` does just push+MR-recommend. Was the narrowing intentional, or just unaware?
 
-4. **Verification subagent — investigate?** (Dim C-3) superpowers' `verification-before-completion` dispatches an Agent. We don't know what for (the SKILL.md body mentions it but the audit didn't drill into why). One-time read needed before deciding to follow.
+4. **Verification subagent — investigate?** (Dim C-3) ~~superpowers' `verification-before-completion` dispatches an Agent. We don't know what for.~~ **RESOLVED 2026-05-27 (post-investigation):** false positive in the original grep. sp does NOT dispatch a verifier subagent — the word "Agent" appears only in pedagogical examples warning *against* trusting agent reports without independent verification (`"Agent reports success → Check VCS diff → Verify changes → Report actual state"`). p-flow's direct test-running approach is fine; no remediation needed.
 
 ---
 
