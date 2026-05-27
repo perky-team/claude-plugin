@@ -244,7 +244,81 @@ p-flow dirs are minimal: each skill dir has only `SKILL.md`. Reusable content li
 
 ## Dimension E — Behavioral output parity
 
-*(filled at Task 5)*
+5 analog pairs structurally diffed. Line counts are sp ↔ pf.
+
+### Pair E1: `verification-before-completion` (139 ↔ 85 lines)
+
+| | superpowers | p-flow |
+|---|---|---|
+| Sections | 10 (Overview, Iron Law, Gate Function, Common Failures, Red Flags - STOP, Rationalization Prevention, Key Patterns, Why This Matters, When To Apply, Bottom Line) | 4 (When to run, Procedure, Hard rules, What this skill does NOT do) |
+| Procedure shape | pedagogical (scolding rhetoric — "Don't fake success") | dry algorithmic (7 numbered steps, marker-write contract) |
+| Filesystem side-effects | none documented | writes `.claude/.p-flow-state/<branch-safe>/last-verification`, appends to `.gitignore` |
+| Agent dispatch | YES (body mentions Agent — but unclear what for) | NO (runs tests directly) |
+| Verbatim messages | none | `"This repo has no test suite I can detect. I cannot verify by running tests."`, `"Verification failed."` |
+
+**Verdict**: **drift-cosmetic** with one structural divergence (filesystem marker + .gitignore). pf's marker is the contract that `task-end` reads — a real coupling that sp doesn't have. **Interop**: a downstream skill reading pf's marker won't understand sp's. **Acceptable** — markers are p-flow-internal mechanics.
+
+### Pair E2: `requesting-code-review` (103 ↔ 69 lines) + reviewer template
+
+| | superpowers | p-flow |
+|---|---|---|
+| SKILL.md sections | 5 (When to Request, How to Request, Example, Integration with Workflows, Red Flags) | 3 (Preconditions, Procedure, What this skill does NOT do) |
+| Dispatch | `Task tool` with `general-purpose` + inline template `code-reviewer.md` | `Agent` with `subagent_type: code-reviewer` (registered) |
+| Reviewer output sections | `### Strengths / ### Issues / ### Recommendations / ### Assessment` (4, narrative) | `### Blockers / ### Suggestions / ### Nits` (3, severity-tiered) |
+| Severity model | Strengths-Issues-Recommendations-Assessment (narrative) | Blockers-Suggestions-Nits (priority) | 
+| Triage protocol | not in SKILL — relies on user to read narrative output | explicit 3-action triage (`fix`/`defer`/`reject`) with plan.md integration format |
+
+**Verdict**: **drift-structural** — incompatible output formats. p-flow's severity model is more actionable + integrates with plan.md follow-ups; superpowers' narrative is more flexible but harder to triage. **Interop**: a human reading both reports would understand each but couldn't mechanically merge them.
+
+**Question for follow-up**: should pf's `code-reviewer` agent (once converted to inline-template per B1) ALSO add the `Strengths` section to align? Probably not — Blockers/Suggestions/Nits is more useful.
+
+### Pair E3: `brainstorming` ↔ `task-brainstorming` (164 ↔ 96 lines)
+
+| | superpowers | p-flow |
+|---|---|---|
+| Sections | 7 (Anti-Pattern, Checklist, Process Flow, The Process, After the Design, Key Principles, Visual Companion) | 5 (Inputs, Templates source of truth, Procedure, Hard gates, Out of scope) |
+| Template constraint | none — generates spec freely | strict — copies from `_shared/templates/specification.template.md` and fills `{{PLACEHOLDERS}}` |
+| Visual companion | YES (ships HTTP server in `scripts/server.cjs` for visual diagramming) | NO |
+| Hard gate before next skill | implicit ("After the Design") | explicit — `## Hard gates` block forbids invoking writing-plan before user approval |
+
+**Verdict**: **drift-structural** — p-flow is template-constrained; superpowers is open-ended. Both produce a spec. **Interop**: a downstream skill (writing-plan) can read either, but pf's writing-plan EXPECTS the p-flow specification template structure. Cross-plugin spec reuse is brittle.
+
+### Pair E4: `writing-plans` ↔ `writing-plan` (152 ↔ 61 lines)
+
+| | superpowers | p-flow |
+|---|---|---|
+| Sections | 10 (Overview, Scope Check, File Structure, Bite-Sized Task Granularity, Plan Document Header, Task Structure, No Placeholders, Remember, Self-Review, Execution Handoff) | 8 (Inputs, Procedure, Plan template, Steps, Open questions, Risks, Numbering convention, Out of scope) |
+| Plan template shape | TDD-driven: each Step has embedded failing test code + verify-fails command + verify-passes command (RED-GREEN-REFACTOR baked in) | Generic: each Step has `- **Acceptance**: <criterion>` + `- **Files**: <list>` (action-result format, no test-first) |
+| Plan header | mandates explicit "REQUIRED SUB-SKILL: superpowers:subagent-driven-development" line | uses similar phrasing (we copy/paste this from superpowers convention in our own plans!) |
+| Step count guidance | "bite-sized" — implies small | explicit 5–15 steps; flag larger for sub-task split |
+
+**Verdict**: **drift-structural** — p-flow's plan format is NOT TDD-aligned. Steps don't enforce test-first. **High-impact**: this means p-flow's plans skip the discipline that makes superpowers' plans valuable. Couples directly with Dimension A gap: missing `test-driven-development` skill. **Follow-up**: when we adopt TDD skill, also revise writing-plan template to RED-GREEN-REFACTOR shape.
+
+### Pair E5: `finishing-a-development-branch` ↔ `task-end` (251 ↔ 113 lines)
+
+| | superpowers | p-flow |
+|---|---|---|
+| Sections | 7 (Overview, The Process, Summary, Test Plan, Quick Reference, Common Mistakes, Red Flags) | 4 (Pre-checks, Push, MR recommendation, What this skill does NOT do) |
+| Process steps | 6: Verify Tests → **Detect Environment** → **Determine Base Branch** → **Present Options** → **Execute Choice** → Cleanup | 3 phases: Pre-checks (4) → Push (1) → MR recommendation (4) |
+| Options presented to user | YES — explicit menu (merge / PR / cleanup) | NO — single path (push + recommend MR) |
+| Environment detection | YES — detects local-only / fork / direct-push contexts | NO — assumes origin exists, asks for base only if main/master missing |
+
+**Verdict**: **drift-structural — p-flow is a SUBSET**. Per Dimension A item #4, pf's task-end intentionally narrower than sp's finishing. But sp's "Detect Environment" + "Present Options" are real value-adds. **High-priority adapt candidate**: broaden task-end into an options menu (or keep current scope but document explicitly that p-flow chose narrow). **Question for user**: was the narrowing intentional, or just unaware?
+
+### Dimension E roll-up
+
+| Pair | Verdict | Severity | Action |
+|---|---|---|---|
+| E1 verification | drift-cosmetic + filesystem marker | low | acceptable |
+| E2 requesting-code-review | drift-structural (severity model) | medium | keep p-flow's actionable model |
+| E3 brainstorming | drift-structural (template-constrained) | low | acceptable — design intent |
+| E4 writing-plan | drift-structural (no TDD) | **high** | couples with `test-driven-development` skill adoption (Dim A) |
+| E5 task-end | drift-structural (no options menu) | **high** | couples with adapt verdict in Dim A #4 |
+
+**Cross-dimension observations**:
+
+- **TDD discipline missing** (E4 + Dim A #9) — both p-flow's writing-plan template AND the absence of `test-driven-development` skill mean p-flow is a *post-hoc verification* plugin, not a TDD plugin. The original design spec called this out as a non-goal — but it's a major capability gap vs superpowers.
+- **Options-menu pattern missing** (E5 + Dim A #4) — task-end skips the menu that lets users choose merge path. p-flow optimizes for the most common case (push + MR); superpowers optimizes for flexibility. Both valid; pick deliberately.
 
 ---
 
