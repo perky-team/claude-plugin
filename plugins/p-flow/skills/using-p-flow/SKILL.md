@@ -30,10 +30,12 @@ p-flow ships a disciplined task development flow for Claude Code: brainstorm →
 | Skill | Invoke when |
 |---|---|
 | `task-brainstorming` | User starts a new non-trivial task — auto-invoked by `task-start`, can also be called directly. |
-| `writing-plan` | After a spec exists at `specs/<slug>/specification.md`. |
+| `writing-plan` | After a spec exists at `specs/<slug>/specification.md`. Offers a TDD-aligned template (default for code tasks) and a generic template (docs/research). |
+| `test-driven-development` | Before writing any production code (functions / endpoints / classes / handlers / bugfix code). Enforces RED-GREEN-REFACTOR — failing test first, then minimal code, then verify. |
 | `verification-before-completion` | Before ANY claim of "done", "fixed", "ready", or before any `git commit`. Non-negotiable. |
 | `requesting-code-review` | After verification passes and there's a diff worth reviewing. Dispatches code-review via `Task` tool with `general-purpose` + inline template. |
 | `requesting-task-review` | Same trigger; orthogonal lens — checks spec/plan alignment instead of code quality. Same dispatch pattern. |
+| `receiving-code-review` | Before processing a review finding (a `## Review follow-ups` item in plan.md, a PR comment, a reviewer reply). Enforces verify-the-finding-first; reject false positives explicitly. |
 
 ## Hard rules
 

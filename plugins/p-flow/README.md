@@ -22,10 +22,12 @@ To disable: remove the `SessionStart` entry from `hooks/hooks.json`, or globally
 |---|---|
 | `using-p-flow` | Auto-emitted by the SessionStart hook on every fresh session / `/clear` / auto-compact. Establishes the p-flow surface for the model — lists commands, skills, hard rules. |
 | `task-brainstorming` | Right after `/p-flow:task-start`. Produces `specs/<slug>/{specification.md, feature.feature?, adr.md?}`. |
-| `writing-plan` | After spec is approved. Produces `specs/<slug>/plan.md` (5–15 steps, each with acceptance criteria). |
+| `writing-plan` | After spec is approved. Produces `specs/<slug>/plan.md` (5–15 steps, each with acceptance criteria). Offers a TDD-aligned template (default for code tasks) and a generic template (docs/research). |
+| `test-driven-development` | Before writing production code. Enforces RED-GREEN-REFACTOR (failing test first, minimal code, verify). Pairs with `verification-before-completion` ("before code" gate vs "before claiming done" gate). |
 | `verification-before-completion` | Before any "done" claim or commit. Quotes test/lint output. Writes a state marker so `task-end` knows verification ran. |
 | `requesting-code-review` | After verification passes. Dispatches `general-purpose` with the colocated `code-reviewer.md` template; triages findings into `plan.md` follow-ups. |
 | `requesting-task-review` | Same trigger as code review, orthogonal lens. Dispatches `general-purpose` with the colocated `task-reviewer.md` template; checks spec/plan alignment. |
+| `receiving-code-review` | Before processing review feedback (plan.md follow-ups, PR comments, reviewer replies). Verify the finding first; reject false positives with evidence. |
 
 ## Reviewer templates
 
