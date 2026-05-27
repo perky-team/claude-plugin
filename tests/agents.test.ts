@@ -42,6 +42,17 @@ describe('agents', () => {
             expect(tools.length).toBeGreaterThan(0);
           });
 
+          it('frontmatter "tools" must NOT include Write or Edit (read-only)', () => {
+            const v = agent.frontmatter.tools as string;
+            const tools = v.split(',').map((t) => t.trim());
+            expect(tools).not.toContain('Write');
+            expect(tools).not.toContain('Edit');
+          });
+
+          it('body declares a "What is NOT your scope" section', () => {
+            expect(agent.body).toContain('## What is NOT your scope');
+          });
+
           it('frontmatter "model" is a non-empty string when present', () => {
             const v = agent.frontmatter.model;
             if (v !== undefined) {
