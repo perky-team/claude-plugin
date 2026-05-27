@@ -23,10 +23,10 @@ Detect repo state via Bash:
 
 ```bash
 test -f "<root>/.claude/rules/p-flow.md" && echo "rules:yes" || echo "rules:no"
-ls "<root>/specs/" 2>/dev/null | grep -v '^_' | head -1 && echo "specs:yes" || echo "specs:no"
+ls "<root>/specs/" 2>/dev/null | grep -v '^_' | grep -q . && echo "specs:yes" || echo "specs:no"
 ```
 
-(The `grep -v '^_'` excludes any future archive-style folders prefixed with underscore. `head -1` short-circuits — any one feature folder means "specs:yes".)
+(The `grep -v '^_'` excludes any future archive-style folders prefixed with underscore. `grep -q .` exits 0 iff at least one folder remains — any one feature folder means "specs:yes".)
 
 Branch on the result:
 
@@ -131,8 +131,8 @@ If any slug violates: tell the user which ones, propose corrections, re-confirm.
 For each agreed feature:
 
 1. Run `mkdir -p <root>/specs/<slug>/` via Bash.
-2. If `<root>/specs/<slug>/specification.md` already exists with non-trivial content (e.g. user pre-created folders before running init) — refuse to overwrite. Tell the user which slugs collided and ask whether to skip those or abort. Default action on user uncertainty: skip the colliding ones, materialise the rest.
-3. Read `${CLAUDE_SKILL_DIR}/../_shared/templates/specification.template.md` (or `<root>/.claude/templates/p-flow/specification.md` — both are identical at this point, since Phase 1 just copied it). Fill the following placeholders from the dialog:
+2. If `<root>/specs/<slug>/specification.md` already exists (any file, even empty) — refuse to overwrite. Tell the user which slugs collided and ask whether to skip those or abort. Default action on user uncertainty: skip the colliding ones, materialise the rest.
+3. Read `${CLAUDE_SKILL_DIR}/../_shared/templates/specification.template.md` (prefer `<root>/.claude/templates/p-flow/specification.md` if it exists — the user may have customised the team copy after init; fall back to the bundle path if not). Fill the following placeholders from the dialog:
    - `{{FEATURE_TITLE}}` — human-readable title (capitalize first letter of summary).
    - `{{FEATURE_NAME}}` — the slug.
    - `{{ONE_LINE_DESCRIPTION}}` — the one-line summary.
@@ -151,7 +151,7 @@ After all features materialised: confirm to the user how many stubs were written
 
 Tell the user, in this order:
 
-1. **If Phase 1 ran:** where the rules file was written (`<root>/.claude/rules/p-flow.md`) and where the templates live (`<root>/.claude/templates/p-flow/` — four files: `adr.md`, `feature-spec.feature`, `specification.md`, and the deny-list status of `.claude/settings.json`).
+1. **If Phase 1 ran:** where the rules file was written (`<root>/.claude/rules/p-flow.md`) and where the templates live (`<root>/.claude/templates/p-flow/` — three files: `adr.md`, `feature-spec.feature`, `specification.md`). Then report `.claude/settings.json` status:
    - **If `settings.json` was created fresh:** "Created with the full p-flow deny list."
    - **If merged:** list the deny patterns that were **newly added**. If every template pattern was already present, say explicitly: "No new entries added — the existing file already covered every deny pattern from the template."
 2. **If Phase 2 ran AND produced stubs:** list the feature slugs and their paths. Example:
@@ -162,7 +162,7 @@ Tell the user, in this order:
    > - `specs/notifications/specification.md`
    >
    > Run `/p-flow:task-start feature/<slug>` when you're ready to start work on one — `task-brainstorming` will resume filling the placeholders in its refine-mode."
-3. **If Phase 2 was skipped:** *"Brainstorm skipped. When ready, use `/p-flow:task-start <type>/<slug>` for each new feature — it creates the branch and runs `task-brainstorming` automatically."*
+3. **If Phase 2 was skipped OR produced no stubs (zero features confirmed):** *"No feature stubs were created. When ready, use `/p-flow:task-start <type>/<slug>` for each new feature — it creates the branch and runs `task-brainstorming` automatically."*
 4. One-line reminder: *"Conventional Commits (`<type>(<scope>)?: <subject>`) and `<type>/<slug>` branches are now the rule in this repo. Full details in `.claude/rules/p-flow.md`."*
 
 ## Edge cases
@@ -173,4 +173,4 @@ Tell the user, in this order:
 - **`permissions` / `permissions.deny` of wrong shape** → stop with a clear error (covered in Step 5 Case B).
 - **User interrupts mid-dialog in Phase 2** → no rollback. Folders created so far stay. On re-run, the state machine (Step 2) will detect "rules:yes, specs:yes" if any stub was written and refuse — the user has to delete the partial `specs/<slug>/` folders manually to resume. This is acceptable: a partial brainstorm is rare, and explicit cleanup beats implicit overwrite.
 - **`git config user.name` not set** → leave `{{AUTHOR}}` empty in stubs; don't prompt.
-- **Phase 2 dialog produces 0 features** (user said skip on the decomposition question) → write no stubs, jump to Step 10 with the "Phase 2 was skipped" message variant.
+- **Phase 2 dialog produces 0 features** (user said skip on the decomposition question, or removed every candidate during iteration) → write no stubs, jump to Step 10 with the "skipped OR produced no stubs" message variant (item 3).
