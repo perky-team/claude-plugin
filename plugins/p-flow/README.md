@@ -28,6 +28,8 @@ To disable: remove the `SessionStart` entry from `hooks/hooks.json`, or globally
 | `requesting-code-review` | After verification passes. Dispatches `general-purpose` with the colocated `code-reviewer.md` template; triages findings into `plan.md` follow-ups. |
 | `requesting-task-review` | Same trigger as code review, orthogonal lens. Dispatches `general-purpose` with the colocated `task-reviewer.md` template; checks spec/plan alignment. |
 | `receiving-code-review` | Before processing review feedback (plan.md follow-ups, PR comments, reviewer replies). Verify the finding first; reject false positives with evidence. |
+| `using-git-worktrees` | Reference doc for safe worktree creation, pitfalls, cleanup. Background for `--worktree` flow + long-running isolation. |
+| `writing-skills` | Authoring a new p-flow skill or substantially editing one — frontmatter / section / dispatch / template / test conventions. |
 
 ## Reviewer templates
 
@@ -64,11 +66,18 @@ specs/<slug>/
 └── plan.md               ← written by writing-plan; review follow-ups appended after each review
 ```
 
+The `plan.md` file uses one of two templates from `_shared/templates/` — `plan-tdd.template.md` for code tasks (default) or `plan-generic.template.md` for docs/research. `writing-plan` asks the user which to use.
+
+## More
+
+- `CLAUDE.md` — contributor guide (architecture decisions, conventions, test invariants, where things live).
+- `RELEASE-NOTES.md` — per-version changelog.
+
 ## Known limitations
 
 - **Reviewer scope-discipline is best-effort.** `code-reviewer` and `task-reviewer` ship with strict negative-scope rules + a final self-check pass, but the line between code quality and spec alignment isn't always crisp. In practice, on Sonnet the two reports may have ~20% topical overlap (e.g. `code-reviewer` may surface a plan/impl mismatch as a *Suggestion* with a self-noted "doc consistency" caveat). Read both reports as potentially complementary rather than strictly orthogonal.
 - **Sonnet or stronger is required for review agents.** Weaker models (e.g. Haiku) do not reliably honour the scope-discipline directives — they tend to ignore the negative-scope rule entirely and emit cross-domain findings. The agent frontmatter declares `model: sonnet`; if you fork and downgrade, expect noisier reports.
-- **No automated validation of agent prompt behaviour.** Structural invariants (read-only `tools:`, presence of `## What is NOT your scope`, severity model consistency) are covered by `tests/agents.test.ts`. Behavioural compliance is validated by the manual smoke test in `docs/plans/2026-05-27-task-flow-followups.md` and re-runs whenever a review agent's prompt changes.
+- **No automated validation of reviewer-template behaviour.** Structural invariants (template exists + has `## What is NOT your scope`) are covered by `tests/review-template-refs.test.ts`. Behavioural compliance is validated by the manual smoke test in `docs/plans/2026-05-27-task-flow-followups.md` and re-runs whenever a reviewer template changes.
 
 ## Install
 

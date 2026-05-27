@@ -36,6 +36,8 @@ p-flow ships a disciplined task development flow for Claude Code: brainstorm →
 | `requesting-code-review` | After verification passes and there's a diff worth reviewing. Dispatches code-review via `Task` tool with `general-purpose` + inline template. |
 | `requesting-task-review` | Same trigger; orthogonal lens — checks spec/plan alignment instead of code quality. Same dispatch pattern. |
 | `receiving-code-review` | Before processing a review finding (a `## Review follow-ups` item in plan.md, a PR comment, a reviewer reply). Enforces verify-the-finding-first; reject false positives explicitly. |
+| `using-git-worktrees` | Reference doc for safe worktree creation, pitfalls, cleanup. Useful background when `/p-flow:task-start --worktree` is invoked, or when isolating long-running work. |
+| `writing-skills` | When authoring a new p-flow skill or substantially editing one — establishes frontmatter / section / dispatch conventions so the plugin stays internally consistent. |
 
 ## Hard rules
 
