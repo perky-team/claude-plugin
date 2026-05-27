@@ -3,7 +3,7 @@
 > Marketplace tag → p-flow plugin version → date → headline.
 > Authored 2026-05-27; backfilled from `v4.6.0` onward (the first p-flow release on the marketplace was `v3.1.0` with `plugins/p-flow 0.1.0` — a minimal `init` skill; see `git log v4.5.0..v4.6.0 -- plugins/p-flow/`).
 
-## v?.?.? — `plugins/p-flow 0.7.0` — 2026-05-27 — `/p-flow:init` Phase 2 brainstorm
+## v4.11.0 — `plugins/p-flow 0.7.0` — 2026-05-27 — `/p-flow:init` Phase 2 brainstorm
 
 - `/p-flow:init` now runs in two phases. Phase 1 is the existing scaffolding (rules + templates + settings merge). Phase 2 is a new repo-level brainstorm dialog that captures vision / problem / users / out-of-scope and identifies an initial feature list, then materialises one stub `specs/<slug>/specification.md` per agreed feature.
 - Each stub is the standard `specification.template.md` with metadata + problem + user story + 1–3 acceptance bullets filled. Deeper sections stay as `{{PLACEHOLDERS}}` and are resumed later by `task-brainstorming`'s refine-mode when the user runs `/p-flow:task-start feature/<slug>`.
@@ -15,8 +15,7 @@
 - Phase 2 is skippable via `AskUserQuestion` for users who prefer to add features ad-hoc.
 - **No new skill, no `specs/repo.md`, no roadmap file.** Folders remain the canonical source of truth. Adding / refining / dropping features later uses the existing `task-start` + `task-brainstorming` workflow (drop = user manually sets `Status: dropped` in the spec frontmatter).
 - **No breaking changes.** Existing initialised repos are protected by the state-machine guard's "refuse if specs exist" rule — no risk of overwriting stubs or specs.
-
-> Marketplace tag will be assigned at push time per the repo's release rules in `.claude/CLAUDE.md`.
+- New regression test file `tests/p-flow-init-phase2.test.ts` — guards the state-machine table shape, the `grep -q .` detection (vs the broken `head -1`), the cross-file consistency between SKILL.md and README's Idempotency table, and Step 9 placeholder ↔ template name agreement.
 
 ## v4.10.0 — `plugins/p-flow 0.6.0` — 2026-05-27 — Wave D (cleanup batch)
 
