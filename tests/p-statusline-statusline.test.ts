@@ -110,6 +110,21 @@ describe('p-statusline statusline.cjs', () => {
     // several git subprocesses — slow enough on Windows to exceed the 5s default.
   }, 15000);
 
+  it('does not mark dirty when only untracked files are present', () => {
+    const repo = makeGitRepo();
+    writeFileSync(join(repo, 'untracked.txt'), 'new');
+    const out = plain(run({ workspace: { current_dir: repo, project_dir: repo } }));
+    expect(out).toContain('work');
+    expect(out).not.toMatch(/work\*/);
+  }, 15000);
+
+  it('marks dirty when a tracked file is modified', () => {
+    const repo = makeGitRepo();
+    writeFileSync(join(repo, 'file.txt'), 'changed');
+    const out = plain(run({ workspace: { current_dir: repo, project_dir: repo } }));
+    expect(out).toMatch(/work\*/);
+  }, 15000);
+
   it('produces output without throwing on an empty input object', () => {
     const out = run({});
     expect(typeof out).toBe('string');

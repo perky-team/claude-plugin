@@ -106,7 +106,7 @@ process.stdin.on("end", () => {
         if (branch) {
           let dirty = "";
           try {
-            const status = execSync("git status --porcelain", { cwd, stdio: ["ignore", "pipe", "ignore"] }).toString();
+            const status = execSync("git status --porcelain --untracked-files=no", { cwd, stdio: ["ignore", "pipe", "ignore"] }).toString();
             // Bold bright-white "*" so uncommitted changes stand out against
             // the magenta branch name. The trailing reset is supplied by the
             // segment wrapper (C.reset), since "*" is the last character.
