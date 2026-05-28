@@ -78,9 +78,9 @@ describe('p-statusline statusline.cjs', () => {
     expect(out).toMatch(/7d\s+5%/);
   });
 
-  it('omits the git segment when cwd is not a git repository', () => {
+  it('renders an explicit "no git" segment when cwd is not a git repository', () => {
     const out = plain(run({ workspace: { current_dir: nonGit, project_dir: nonGit } }));
-    expect(out).not.toContain('⎇'); // git glyph
+    expect(out).toContain('⎇ no git');
   });
 
   it('renders model, effort, and a RAM percentage', () => {

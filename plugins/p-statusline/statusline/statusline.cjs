@@ -95,7 +95,17 @@ process.stdin.on("end", () => {
     // fall back to the short commit hash there.
     let gitSeg = "";
     if (cwd) {
+      // Detect a non-repo cwd explicitly so the segment can say so, instead of
+      // collapsing to empty (which is indistinguishable from "rendered, no
+      // branch info available").
+      let inRepo = false;
       try {
+        execSync("git rev-parse --is-inside-work-tree", { cwd, stdio: ["ignore", "pipe", "ignore"] });
+        inRepo = true;
+      } catch (_) {}
+      if (!inRepo) {
+        gitSeg = "\x1b[90m⎇ no git\x1b[0m";
+      } else try {
         let branch = "";
         try {
           branch = execSync("git branch --show-current", { cwd, stdio: ["ignore", "pipe", "ignore"] }).toString().trim();

@@ -10,7 +10,8 @@ terminal. At a glance it shows:
 - **Rate limits** — the 5-hour and 7-day usage windows, each with a countdown
   to reset. `n/a` until Claude Code reports the data.
 - **Git** — branch name, `*` for uncommitted changes, a `wt:` marker inside a
-  linked worktree, and `↑/↓` commits ahead of / behind upstream.
+  linked worktree, and `↑/↓` commits ahead of / behind upstream. Renders
+  `⎇ no git` (dim) when the project directory is not a git repository.
 
 **Line 2**
 - Model and effort level.
