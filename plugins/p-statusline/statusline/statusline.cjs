@@ -278,16 +278,20 @@ process.stdin.on("end", () => {
     }
 
     let out = parts.join(SEP);
-    // Cap the path width at the limits-section width so the second " | "
-    // separator lines up vertically with line 1. The path is truncated from
-    // the start with a "..." prefix, keeping the folder name (end of path)
-    // visible. Short paths are left as-is — no trailing pad.
+    // Match the path width to the limits-section width so the trailing " | "
+    // separator lines up vertically with line 1. Longer paths are truncated
+    // from the start with a "..." prefix (keeping the folder name visible);
+    // shorter paths get a trailing space pad.
     const limitsVlen = parts[1] ? vlen(parts[1]) : 0;
     let dirDisplay = dirPath;
-    if (dirPath && limitsVlen > 0 && dirPath.length > limitsVlen) {
-      dirDisplay = limitsVlen <= 3
-        ? dirPath.slice(dirPath.length - limitsVlen)
-        : "..." + dirPath.slice(dirPath.length - (limitsVlen - 3));
+    if (dirPath && limitsVlen > 0) {
+      if (dirPath.length > limitsVlen) {
+        dirDisplay = limitsVlen <= 3
+          ? dirPath.slice(dirPath.length - limitsVlen)
+          : "..." + dirPath.slice(dirPath.length - (limitsVlen - 3));
+      } else if (dirPath.length < limitsVlen) {
+        dirDisplay = dirPath + " ".repeat(limitsVlen - dirPath.length);
+      }
     }
     const line2 = [];
     if (modelSeg)    line2.push(modelSeg);
