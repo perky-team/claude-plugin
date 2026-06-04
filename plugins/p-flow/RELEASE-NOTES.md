@@ -3,7 +3,7 @@
 > Marketplace tag → p-flow plugin version → date → headline.
 > Authored 2026-05-27; backfilled from `v4.6.0` onward (the first p-flow release on the marketplace was `v3.1.0` with `plugins/p-flow 0.1.0` — a minimal `init` skill; see `git log v4.5.0..v4.6.0 -- plugins/p-flow/`).
 
-## v4.11.0 — `plugins/p-flow 0.7.0` — 2026-05-27 — `/p-flow:init` Phase 2 brainstorm
+## v4.13.0 — `plugins/p-flow 0.7.0` — 2026-06-04 — `/p-flow:init` Phase 2 brainstorm
 
 - `/p-flow:init` now runs in two phases. Phase 1 is the existing scaffolding (rules + templates + settings merge). Phase 2 is a new repo-level brainstorm dialog that captures vision / problem / users / out-of-scope and identifies an initial feature list, then materialises one stub `specs/<slug>/specification.md` per agreed feature.
 - Each stub is the standard `specification.template.md` with metadata + problem + user story + 1–3 acceptance bullets filled. Deeper sections stay as `{{PLACEHOLDERS}}` and are resumed later by `task-brainstorming`'s refine-mode when the user runs `/p-flow:task-start feature/<slug>`.
