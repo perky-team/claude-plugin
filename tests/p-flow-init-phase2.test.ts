@@ -45,7 +45,7 @@ describe('init Phase 2 — state-machine + cross-file consistency', () => {
 
   it('Step 2 specs-detection uses `grep -q .`, not `head -1`', () => {
     const content = read(INIT_SKILL);
-    const bashBlockMatch = content.match(/```bash\n([\s\S]+?)\n```/);
+    const bashBlockMatch = content.match(/```bash\r?\n([\s\S]+?)\r?\n```/);
     expect(bashBlockMatch, 'init/SKILL.md must contain at least one ```bash block').not.toBeNull();
     const bashBlock = bashBlockMatch![1];
 
