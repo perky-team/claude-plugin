@@ -21,7 +21,7 @@ p-flow ships a disciplined task development flow for Claude Code: brainstorm →
 
 | Command | When user types it |
 |---|---|
-| `/p-flow:init` | Bootstrap p-flow rules + templates + secret-deny-list into the current repo. One-time per repo. |
+| `/p-flow:init` | Bootstrap p-flow into a new repo. Phase 1 — scaffold rules + templates + secret-deny-list. Phase 2 — brainstorm the initial feature list and create `specs/<slug>/specification.md` stubs. One-time per repo (state-machine guard; refuses if `specs/<slug>/` already exist). |
 | `/p-flow:task-start <slug> [--worktree]` | Open a new task. Creates `<type>/<slug>` branch + `specs/<slug>/` dir + invokes brainstorming. |
 | `/p-flow:task-end` | Finalize the task: pre-checks, push, recommend MR/PR. |
 

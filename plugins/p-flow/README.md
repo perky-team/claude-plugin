@@ -6,7 +6,7 @@ Disciplined task development flow for Claude Code: skills + subagents that walk 
 
 | Command | Purpose |
 |---|---|
-| `/p-flow:init` | One-time per repo. Writes `.claude/settings.json` (secrets deny-list), `.claude/rules/p-flow.md` (rules), and `.claude/templates/p-flow/` (spec/feature/ADR templates). |
+| `/p-flow:init` | Bootstrap p-flow into a new repo. Phase 1 — scaffold rules, templates, secret-deny-list. Phase 2 — brainstorm initial feature list with the user and create stub specs in `specs/<slug>/`. One-time per repo (state-machine guard). |
 | `/p-flow:task-start <slug> [--worktree]` | Open a new task: ask branch type, create `<type>/<slug>` branch (and optional worktree), open `specs/<slug>/`, invoke brainstorming. |
 | `/p-flow:task-end` | Finalize: pre-check the plan and verification marker, push the branch, recommend an MR with copy-ready `gh` and `glab` commands. |
 
@@ -49,10 +49,18 @@ In the current git repo (or current working directory if not a git repo):
 - `.claude/settings.json` — `permissions.deny` patterns blocking reads/writes of common secret-bearing files (`.env*`, `*.pem`, `*.key`, `*credentials*`, `*secrets*`, SSH/AWS dotdirs, etc.). Merged if the file already exists.
 - `.claude/rules/p-flow.md` — security guidance, Git workflow (Conventional Commits + `feature/<slug>` / `bugfix/<slug>` / `hotfix/<slug>` / `chore/<slug>` / `docs/<slug>`), specifications layout, and a §4 describing the skill flow.
 - `.claude/templates/p-flow/` — three template files (`adr.md`, `feature-spec.feature`, `specification.md`).
+- `specs/<slug>/specification.md` — one stub per feature agreed during Phase 2's brainstorm dialog (skippable). Each stub fills metadata + problem + user story + 1–3 acceptance bullets; the rest stays as `{{PLACEHOLDERS}}` for `task-brainstorming` to resume later via `/p-flow:task-start feature/<slug>`.
 
 ### Idempotency
 
-`/p-flow:init` refuses if `.claude/rules/p-flow.md` already exists. To reinitialise, delete that file and re-run.
+`/p-flow:init` uses a state-machine guard based on what's already on disk:
+
+| `.claude/rules/p-flow.md` | `specs/<slug>/` folders | Behaviour |
+|---|---|---|
+| missing | none | runs both phases (scaffolding + brainstorm) |
+| present | none | skips scaffolding, runs brainstorm only (resume interrupted dialog) |
+| present | ≥ 1 | refuses — already initialised; use `/p-flow:task-start` to add new features, or delete `.claude/rules/p-flow.md` AND the `specs/<slug>/` folders manually to regenerate |
+| missing | ≥ 1 | refuses — inconsistent state; restore `.claude/rules/p-flow.md` (e.g. via git) or remove the orphaned `specs/<slug>/` folders, then re-run |
 
 ## Spec directory layout
 
