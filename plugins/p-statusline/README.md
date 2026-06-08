@@ -48,6 +48,11 @@ uses only Node built-in modules.
 
 3. Restart Claude Code. The status line appears at the bottom of the terminal.
 
+## Legend
+
+Run `/p-statusline:help` for a reference of what every element on the bar
+means — the context segment, rate-limit windows, git markers, and line 2.
+
 ## Updating
 
 After the plugin updates, run `/p-statusline:install` again to copy the newer
