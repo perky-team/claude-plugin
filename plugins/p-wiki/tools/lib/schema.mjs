@@ -4,17 +4,18 @@ export const TYPES = [
 ];
 
 const BASE_PAGE = ['id', 'type', 'title', 'created', 'updated', 'status', 'tags', 'sources'];
+const BASE_ALLOWED = [...BASE_PAGE, 'conflict-since'];
 const QUERY_FIELDS = ['id', 'type', 'title', 'created', 'status', 'tags', 'question', 'informed-by'];
 const RAW_FIELDS = ['id', 'type', 'title', 'source-url', 'source-type', 'ingested', 'compiled', 'compiled-to'];
 
 const TYPE_SCHEMAS = {
-  concept: { required: BASE_PAGE, allowed: BASE_PAGE },
-  person: { required: BASE_PAGE, allowed: BASE_PAGE },
+  concept: { required: BASE_PAGE, allowed: BASE_ALLOWED },
+  person: { required: BASE_PAGE, allowed: BASE_ALLOWED },
   source: {
     required: [...BASE_PAGE, 'source-url', 'source-type'],
-    allowed: [...BASE_PAGE, 'source-url', 'source-type'],
+    allowed: [...BASE_ALLOWED, 'source-url', 'source-type'],
   },
-  query: { required: QUERY_FIELDS, allowed: [...QUERY_FIELDS, 'updated'] },
+  query: { required: QUERY_FIELDS, allowed: [...QUERY_FIELDS, 'updated', 'conflict-since'] },
   'raw-article': { required: RAW_FIELDS, allowed: RAW_FIELDS },
   'raw-file': { required: RAW_FIELDS, allowed: RAW_FIELDS },
   'raw-paste': { required: RAW_FIELDS, allowed: RAW_FIELDS },
@@ -42,6 +43,9 @@ export function validateFrontmatter(fm) {
   }
   if ('source-type' in fm && !SOURCE_TYPES.includes(fm['source-type'])) {
     return { ok: false, error: `invalid source-type: ${fm['source-type']}` };
+  }
+  if ('conflict-since' in fm && !/^\d{4}-\d{2}-\d{2}$/.test(String(fm['conflict-since']))) {
+    return { ok: false, error: `conflict-since must be YYYY-MM-DD: ${fm['conflict-since']}` };
   }
   return { ok: true };
 }

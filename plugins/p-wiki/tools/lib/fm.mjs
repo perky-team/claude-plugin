@@ -3,7 +3,10 @@ import { parseYaml, stringifyYaml } from './yaml.mjs';
 const FENCE = '---';
 
 export function parseFrontmatter(text) {
-  const lines = text.split('\n');
+  // Normalize line endings first: CRLF (Windows / git autocrlf checkout) and
+  // lone CR would otherwise leave a trailing \r on the fence line, so the
+  // "---" match fails and the whole page is silently skipped by callers.
+  const lines = text.replace(/\r\n?/g, '\n').split('\n');
   if (lines[0] !== FENCE) {
     throw new Error('frontmatter: missing opening --- fence');
   }

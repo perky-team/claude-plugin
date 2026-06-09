@@ -164,6 +164,8 @@ Accepts any file path — both `raw/` items and arbitrary in-repo files (spec, R
    - **Frontmatter (error):** required fields present per type; `type:` matches the subdirectory.
    - **Underlinked (warning):** concept pages with fewer than 3 outgoing links to other pages. `status: draft` exempt — drafts are still under construction.
    - **Stale (warning):** `status: active` + `updated` older than 90 days.
+   - **Conflicts (warning):** page carries an unresolved `conflict-since` flag. See [`2026-06-08-pwiki-conflict-tracking-design.md`](2026-06-08-pwiki-conflict-tracking-design.md).
+   - **Source changed (warning):** a path in `sources:` was committed (git) after the page's `updated` date — the derived page may no longer reflect its source. Skipped for untracked sources / non-git repos.
 3. Report findings with file paths grouped by severity. **Does not fix anything automatically.**
 
 **Tools:** Read, Grep, Glob.
@@ -238,9 +240,9 @@ In-repo files used as sources are NOT modified by the plugin — they need no sp
 - **No invention.** Every claim must trace back to a source listed in `sources:`. If a source does not support a claim, leave it out.
 - Concept page length: 800–2000 words. Larger → split into sub-pages and link.
 - Source-summary length: 300–600 words.
-- Factual conflicts between sources — do not silently overwrite. Insert a callout block in both affected pages:
+- Factual conflicts between sources — do not silently overwrite. Insert a callout with a parseable leading marker and record a `conflict-since` flag (via `pwiki set --conflict-since`, **without** bumping `updated`) so `/p-wiki:lint` surfaces it until reconciled. Callouts are resolved in bulk by `/p-wiki:reconcile`, which merges supersession cases and clears the flag (`pwiki set --clear-conflict`); genuine conflicts stay flagged for a human. See [`2026-06-08-pwiki-conflict-tracking-design.md`](2026-06-08-pwiki-conflict-tracking-design.md) (detection) and [`2026-06-09-pwiki-reconcile-design.md`](2026-06-09-pwiki-reconcile-design.md) (resolution).
   ```
-  > ⚠️ Conflict: [source A](../source/a-summary.md) claims X. [source B](../source/b-summary.md) claims Y.
+  > ⚠️ Conflict (since 2026-06-05): [source A](../source/a-summary.md) claims X; [source B](../source/b-summary.md) claims Y. Body below reflects the pre-conflict sources.
   ```
 - Update vs create: if a page with the same id exists → Edit (don't recreate, don't duplicate).
 

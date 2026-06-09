@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { TYPES, validateFrontmatter, templateBody, requiredFields } from '../lib/schema.mjs';
+import { TYPES, validateFrontmatter, templateBody, requiredFields, allowedFields } from '../lib/schema.mjs';
 
 describe('schema.TYPES', () => {
   it('covers all seven page types', () => {
@@ -53,6 +53,40 @@ describe('schema.validateFrontmatter', () => {
     const r = validateFrontmatter(fm);
     expect(r.ok).toBe(false);
     expect(r.error).toMatch(/raw-paste.*source-type/i);
+  });
+
+  it('accepts a valid conflict-since', () => {
+    const fm = {
+      id: 'k', type: 'concept', title: 'K',
+      created: '2026-05-14', updated: '2026-05-14',
+      status: 'active', tags: [], sources: [],
+      'conflict-since': '2026-06-05',
+    };
+    expect(validateFrontmatter(fm)).toEqual({ ok: true });
+  });
+
+  it('rejects a malformed conflict-since', () => {
+    const fm = {
+      id: 'k', type: 'concept', title: 'K',
+      created: '2026-05-14', updated: '2026-05-14',
+      status: 'active', tags: [], sources: [],
+      'conflict-since': 'June 5',
+    };
+    const r = validateFrontmatter(fm);
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/conflict-since/i);
+  });
+});
+
+describe('schema.allowedFields', () => {
+  it('lists conflict-since as allowed on concept/person/source/query', () => {
+    for (const t of ['concept', 'person', 'source', 'query']) {
+      expect(allowedFields(t)).toContain('conflict-since');
+    }
+  });
+
+  it('does not list conflict-since as allowed on raw types', () => {
+    expect(allowedFields('raw-article')).not.toContain('conflict-since');
   });
 });
 

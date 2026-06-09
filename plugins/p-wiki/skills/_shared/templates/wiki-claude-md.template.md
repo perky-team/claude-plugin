@@ -20,6 +20,12 @@ sources: []               # paths the page depends on; ALWAYS relative to repo r
 - `concept` — no extra fields.
 - `person` — no extra fields.
 
+Optional on any page type:
+
+```yaml
+conflict-since: 2026-06-05   # ISO date; present only while an unresolved conflict callout sits in the body. Set by compile when a source contradicts the page; cleared on reconcile. Surfaced by `/p-wiki:lint` (Conflicts).
+```
+
 ### `source`
 
 ```yaml
@@ -74,10 +80,11 @@ In-repo files used as sources are NOT modified by the plugin. They appear in `so
 - **No invention.** Every claim must trace back to a source listed in `sources:`. If a source does not support a claim, leave it out.
 - Concept page length: 800–2000 words. Larger → split into sub-pages and link.
 - Source-summary length: 300–600 words.
-- Factual conflicts between sources — do not silently overwrite. Insert a callout block in both affected pages:
+- Factual conflicts between sources — do not silently overwrite. Insert a callout with a parseable leading marker, and record the flag in frontmatter **without** moving `updated`:
   ```
-  > ⚠️ Conflict: [source A](../source/a-summary.md) claims X. [source B](../source/b-summary.md) claims Y.
+  > ⚠️ Conflict (since 2026-06-05): [source A](../source/a-summary.md) claims X; [source B](../source/b-summary.md) claims Y. Body below reflects the pre-conflict sources.
   ```
+  Then `pwiki set <path> --conflict-since 2026-06-05` (no `--bump-updated`). `/p-wiki:lint` surfaces any page with an open callout (flagged or legacy). To close them, run **`/p-wiki:reconcile`** — it merges supersession cases with their current sources, removes the callouts (`set --clear-conflict`, which bumps `updated`), and leaves genuine conflicts for a human. The three verbs: **compile** flags, **reconcile** resolves, **lint** reports.
 - Update vs create: if a page with the same id exists → Edit (don't recreate, don't duplicate).
 - Slug stability: before creating a new page, normalise the candidate title (lowercase, strip punctuation, collapse spaces) and check `pages/<type>/*` for an existing page whose normalised title matches. Match → Edit it; no match → Write new.
 - Backlink audit safety: (a) case-sensitive whole-word match against the exact `title:` from frontmatter, (b) skip occurrences already inside a markdown link or inside a fenced/inline code block, (c) link only at the first qualifying occurrence per file.
@@ -150,7 +157,7 @@ See `sources:` in frontmatter.
 A bundled Node CLI `pwiki` lives in the plugin (`${CLAUDE_PLUGIN_ROOT}/tools/pwiki.mjs`). Skills use it for mechanical operations; you should prefer it over generic Read/Write/Grep for:
 
 - **Creating any new page** — `pwiki new <type> --title=... [--source=... --tags=...]` (handles slug, frontmatter, conflicts).
-- **Mutating frontmatter** — `pwiki set <path> --bump-updated --add-source=... --add-tag=...`.
+- **Mutating frontmatter** — `pwiki set <path> --bump-updated --add-source=... --add-tag=...`; flag/clear a conflict with `--conflict-since <date>` (no `updated` bump) / `--clear-conflict` (bumps `updated`).
 - **Promoting query → concept** — `pwiki promote <path> --to=concept`.
 - **Ranked search** — `pwiki search "<question>" --format=json --limit=10`.
 - **Lint** — `pwiki lint` (text) or `pwiki lint --format=json`.

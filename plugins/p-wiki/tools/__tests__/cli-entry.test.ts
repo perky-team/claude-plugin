@@ -11,7 +11,7 @@ describe('pwiki CLI entry', () => {
   it('prints version on --version', () => {
     const r = spawnSync('node', [cli, '--version'], { encoding: 'utf-8' });
     expect(r.status).toBe(0);
-    expect(r.stdout.trim()).toBe('3.0.0');
+    expect(r.stdout.trim()).toBe('3.2.0');
   });
 
   it('exits 1 on unknown command', () => {

@@ -1,7 +1,7 @@
 ---
 name: lint
 description: |
-  Audit the wiki for problems: dead links, orphan pages, frontmatter errors, underlinked concept pages, stale entries. Reports only — never fixes automatically. Use when the user says "lint wiki", "check the wiki", "audit wiki", or asks whether the wiki has issues.
+  Audit the wiki for problems: dead links, orphan pages, frontmatter errors, underlinked concept pages, stale entries, unresolved conflicts, and pages whose sources changed since they were compiled. Reports only — never fixes automatically. Use when the user says "lint wiki", "check the wiki", "audit wiki", or asks whether the wiki has issues.
 argument-hint: (no arguments)
 allowed-tools: Bash(git rev-parse:*) Bash(node:*)
 ---
@@ -22,11 +22,17 @@ node "${CLAUDE_PLUGIN_ROOT}/tools/pwiki.mjs" lint
 
 The CLI emits the report directly to stdout (errors first, warnings after, totals at the bottom). Pass its output through to the user verbatim. Exit code is always 0 — the CLI never fails on findings.
 
+Two warning categories concern derived-content freshness:
+- **Conflicts** — a page carries an unresolved conflict callout: a `conflict-since` flag and/or a blockquote callout mentioning `conflict`/`superseded` in the body (`⚠️`, `**Superseded …**`, or `**Note:** … superseded …` shapes; legacy callouts with no flag are detected too). ADR / decision pages are excluded — their "superseded by …" notice is a permanent record by convention. Age in days, or "date unknown" for a callout with no parseable date.
+- **Source changed** — a path in a page's `sources:` was committed *after* the page's `updated` date, so the derived page may no longer reflect its source. Skipped silently for untracked sources or non-git repos.
+
+For both, run **`/p-wiki:reconcile`** to merge the affected pages with their current sources and remove the resolved callouts (genuine conflicts are left for you). To reconcile a single page: `/p-wiki:reconcile <path>`.
+
 ## Step 3 — Append next-step hint
 
 After the CLI output, append one line:
 
-> Run `/p-wiki:compile` after fixes, then re-lint.
+> Run `/p-wiki:reconcile` to merge conflicts / changed sources, then re-lint.
 
 Do not propose fixes inline — let the user decide.
 

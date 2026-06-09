@@ -35,6 +35,14 @@ describe('fm.parseFrontmatter', () => {
   it('throws on unterminated frontmatter', () => {
     expect(() => parseFrontmatter('---\nid: foo\n# nope\n')).toThrow(/frontmatter/);
   });
+
+  it('parses a CRLF file (Windows / git autocrlf) instead of silently failing', () => {
+    const crlf = PAGE.replace(/\n/g, '\r\n');
+    const { frontmatter, body } = parseFrontmatter(crlf);
+    expect(frontmatter.id).toBe('foo');
+    expect(frontmatter.type).toBe('concept');
+    expect(body).toBe('\n# Foo\n\nBody line.\n');
+  });
 });
 
 describe('fm.serializeFrontmatter', () => {

@@ -1,4 +1,5 @@
 import { existsSync, writeFileSync, readFileSync, mkdirSync, renameSync, readdirSync, unlinkSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { dirname, join, posix as pathPosix } from 'node:path';
 import { serializeFrontmatter, parseFrontmatter } from '../fm.mjs';
 import { directoryFor } from '../schema.mjs';
@@ -241,6 +242,20 @@ export function createFsDestination({ rootPath, root }) {
     return { total: results.length, results };
   }
 
+  // Last-commit date (YYYY-MM-DD) of a repo-relative path, via git. Returns null
+  // for untracked paths or when not in a git repo, in which case the
+  // source-changed check is skipped for that source. Committer date (%cs) is
+  // CI-stable, unlike filesystem mtime which resets on checkout.
+  function sourceDate(relPath) {
+    try {
+      const out = execFileSync('git', ['log', '-1', '--format=%cs', '--', relPath],
+        { cwd: rootPath, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+      return out || null;
+    } catch {
+      return null;
+    }
+  }
+
   function lint(opts = {}) {
     const docs = [];
     for (const { path } of listPages({ in: 'all' })) {
@@ -250,7 +265,7 @@ export function createFsDestination({ rootPath, root }) {
         docs.push({ path, frontmatter, body });
       } catch { /* skip unparseable */ }
     }
-    return runChecks(docs, { repoRoot: rootPath, existsFn: existsSync });
+    return runChecks(docs, { repoRoot: rootPath, existsFn: existsSync, sourceDateFn: sourceDate });
   }
 
   function applyBacklinks({ targetPath, maxSuggestions = 20, force = false }) {

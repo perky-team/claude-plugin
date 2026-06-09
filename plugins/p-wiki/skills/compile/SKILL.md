@@ -77,7 +77,24 @@ This handles the frontmatter (id, type, created, updated, status, sources) and s
    ```
 2. Edit the body to add new facts in the appropriate sections. Do not remove existing content.
 
-For conflict callouts when two sources disagree on a fact, edit both affected page bodies directly (the CLI does not handle this; it's an LLM-judged content concern).
+**Conflict callouts.** When a source contradicts a fact already on a page (e.g. a new ADR supersedes an older synthesis), do NOT silently overwrite — the conflict target is usually a *different* page than the one being compiled. For each affected target page:
+
+1. Insert a callout at the top of the body, using the standardized leading marker so the prose stays human-readable but the date is parseable:
+   ```
+   > ⚠️ Conflict (since <YYYY-MM-DD>): <one line — what is superseded and by what, with links>. Body below reflects the pre-conflict sources.
+   ```
+2. Record the flag in frontmatter so `lint` can surface it later — **without** moving `updated`:
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/tools/pwiki.mjs" set <target-path> --conflict-since <YYYY-MM-DD> --format=json
+   ```
+   Do NOT pass `--bump-updated` and do NOT hand-edit the `updated` field on a conflict-flag-only touch: the body was not reconciled, so `updated` must keep reflecting the last *reconciled* edit (this is what keeps the `stale` and `source-changed` lint checks meaningful).
+
+**Reconciling a conflict.** When a later compile pass actually rewrites the body to agree with the new source, remove the callout and clear the flag in one CLI call (this DOES bump `updated`, since reconciliation is a real edit):
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/tools/pwiki.mjs" set <target-path> --clear-conflict --add-source "<source-path>" --format=json
+```
+
+Callouts that compile leaves behind are closed in bulk by **`/p-wiki:reconcile`**, which sweeps flagged/stale pages, merges supersession cases with their current sources, removes the callouts, and leaves genuine conflicts for a human.
 
 Apply [Markdown sanitization](#markdown-sanitization) to all body content before writing.
 

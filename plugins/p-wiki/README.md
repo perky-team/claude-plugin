@@ -1,6 +1,6 @@
 # p-wiki
 
-A Claude Code plugin that turns any git repo into an indexed markdown knowledge wiki under `docs/wiki/`. Skills: `init`, `ingest`, `compile`, `query`, `lint`.
+A Claude Code plugin that turns any git repo into an indexed markdown knowledge wiki under `docs/wiki/`. Skills: `init`, `ingest`, `compile`, `query`, `lint`, `reconcile`.
 
 Distributed via the [`perky.team`](../../) marketplace (see the repo root for the marketplace catalog).
 
@@ -38,7 +38,8 @@ After edits, run `/reload-plugins` inside Claude Code to pick them up without re
 | `/p-wiki:ingest <url\|path\|->` | Captures an external source (URL, outside-repo file, or inline paste) into `docs/wiki/raw/`. For files already in the repo, use `/p-wiki:compile <path>` directly. |
 | `/p-wiki:compile [path]` | Synthesizes pages from a source file (raw/ or anywhere in the repo). Without an argument, processes all `raw/**` items with `compiled: false`. |
 | `/p-wiki:query "<question>"` | Searches the wiki and writes a query-output page with citations. |
-| `/p-wiki:lint` | Audits links, orphan pages, frontmatter, staleness. Reports only — does not auto-fix. |
+| `/p-wiki:lint` | Audits links, orphan pages, frontmatter, staleness, unresolved conflicts, and source-divergence. Reports only — does not auto-fix. |
+| `/p-wiki:reconcile [path]` | Resolves conflict callouts and stale pages: re-merges a derived page with its current sources and removes the superseded callout. Genuine conflicts are left flagged for a human. |
 
 ## Design
 

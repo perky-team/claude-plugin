@@ -14,7 +14,7 @@ import { ensureSubParent } from './lib/confluence/tree.mjs';
 import { writeConfig, validateConfig } from './lib/config.mjs';
 import { syncToMirror } from './lib/sync.mjs';
 
-const VERSION = '3.0.0';
+const VERSION = '3.2.0';
 
 export function mapErrorToCode(err) {
   if (err?.message && /invalid \.pwiki\.json/.test(err.message)) return 'config-invalid';
@@ -83,6 +83,8 @@ function formatLintReport(r) {
     ['Orphan pages (warnings)', r.warnings['orphan-pages'], (e) => `  - ${e.file}`],
     ['Underlinked (warnings)', r.warnings.underlinked, (e) => `  - ${e.file} — ${e.count} outgoing link${e.count === 1 ? '' : 's'}`],
     ['Stale (warnings)', r.warnings.stale, (e) => `  - ${e.file} — updated ${e.updated} (${e.days} days)`],
+    ['Conflicts (warnings)', r.warnings.conflicts ?? [], (e) => `  - ${e.file} — unresolved conflict${e.since ? ` since ${e.since} (${e.days} days)` : ' (date unknown)'}`],
+    ['Source changed (warnings)', r.warnings['source-changed'] ?? [], (e) => `  - ${e.file} — source ${e.source} changed ${e.sourceDate}, page updated ${e.pageUpdated}`],
     ['Drift (warnings)', r.warnings.drift ?? [], (e) => `  - [${e.id}] ${e.title} (parent ${e.parentId})`],
   ];
   for (const [title, items, fmt] of sections) {
@@ -314,6 +316,15 @@ try {
     if (args['add-compiled-to']) mutations.addCompiledTo = arrayify(args['add-compiled-to']);
     if (args['bump-updated']) mutations.bumpUpdated = true;
     if (args['mark-compiled']) mutations.markCompiled = true;
+    if (args['conflict-since'] !== undefined) {
+      const cs = String(args['conflict-since']);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(cs)) die('set: --conflict-since expects YYYY-MM-DD', 1);
+      mutations.setFields = { ...(mutations.setFields ?? {}), 'conflict-since': cs };
+    }
+    if (args['clear-conflict']) {
+      mutations.removeFields = [...(mutations.removeFields ?? []), 'conflict-since'];
+      mutations.bumpUpdated = true;
+    }
 
     try {
       const r = dest.mutatePage(path, mutations);
