@@ -24,7 +24,7 @@ The CLI emits the report directly to stdout (errors first, warnings after, total
 
 Two warning categories concern derived-content freshness:
 - **Conflicts** — a page carries an unresolved conflict callout: a `conflict-since` flag and/or a blockquote callout mentioning `conflict`/`superseded` in the body (`⚠️`, `**Superseded …**`, or `**Note:** … superseded …` shapes; legacy callouts with no flag are detected too). ADR / decision pages are excluded — their "superseded by …" notice is a permanent record by convention. Age in days, or "date unknown" for a callout with no parseable date.
-- **Source changed** — a path in a page's `sources:` was committed *after* the page's `updated` date, so the derived page may no longer reflect its source. Skipped silently for untracked sources or non-git repos.
+- **Source changed** — a path in a page's `sources:` was committed *after* the page's `updated` date, so the derived page may no longer reflect its source. Skipped silently for untracked sources or non-git repos. Reference/volatile sources (glossaries, changelogs, readmes, contributing, license) are excluded — they're cited broadly or change every commit without being a defining source; the count of such suppressed warnings is reported as a note under the section.
 
 For both, run **`/p-wiki:reconcile`** to merge the affected pages with their current sources and remove the resolved callouts (genuine conflicts are left for you). To reconcile a single page: `/p-wiki:reconcile <path>`.
 

@@ -14,7 +14,7 @@ import { ensureSubParent } from './lib/confluence/tree.mjs';
 import { writeConfig, validateConfig } from './lib/config.mjs';
 import { syncToMirror } from './lib/sync.mjs';
 
-const VERSION = '3.2.0';
+const VERSION = '3.2.1';
 
 export function mapErrorToCode(err) {
   if (err?.message && /invalid \.pwiki\.json/.test(err.message)) return 'config-invalid';
@@ -90,6 +90,8 @@ function formatLintReport(r) {
   for (const [title, items, fmt] of sections) {
     out.push(`${title}: ${items.length}`);
     for (const it of items) out.push(fmt(it));
+    const sup = title === 'Source changed (warnings)' ? r.suppressed?.['source-changed'] : null;
+    if (sup?.count > 0) out.push(`  (suppressed ${sup.count} from reference sources: ${sup.sources.join(', ')})`);
     out.push('');
   }
   out.push(`Total: ${r.totals.errors} errors, ${r.totals.warnings} warnings.`);

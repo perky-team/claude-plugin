@@ -167,4 +167,33 @@ describe('lint.runChecks', () => {
     const r = runChecks([c], { repoRoot: '/x', existsFn: () => true });
     expect(r.warnings['source-changed']).toEqual([]);
   });
+
+  it('does not flag source-changed for a CHANGELOG source', () => {
+    const c = validConcept('a', { updated: '2026-05-12', sources: ['docs/CHANGELOG.md'] });
+    const r = runChecks([c], { repoRoot: '/x', existsFn: () => true, sourceDateFn: () => '2026-06-09' });
+    expect(r.warnings['source-changed']).toEqual([]);
+    expect(r.suppressed['source-changed'].count).toBe(1);
+    expect(r.suppressed['source-changed'].sources).toContain('docs/CHANGELOG.md');
+  });
+
+  it('does not flag source-changed for a glossary source (NN- prefix)', () => {
+    const c = validConcept('a', { updated: '2026-05-12', sources: ['docs/specs/00-glossary.md'] });
+    const r = runChecks([c], { repoRoot: '/x', existsFn: () => true, sourceDateFn: () => '2026-06-09' });
+    expect(r.warnings['source-changed']).toEqual([]);
+    expect(r.suppressed['source-changed'].count).toBe(1);
+  });
+
+  it('still flags source-changed for a normal spec source', () => {
+    const c = validConcept('a', { updated: '2026-05-12', sources: ['docs/specs/03-configuration.md'] });
+    const r = runChecks([c], { repoRoot: '/x', existsFn: () => true, sourceDateFn: () => '2026-06-09' });
+    expect(r.warnings['source-changed']).toHaveLength(1);
+    expect(r.suppressed['source-changed'].count).toBe(0);
+  });
+
+  it('reports suppressed source-changed without affecting totals', () => {
+    const c = validConcept('a', { updated: '2026-05-12', sources: ['docs/CHANGELOG.md'] });
+    const r = runChecks([c], { repoRoot: '/x', existsFn: () => true, sourceDateFn: () => '2026-06-09' });
+    expect(r.totals.warnings).toBe(
+      Object.values(r.warnings).reduce((n: number, b: any) => n + b.length, 0));
+  });
 });

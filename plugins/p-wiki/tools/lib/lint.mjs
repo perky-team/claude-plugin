@@ -27,9 +27,17 @@ function isDecisionPage(d) {
   return /^adr-?\d/i.test(name) || /^adr-?\d/i.test(id) || /^adr-?\d/i.test(title);
 }
 
+// Reference / volatile sources: appear in sources: but are not a page's
+// *defining* source — a glossary tweak or a per-commit changelog bump should
+// not flag every page that merely cites them. Matched on basename, ignoring an
+// optional NN- numeric prefix and the extension.
+const REFERENCE_SOURCE = /^(?:\d+[-_. ])?(?:changelog|glossary|readme|contributing|license)s?\b/i;
+
 export function runChecks(docs, { repoRoot, existsFn, sourceDateFn }) {
   const errors = { 'dead-links': [], 'dead-sources': [], 'frontmatter': [] };
   const warnings = { 'orphan-pages': [], 'underlinked': [], 'stale': [], 'conflicts': [], 'source-changed': [] };
+
+  const suppressed = { 'source-changed': { count: 0, _sources: new Set() } };
 
   const allPaths = new Set(docs.map(d => d.path));
   const todayStr = new Date().toISOString().slice(0, 10);
@@ -102,9 +110,16 @@ export function runChecks(docs, { repoRoot, existsFn, sourceDateFn }) {
       const pageUpdated = d.frontmatter.updated;
       for (const s of d.frontmatter.sources ?? []) {
         const sourceDate = sourceDateFn(s);
-        if (sourceDate && pageUpdated && sourceDate > pageUpdated) {
-          warnings['source-changed'].push({ file: d.path, source: s, sourceDate, pageUpdated });
+        const isStale = sourceDate && pageUpdated && sourceDate > pageUpdated;
+        if (!isStale) continue;
+        const base = s.split(/[\\/]/).pop() ?? s;
+        if (REFERENCE_SOURCE.test(base)) {
+          // Would have warned, but it's a reference/volatile source — suppress and count.
+          suppressed['source-changed'].count++;
+          suppressed['source-changed']._sources.add(s);
+          continue;
         }
+        warnings['source-changed'].push({ file: d.path, source: s, sourceDate, pageUpdated });
       }
     }
   }
@@ -133,6 +148,12 @@ export function runChecks(docs, { repoRoot, existsFn, sourceDateFn }) {
     totals: {
       errors: Object.values(errors).reduce((a, b) => a + b.length, 0),
       warnings: Object.values(warnings).reduce((a, b) => a + b.length, 0),
+    },
+    suppressed: {
+      'source-changed': {
+        count: suppressed['source-changed'].count,
+        sources: [...suppressed['source-changed']._sources].sort(),
+      },
     },
   };
 }
