@@ -25,6 +25,11 @@
       "name": "p-statusline",
       "source": "./plugins/p-statusline",
       "description": "Custom Claude Code status line (context, rate limits, git, RAM). Skills: install."
+    },
+    {
+      "name": "p-graph",
+      "source": "./plugins/p-graph",
+      "description": "Local code knowledge graph (TS/JS, Go, C++, Python). pgraph CLI indexes symbols + call/import/extend edges into SQLite; query with search/node/callers/callees/impact/trace/context. Skills: init, sync, help."
     }
   ]
 }
