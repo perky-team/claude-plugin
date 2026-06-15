@@ -16,9 +16,10 @@ Expose the existing `readPage()` capability as a CLI command so that reading a w
 
 - `/p-wiki:query` cannot load full page bodies from Confluence (search returns only `excerpt`s).
 - `/p-wiki:reconcile` cannot read the page it is meant to re-merge.
-- `/p-wiki:compile` cannot read an existing page when updating it.
 
-The read capability exists; it simply has no handle the agent can call. This design adds that handle.
+(`/p-wiki:compile`'s update path also can't read an existing Confluence page, but that is entangled with its FS-Edit body-writing — part of the write path, addressed only when `pwiki set-body` lands. See §3 and the §1.2 non-goal. This feature does not touch compile.)
+
+The read capability exists; it simply has no handle the agent can call. This design adds that handle for the two read-only spots above.
 
 ### 1.2 Non-goals
 
@@ -90,7 +91,7 @@ Replace `Read` with `pwiki get` **only for wiki-page reads**:
 - `ingest` — reads the external/ingested file.
 - `init` — reads the skill-bundle templates.
 
-`allowed-tools` for the three changed skills already include `Bash(node:*)`, so no frontmatter permission change is needed. `Read` remains in `allowed-tools` because each of these skills still reads non-page files.
+`allowed-tools` for the two changed skills (`query`, `reconcile`) already include `Bash(node:*)`, so no frontmatter permission change is needed. `Read` stays in `allowed-tools`: `reconcile` still reads source files (4b), and `query` still edits its own query-output file.
 
 ---
 
