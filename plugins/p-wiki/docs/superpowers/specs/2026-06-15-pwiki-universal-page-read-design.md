@@ -35,34 +35,40 @@ The read capability exists; it simply has no handle the agent can call. This des
 pwiki get <path> [--format=text|json]
 ```
 
-- `<path>` (required) — exactly the `path` value that `search` returns for a result: a repo-relative `.md` path in FS mode, or `confluence://<type>/<slug>` in Confluence mode. Both are accepted by each destination's `readPage` via its `parsePath`.
-- Resolves the primary destination (`resolveDestination(...).primary`), `await`s `readPage(path)` (FS is synchronous, Confluence is async — awaiting both is safe), and prints the result.
+- `<path>` (required) — exactly the `path` value that `search` returns for a result: a repo-relative `.md` path in FS mode, or `confluence://<type>/<slug>` in Confluence mode. Each backend's `readPage` accepts its own form: FS joins the repo-relative path directly (`fs.mjs:57`, no `parsePath`); Confluence parses `confluence://<type>/<slug>` via `parsePath` (`identity.mjs:3-7`).
+- Resolves the primary destination (`resolveDestination(...).primary`), `await`s `readPage(path)` (FS is synchronous, Confluence is async — `await` on the sync return is a no-op, so a single `await` is correct for both; note this in the handler so it isn't "fixed" later), and prints the result.
 
 ### 2.1 Output
 
 - **`--format=text` (default):** the full reconstructed markdown — a YAML frontmatter fence followed by the body:
   ```
   ---
-  <frontmatter serialized via tools/lib/yaml.mjs>
+  <frontmatter>
   ---
 
   <body>
   ```
-  This is a drop-in replacement for what the `Read` tool returned when opening a `.md` file, so skills that only read-and-cite need minimal change.
-- **`--format=json`:** `{ "path": <string>, "frontmatter": <object>, "body": <string> }` — emitted via the shared `emitJson` helper. For skills that must split frontmatter from body deterministically (`reconcile`, `compile` update) without parsing the YAML fence themselves.
+  Reconstructed via `serializeFrontmatter(frontmatter, body)` from `tools/lib/fm.mjs` — the same fence-producing serializer `new`/`set` use when writing FS files (`fs.mjs:52,133`). This gives the agent the same *content* it got from the `Read` tool, so skills that only read-and-cite need minimal change.
+- **`--format=json`:** `{ "path": <string>, "frontmatter": <object>, "body": <string> }` — emitted via the shared `emitJson` helper. For skills that must split frontmatter from body deterministically (`reconcile`) without parsing the YAML fence themselves.
+- Unknown `--format` values are treated as `text`, matching the convention in `lint`/`index`.
 
-Frontmatter is serialized with the same `tools/lib/yaml.mjs` serializer used by `new`/`set`, so the output is byte-identical regardless of backend — the point of "universal". (Key ordering in text mode is the serializer's canonical order, which may differ from the on-disk file; irrelevant for read-and-cite and for JSON consumers.)
+Note this is **content-equivalent, not byte-identical**, to a prior `Read` of an on-disk file: frontmatter comes out in the serializer's canonical key order (not the file's original order), and for Confluence the body is `adfToMarkdown(adf)` — a lossy ADF→markdown round-trip. Fine for read-and-cite and for JSON consumers; do not rely on exact byte equality with any source file.
 
 ### 2.2 Errors
 
-- Missing page — `readPage` throws `page not found: <path>`. The handler maps it to `error.code: page-not-found` and exits 1 (this code is already documented in the `query` skill error table).
-- Confluence auth / rate-limit / network / version errors propagate through the existing `mapErrorToCode`, matching every other Confluence-touching command.
+The `get` handler wraps `readPage` in `try/catch` and does NOT rely on the top-level `mapErrorToCode` for the not-found case. Reason: `readPage` throws a plain `new Error('page not found: <path>')` with no `.status`/`.code`, and `mapErrorToCode` only emits `page-not-found` from `err.status === 404` (`pwiki.mjs:23`) — so a bare throw would fall through to `internal`/exit 3, contradicting the `query`/`reconcile` error tables. Therefore:
+
+- **Missing page** — catch, match the `/^page not found:/` message, emit `{ "error": { "code": "page-not-found", "message": ... } }` and exit 1 explicitly (the same pattern `set`/`promote` use with `die`, `pwiki.mjs:335,348`).
+- **Malformed path shape** (e.g. a non-`confluence://` arg in Confluence mode — `identity.mjs:5` throws "not a confluence:// path") — treat as a user error: exit 1 with a descriptive message, not `internal`/exit 3.
+- **Confluence auth / rate-limit / network / version** errors — re-throw so the existing top-level `mapErrorToCode` handles them, matching every other Confluence-touching command (these DO carry `.status`/`.code`).
 - JSON error payloads follow the existing convention (`{ "error": { "code", "message" } }`).
-- Exit codes follow the repo convention: 0 success, 1 user/env error (incl. not-found), 2 schema/conflict, 3 internal.
+- Exit codes follow the repo convention: 0 success, 1 user/env error (incl. not-found and bad-path), 2 schema/conflict, 3 internal.
+
+(Deliberately NOT extending `mapErrorToCode` to match the message globally: that would change exit codes for every other command that currently lets this string fall to `internal`. The fix is local to the `get` handler.)
 
 ### 2.3 Registration
 
-Add `'get'` to the `KNOWN` command list in `tools/pwiki.mjs` and a `if (command === 'get') { ... }` handler alongside the others.
+Add `'get'` to the `KNOWN` command list in `tools/pwiki.mjs` and an `if (command === 'get') { ... }` handler alongside the others, with the local `try/catch` described in §2.2.
 
 ---
 
@@ -72,9 +78,10 @@ Replace `Read` with `pwiki get` **only for wiki-page reads**:
 
 | Skill | Spot | Change |
 |---|---|---|
-| `query` | Step 3 "Read top results" | For each `path` in search results, run `pwiki get <path>` (text) and use the returned content; cite by path. |
-| `reconcile` | 4a "Read the page" | `pwiki get <path> --format=json` → use `frontmatter` + `body` (callout detection works on `body`). |
-| `compile` | existing-page update read | When a page with the same id exists and must be updated, read it via `pwiki get` instead of `Read`. |
+| `query` | Step 3 "Read top results" (`query/SKILL.md:33`) | For each `path` in search results, run `pwiki get <path>` (text) and use the returned content; cite by path. |
+| `reconcile` | 4a "Read the page" (`reconcile/SKILL.md:50-52`) | `pwiki get <path> --format=json` → use `frontmatter` + `body` (callout detection works on `body`). |
+
+**`compile` is intentionally NOT changed.** Its update path (4d, `compile/SKILL.md:71-78`) runs `pwiki set` then "Edit the body to add facts" — there is no discrete page-**read** step to switch, and its body editing is FS-Edit-based (part of the write path, a non-goal here). Compile gains nothing from `get` without the separate body-write feature, so it stays as-is.
 
 **Unchanged — `Read` stays** (always-FS artifacts):
 
@@ -90,8 +97,9 @@ Replace `Read` with `pwiki get` **only for wiki-page reads**:
 ## 4. Testing (TDD)
 
 - **CLI `get` (FS):** existing page → text output equals frontmatter fence + body; `--format=json` returns `{ path, frontmatter, body }` with the expected fields; missing page → exit 1 with `error.code: page-not-found`.
-- **CLI `get` (Confluence, `fake-confluence` fixture):** existing page → body is the ADF→markdown conversion, frontmatter is reassembled from properties; uses the `confluence://<type>/<slug>` path form.
+- **CLI `get` (Confluence, `fake-confluence` fixture):** existing page → body is the ADF→markdown conversion, frontmatter is reassembled from properties; uses the `confluence://<type>/<slug>` path form. **Fixture note:** a fresh CLI subprocess starts with an empty identity cache, so `readPage` resolves the numeric id via a `pageExists` CQL lookup before the v2 page GET (`confluence.mjs:211-215`); the fixture must serve that CQL search path, not only the page GET.
 - **Round-trip with search:** a `search` result's `path` fed to `get` resolves the same page (both backends).
+- **Not-found:** `get` of a missing page → exit 1, `error.code: page-not-found` (guards against the `mapErrorToCode` fall-through described in §2.2).
 - `readPage` itself is already covered by the destination-contract suite; these tests add the CLI surface only.
 
 ---
