@@ -31,6 +31,20 @@ describe('store read', () => {
   it('status returns counts', () => {
     expect(s.status()).toMatchObject({ nodes: 2, edges: 1, files: 1 });
   });
+  it('search matches a name prefix (fts tokens are not split on camelCase)', () => {
+    s.upsertFile('r.ts', 'h', 'ts');
+    s.replaceFileSymbols('r.ts', [
+      { id: 'rc', name: 'renderComponent', qname: 'renderComponent', kind: 'function', lang: 'ts', file: 'r.ts', start_line: 1, end_line: 2, signature: 'function renderComponent()', doc: '', container_id: null },
+    ], []);
+    expect(s.search('render', {}).map((x) => x.qname)).toContain('renderComponent');
+  });
+  it('search falls back to an infix substring match', () => {
+    s.upsertFile('r.ts', 'h', 'ts');
+    s.replaceFileSymbols('r.ts', [
+      { id: 'rc', name: 'renderComponent', qname: 'renderComponent', kind: 'function', lang: 'ts', file: 'r.ts', start_line: 1, end_line: 2, signature: 'function renderComponent()', doc: '', container_id: null },
+    ], []);
+    expect(s.search('Component', {}).map((x) => x.qname)).toContain('renderComponent');
+  });
   it('search tolerates qualified names with dots (no fts syntax error)', () => {
     s.upsertFile('q.ts', 'h', 'ts');
     s.replaceFileSymbols('q.ts', [

@@ -73,6 +73,12 @@ export function gitChangedFiles(root, indexedSha) {
 }
 
 export async function indexChanged({ root, store, ignorePatterns, changedFiles, onError }) {
+  // No explicit change list and no prior full index: there's no git-diff baseline,
+  // so `git status --porcelain` alone sees only dirty working-tree files and would
+  // silently skip the entire committed codebase. Bootstrap with a full index.
+  if (!changedFiles && !store.getMeta('indexed_sha')) {
+    return indexFull({ root, store, ignorePatterns, onError });
+  }
   const provider = changedFiles ?? (() => gitChangedFiles(root, store.getMeta('indexed_sha')));
   const change = provider();
   if (!change) return indexFull({ root, store, ignorePatterns, onError });

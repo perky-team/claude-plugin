@@ -111,13 +111,24 @@ export function openStore(dbPath) {
   };
 
   store.search = (query, { kind, lang } = {}) => {
-    let rows;
+    const q = String(query);
+    let rows = [];
     if (hasFts) {
-      const phrase = `"${String(query).replace(/"/g, '""')}"`;
-      rows = db.prepare(`SELECT n.* FROM nodes_fts f JOIN nodes n ON n.id = f.id
-                         WHERE nodes_fts MATCH ?`).all(phrase);
-    } else {
-      const like = `%${query}%`;
+      // Prefix-match each term so `search render` finds `renderComponent` — fts5
+      // tokens aren't split on camelCase, so a bare phrase only matches whole
+      // identifiers. Quote each term to neutralize fts5 operators.
+      const expr = q.trim().split(/\s+/).filter(Boolean)
+        .map((t) => `"${t.replace(/"/g, '""')}"*`).join(' ');
+      if (expr) {
+        rows = db.prepare(`SELECT n.* FROM nodes_fts f JOIN nodes n ON n.id = f.id
+                           WHERE nodes_fts MATCH ?`).all(expr);
+      }
+    }
+    // Substring fallback (no-fts builds, and infix matches like `Component` that a
+    // prefix query can't reach). Only runs on an empty fts result, so the common
+    // case stays on the fast indexed path.
+    if (!hasFts || rows.length === 0) {
+      const like = `%${q}%`;
       rows = db.prepare(`SELECT * FROM nodes WHERE name LIKE ? OR qname LIKE ?`).all(like, like);
     }
     return rows.filter((r) => (!kind || r.kind === kind) && (!lang || r.lang === lang)).slice(0, 100);

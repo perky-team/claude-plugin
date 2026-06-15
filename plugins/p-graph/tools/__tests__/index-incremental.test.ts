@@ -28,6 +28,23 @@ describe('incremental index', () => {
     store.close();
   }, 30000);
 
+  it('bootstraps a full index when there is no prior indexed_sha', async () => {
+    // A clean, fully-committed repo has no working-tree changes, so a git-only
+    // change provider returns nothing. Without the bootstrap, `index --changed`
+    // (the default) would build an empty graph and still record indexed_sha.
+    writeFileSync(join(dir, 'a.ts'), 'function foo() {}\nfunction bar() {}');
+    const store = openStore(':memory:');
+    expect(store.getMeta('indexed_sha')).toBeNull();
+    const res = await indexChanged({
+      root: dir, store, ignorePatterns: [],
+      changedFiles: undefined, // force the git-provider path, but no baseline exists
+    });
+    expect(res.files).toBe(1); // fell back to a full index, not 0 changed
+    expect(store.node('foo')).toBeTruthy();
+    expect(store.node('bar')).toBeTruthy();
+    store.close();
+  }, 30000);
+
   it('reconnects a call edge when its target symbol moves to another file', async () => {
     writeFileSync(join(dir, 'a.ts'), 'export function f() { g(); }');
     writeFileSync(join(dir, 'b.ts'), 'export function g() {}');
