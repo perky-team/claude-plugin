@@ -1,11 +1,8 @@
-;; definitions
+;; definitions (JavaScript grammar — no TypeScript-only node types)
 (function_declaration name: (identifier) @name) @definition.function
-(class_declaration name: (type_identifier) @name) @definition.class
-(interface_declaration name: (type_identifier) @name) @definition.interface
-(type_alias_declaration name: (type_identifier) @name) @definition.type
-(enum_declaration name: (identifier) @name) @definition.enum
+(class_declaration name: (identifier) @name) @definition.class
 (method_definition name: (property_identifier) @name) @definition.method
-(public_field_definition (property_identifier) @name (arrow_function)) @definition.method
+(field_definition (property_identifier) @name (arrow_function)) @definition.method
 (lexical_declaration (variable_declarator name: (identifier) @name (arrow_function))) @definition.function
 
 ;; references

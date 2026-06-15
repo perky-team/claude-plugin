@@ -27,11 +27,19 @@ export async function indexFile(root, store, rel) {
   store.replaceFileSymbols(rel, nodes, edges);
 }
 
-export async function indexFull({ root, store, ignorePatterns }) {
+export async function indexFull({ root, store, ignorePatterns, onError }) {
   const files = walk(root, root, ignorePatterns, []);
-  for (const rel of files) await indexFile(root, store, rel);
+  let skipped = 0;
+  for (const rel of files) {
+    try {
+      await indexFile(root, store, rel);
+    } catch (err) {
+      skipped++;
+      onError?.(rel, err);
+    }
+  }
   store.resolvePending();
-  return { files: files.length };
+  return { files: files.length - skipped, skipped };
 }
 
 export function gitChangedFiles(root, indexedSha) {
@@ -52,16 +60,21 @@ export function gitChangedFiles(root, indexedSha) {
   return { modified: [...new Set(modified)], deleted: [...new Set(deleted)] };
 }
 
-export async function indexChanged({ root, store, ignorePatterns, changedFiles }) {
+export async function indexChanged({ root, store, ignorePatterns, changedFiles, onError }) {
   const provider = changedFiles ?? (() => gitChangedFiles(root, store.getMeta('indexed_sha')));
   const change = provider();
-  if (!change) return indexFull({ root, store, ignorePatterns });
-  let n = 0;
+  if (!change) return indexFull({ root, store, ignorePatterns, onError });
+  let n = 0, skipped = 0;
   for (const rel of change.modified) {
     if (isIgnored(rel, ignorePatterns) || !resolveLang(rel)) continue;
-    await indexFile(root, store, rel); n++;
+    try {
+      await indexFile(root, store, rel); n++;
+    } catch (err) {
+      skipped++;
+      onError?.(rel, err);
+    }
   }
   for (const rel of change.deleted) store.removeFile(rel);
   store.resolvePending();
-  return { changed: n, deleted: change.deleted.length };
+  return { changed: n, deleted: change.deleted.length, skipped };
 }

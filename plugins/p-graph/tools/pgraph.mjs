@@ -40,5 +40,10 @@ let store;
 try { store = resolveDestination(cfg, dbPath); }
 catch (e) { die(e.message, 3); }
 
-await runCommand({ command, opts, root, store, ignorePatterns: readIgnorePatterns(root), out, emitJson, die });
+try {
+  await runCommand({ command, opts, root, store, ignorePatterns: readIgnorePatterns(root), out, emitJson, die });
+} catch (e) {
+  try { store.close(); } catch { /* ignore */ }
+  die(e?.message ?? String(e), 3);
+}
 store.close();
