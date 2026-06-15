@@ -29,7 +29,13 @@ Parse the JSON. If `total === 0`, stop and tell the user: "Nothing in the wiki c
 
 ## Step 3 — Read top results
 
-For each `path` in `results`, use Read to load the full page body. Cite only files you actually read.
+For each `path` in `results`, load the full page content with:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/tools/pwiki.mjs" get "<path>"
+```
+
+This works for both FS and Confluence wikis (do **not** use the `Read` tool for wiki pages — it only opens local files). Cite only pages you actually read.
 
 ## Step 5 — Synthesize the answer
 
