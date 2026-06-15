@@ -38,7 +38,7 @@ const dbPath = join(root, PGRAPH_DIR, 'graph.db');
 
 let store;
 try { store = resolveDestination(cfg, dbPath); }
-catch (e) { die(e.message, 3); }
+catch (e) { die(e.message, 1); }
 
 try {
   await runCommand({ command, opts, root, store, ignorePatterns: readIgnorePatterns(root), out, emitJson, die });

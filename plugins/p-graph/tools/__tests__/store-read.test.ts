@@ -31,4 +31,13 @@ describe('store read', () => {
   it('status returns counts', () => {
     expect(s.status()).toMatchObject({ nodes: 2, edges: 1, files: 1 });
   });
+  it('search tolerates qualified names with dots (no fts syntax error)', () => {
+    s.upsertFile('q.ts', 'h', 'ts');
+    s.replaceFileSymbols('q.ts', [
+      { id: 'A', name: 'A', qname: 'A', kind: 'class', lang: 'ts', file: 'q.ts', start_line: 1, end_line: 5, signature: 'class A', doc: '', container_id: null },
+      { id: 'A.run', name: 'run', qname: 'A.run', kind: 'method', lang: 'ts', file: 'q.ts', start_line: 2, end_line: 3, signature: 'run()', doc: '', container_id: 'A' },
+    ], []);
+    expect(() => s.search('A.run', {})).not.toThrow();
+    expect(s.search('A.run', {}).map((x) => x.qname)).toContain('A.run');
+  });
 });

@@ -37,6 +37,8 @@ export async function parseAndQuery(lang, scm, source) {
         text: c.node.text,
         startLine: c.node.startPosition.row + 1,
         endLine: c.node.endPosition.row + 1,
+        startCol: c.node.startPosition.column,
+        endCol: c.node.endPosition.column,
         node: c.node,
       });
     }

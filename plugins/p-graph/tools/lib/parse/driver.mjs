@@ -5,7 +5,12 @@ const nodeId = (file, qname, kind, ord) =>
   createHash('sha1').update(`${file}|${qname}|${kind}|${ord}`).digest('hex').slice(0, 16);
 
 function within(inner, outer) {
-  return outer.startLine <= inner.startLine && outer.endLine >= inner.endLine && outer !== inner;
+  if (inner === outer) return false;
+  const startsAfter = outer.startLine < inner.startLine ||
+    (outer.startLine === inner.startLine && outer.startCol <= inner.startCol);
+  const endsBefore = outer.endLine > inner.endLine ||
+    (outer.endLine === inner.endLine && outer.endCol >= inner.endCol);
+  return startsAfter && endsBefore;
 }
 
 export async function extract({ file, lang, langId, scm, source }) {
@@ -20,11 +25,12 @@ export async function extract({ file, lang, langId, scm, source }) {
     const kind = d.name.split('.')[1];
     if (!defKinds.includes(kind)) continue;
     const nameCap = nameCaps
-      .filter((n) => within(n, d) || (n.startLine === d.startLine))
+      .filter((n) => within(n, d))
       .sort((a, b) => (a.startLine - d.startLine) - (b.startLine - d.startLine))[0];
     defs.push({
       kind, name: nameCap?.text ?? '(anon)',
       startLine: d.startLine, endLine: d.endLine,
+      startCol: d.startCol, endCol: d.endCol,
       signature: source.split('\n')[d.startLine - 1]?.trim() ?? '',
     });
   }

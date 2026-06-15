@@ -1,4 +1,9 @@
-import { DatabaseSync } from 'node:sqlite';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
+function loadDatabaseSync() {
+  try { return require('node:sqlite').DatabaseSync; }
+  catch { throw new Error('Node >= 22.5 required for p-graph (node:sqlite unavailable)'); }
+}
 
 export const SCHEMA_VERSION = 1;
 
@@ -25,6 +30,7 @@ CREATE INDEX IF NOT EXISTS edges_file ON edges(file);
 `;
 
 export function openStore(dbPath) {
+  const DatabaseSync = loadDatabaseSync();
   const db = new DatabaseSync(dbPath);
   db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = OFF;');
   db.exec(DDL);
@@ -94,8 +100,9 @@ export function openStore(dbPath) {
   store.search = (query, { kind, lang } = {}) => {
     let rows;
     if (hasFts) {
+      const phrase = `"${String(query).replace(/"/g, '""')}"`;
       rows = db.prepare(`SELECT n.* FROM nodes_fts f JOIN nodes n ON n.id = f.id
-                         WHERE nodes_fts MATCH ?`).all(query);
+                         WHERE nodes_fts MATCH ?`).all(phrase);
     } else {
       const like = `%${query}%`;
       rows = db.prepare(`SELECT * FROM nodes WHERE name LIKE ? OR qname LIKE ?`).all(like, like);

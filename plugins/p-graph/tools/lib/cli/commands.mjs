@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { indexFull, indexChanged } from '../index/build.mjs';
+import { indexFull, indexChanged, gitChangedFiles } from '../index/build.mjs';
 
 function headSha(root) {
   try { return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf-8' }).trim(); }
@@ -20,8 +20,10 @@ export async function runCommand(ctx) {
 
   if (command === 'status') {
     const st = store.status();
+    const change = gitChangedFiles(root, st.indexed_sha);
+    st.drift = change ? change.modified.length + change.deleted.length : null;
     return opts.json ? emitJson(st)
-      : out(`schema ${st.schema_version} - ${st.nodes} nodes - ${st.edges} edges - ${st.files} files - sha ${st.indexed_sha ?? '-'} - fts ${st.fts}`);
+      : out(`schema ${st.schema_version} - ${st.nodes} nodes - ${st.edges} edges - ${st.files} files - sha ${st.indexed_sha ?? '-'} - fts ${st.fts} - drift ${st.drift ?? 'n/a'}`);
   }
 
   const fmtNode = (n) => `${n.kind} ${n.qname}  ${n.file}:${n.start_line}  ${n.signature}`;
