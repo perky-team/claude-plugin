@@ -172,3 +172,29 @@ describe('p-statusline install E2E', () => {
     expect(() => runInstall(home)).toThrow(/not an object/);
   });
 });
+
+// Step 1 (home resolution) is prose, not re-implemented above. Guard its one
+// cross-platform pitfall directly: on Git-Bash-for-Windows `echo "$HOME"`
+// yields a POSIX path (`/c/Users/...`) that, once embedded in settings.json,
+// Claude Code runs natively on Windows and `node` mis-resolves — so Step 1 must
+// resolve the home dir via Node's os.homedir(), not the shell's $HOME.
+describe('p-statusline install SKILL.md — Step 1 home resolution', () => {
+  const skill = readFileSync(join(PLUGIN_ROOT, 'skills', 'install', 'SKILL.md'), 'utf-8');
+  const step1 = skill.slice(
+    skill.indexOf('## Step 1'),
+    skill.indexOf('## Step 2'),
+  );
+  // The actual instruction is the first `Run \`<command>\`` in Step 1; the prose
+  // afterwards may mention `echo "$HOME"` as a do-NOT warning, so assert on the
+  // instructed command, not on raw step text.
+  const runCmd = step1.match(/Run `([^`]+)`/)?.[1] ?? '';
+
+  it('instructs resolving the home dir via node os.homedir()', () => {
+    expect(runCmd).toContain('homedir()');
+    expect(runCmd).toMatch(/^node /);
+  });
+
+  it('does not instruct `echo "$HOME"` (POSIX path on Git-Bash-for-Windows)', () => {
+    expect(runCmd).not.toMatch(/echo\b/);
+  });
+});

@@ -107,6 +107,10 @@ process.stdin.on("end", () => {
     const dirPath = projDir ? projDir.replace(/\\/g, "/") : "";
 
     // Git branch + dirty flag.
+    // Every git call carries a 1s timeout: the status line re-renders every
+    // ~300ms, so a stuck git (index lock, slow/network FS, AV scan) must
+    // degrade to "no branch" rather than freeze the whole line. A timeout
+    // throws, which the surrounding try/catch already swallows.
     // `git branch --show-current` reports the branch even on an unborn branch
     // (a repo with no commits yet), where `rev-parse --abbrev-ref HEAD` fails
     // with "ambiguous argument HEAD". It prints nothing on a detached HEAD, so
@@ -118,7 +122,7 @@ process.stdin.on("end", () => {
       // branch info available").
       let inRepo = false;
       try {
-        execSync("git rev-parse --is-inside-work-tree", { cwd, stdio: ["ignore", "pipe", "ignore"] });
+        execSync("git rev-parse --is-inside-work-tree", { cwd, timeout: 1000, stdio: ["ignore", "pipe", "ignore"] });
         inRepo = true;
       } catch (_) {}
       if (!inRepo) {
@@ -126,15 +130,15 @@ process.stdin.on("end", () => {
       } else try {
         let branch = "";
         try {
-          branch = execSync("git branch --show-current", { cwd, stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
+          branch = execSync("git branch --show-current", { cwd, timeout: 1000, stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
         } catch (_) {}
         if (!branch) {
-          branch = execSync("git rev-parse --short HEAD", { cwd, stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
+          branch = execSync("git rev-parse --short HEAD", { cwd, timeout: 1000, stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
         }
         if (branch) {
           let dirty = "";
           try {
-            const status = execSync("git status --porcelain --untracked-files=no", { cwd, stdio: ["ignore", "pipe", "ignore"] }).toString();
+            const status = execSync("git status --porcelain --untracked-files=no", { cwd, timeout: 1000, stdio: ["ignore", "pipe", "ignore"] }).toString();
             // Bold bright-white "*" so uncommitted changes stand out against
             // the magenta branch name. The trailing reset is supplied by the
             // segment wrapper (C.reset), since "*" is the last character.
@@ -147,7 +151,7 @@ process.stdin.on("end", () => {
           // (95m, matching C.git) for the branch name.
           let worktreeMark = "";
           try {
-            const dirs = execSync("git rev-parse --git-dir --git-common-dir", { cwd, stdio: ["ignore", "pipe", "ignore"] })
+            const dirs = execSync("git rev-parse --git-dir --git-common-dir", { cwd, timeout: 1000, stdio: ["ignore", "pipe", "ignore"] })
               .toString().trim().split(/\r?\n/);
             if (dirs.length === 2 && dirs[0] !== dirs[1]) worktreeMark = "\x1b[90mwt:\x1b[95m";
           } catch (_) {}
@@ -159,7 +163,7 @@ process.stdin.on("end", () => {
           // gray, while real divergence highlights just the digits.
           let abAhead = 0, abBehind = 0;
           try {
-            const ab = execSync("git rev-list --left-right --count @{upstream}...HEAD", { cwd, stdio: ["ignore", "pipe", "ignore"] })
+            const ab = execSync("git rev-list --left-right --count @{upstream}...HEAD", { cwd, timeout: 1000, stdio: ["ignore", "pipe", "ignore"] })
               .toString().trim().split(/\s+/);
             if (ab.length === 2) {
               abBehind = parseInt(ab[0], 10) || 0;

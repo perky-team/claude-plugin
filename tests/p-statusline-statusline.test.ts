@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -178,5 +178,16 @@ describe('p-statusline statusline.cjs', () => {
       workspace: { current_dir: nonGit, project_dir: nonGit },
     }));
     expect(out).not.toMatch(/c\d+%/);
+  });
+
+  // The status line re-renders ~every 300ms; a hung git must not freeze it.
+  // Guard the invariant statically: every git execSync carries a timeout.
+  it('gives every git execSync call a timeout', () => {
+    const src = readFileSync(SCRIPT, 'utf-8');
+    const gitCalls = src.match(/execSync\(\s*["'`]git[^]*?\)/g) ?? [];
+    expect(gitCalls.length).toBeGreaterThan(0);
+    for (const call of gitCalls) {
+      expect(call, `git execSync without timeout: ${call.slice(0, 60)}…`).toMatch(/timeout\s*:/);
+    }
   });
 });

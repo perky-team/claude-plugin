@@ -2,7 +2,7 @@
 name: install
 description: Install the p-statusline status line.
 argument-hint: (no arguments)
-allowed-tools: Bash(echo:*) Bash(node:*) Bash(mkdir:*) Bash(cp:*) Read Write
+allowed-tools: Bash(node:*) Bash(mkdir:*) Bash(cp:*) Read Write
 disable-model-invocation: true
 ---
 
@@ -14,8 +14,13 @@ a status line is a personal, global setting.
 
 ## Step 1 — Resolve the home directory
 
-Run `echo "$HOME"` via Bash. Trim the result; call it `<home>`. If it is
-empty, stop and tell the user you could not determine their home directory.
+Run `node -e "console.log(require('os').homedir())"` via Bash. Trim the result;
+call it `<home>`. This returns the OS-native home path (e.g. `C:\Users\you` on
+Windows). Do **NOT** use `echo "$HOME"`: on Git-Bash-for-Windows that yields a
+POSIX path (`/c/Users/you`) which, once written into `settings.json`, Claude
+Code runs natively on Windows and `node` resolves as `C:\c\Users\...` — so the
+status line silently fails. If the result is empty or the command fails, stop
+and tell the user you could not determine their home directory.
 
 ## Step 2 — Resolve the Node.js binary
 
