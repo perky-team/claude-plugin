@@ -9,7 +9,7 @@
     {
       "name": "p-wiki",
       "source": "./plugins/p-wiki",
-      "description": "Persistent markdown knowledge wiki under docs/wiki/. Skills: init, ingest, compile, query, lint, reconcile."
+      "description": "Persistent markdown knowledge wiki under docs/wiki/, stored on the filesystem (default) or in Confluence Cloud, with optional one-way primary→mirror sync (pwiki sync). Skills: init, ingest, compile, query, lint, reconcile."
     },
     {
       "name": "p-flow",

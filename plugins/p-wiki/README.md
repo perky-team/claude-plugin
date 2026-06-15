@@ -41,6 +41,40 @@ After edits, run `/reload-plugins` inside Claude Code to pick them up without re
 | `/p-wiki:lint` | Audits links, orphan pages, frontmatter, staleness, unresolved conflicts, and source-divergence. Reports only — does not auto-fix. |
 | `/p-wiki:reconcile [path]` | Resolves conflict callouts and stale pages: re-merges a derived page with its current sources and removes the superseded callout. Genuine conflicts are left flagged for a human. |
 
+## Storage backends
+
+A wiki can be stored on the **filesystem** (default — `docs/wiki/`) or in **Confluence Cloud**. The choice is made at `/p-wiki:init` time and recorded in `docs/wiki/.pwiki.json`. Skills don't branch on the backend; the bundled CLI dispatches transparently, so `compile`, `query`, `lint`, etc. work the same either way.
+
+Confluence mode needs two env vars:
+
+- `PWIKI_CONFLUENCE_EMAIL` — your Atlassian account email.
+- `PWIKI_CONFLUENCE_TOKEN` — an API token from <https://id.atlassian.com/manage-profile/security/api-tokens>.
+
+Raw sources (`docs/wiki/raw/`) and any in-repo files referenced in `sources:` always stay on the filesystem in both modes.
+
+### Multi-destination & `pwiki sync`
+
+A wiki can have one **primary** destination (where every command writes) and zero or more **mirrors** that receive a 1:1 copy on every sync. Configured in `docs/wiki/.pwiki.json`:
+
+```json
+{
+  "primary": "confluence",
+  "mirrors": ["fs"],
+  "destinations": {
+    "confluence": { "kind": "confluence", "siteUrl": "...", "spaceKey": "...", "spaceId": "...", "rootPageId": "...", "subParents": {} },
+    "fs": { "kind": "fs" }
+  }
+}
+```
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/tools/pwiki.mjs" sync
+```
+
+`sync` walks the primary, writes every page into each mirror (translating cross-link targets to the mirror's format), deletes mirror-only pages (true-mirror semantics), and regenerates the Index on each mirror. Sync is **one-way** (primary → mirrors) with no conflict resolution — mirrors are overwritten. It's a CLI command, not a skill, so it isn't in the table above; invoke it directly or from cron.
+
+Full details (frontmatter schemas, identity format, reversing direction) live in the generated `docs/wiki/CLAUDE.md`, which Claude auto-loads when working under `docs/wiki/`.
+
 ## Design
 
 See [`docs/superpowers/specs/2026-05-11-p-wiki-plugin-design.md`](./docs/superpowers/specs/2026-05-11-p-wiki-plugin-design.md) and [`docs/superpowers/plans/2026-05-11-p-wiki-plugin.md`](./docs/superpowers/plans/2026-05-11-p-wiki-plugin.md).
