@@ -213,10 +213,14 @@ export async function getPage(args) {
     // FS readPage is synchronous, Confluence is async; a single await covers both.
     page = await dest.readPage(path);
   } catch (e) {
+    // These branches match by message because FS errors are plain Error objects
+    // with no .status — the top-level mapErrorToCode would otherwise classify them
+    // as 'internal'/exit 3. Confluence transport errors DO carry .status/.code, so
+    // we re-throw those and let mapErrorToCode handle them.
     const msg = e?.message ?? String(e);
     if (/^page not found:/.test(msg)) emitJson({ error: { code: 'page-not-found', message: msg } }, 1);
     if (/not a confluence:\/\//.test(msg)) emitJson({ error: { code: 'bad-path', message: msg } }, 1);
-    throw e; // auth/rate-limit/network errors carry .status/.code → top-level mapErrorToCode
+    throw e;
   }
 
   if ((args.format ?? 'text') === 'json') {

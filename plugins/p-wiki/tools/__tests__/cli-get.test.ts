@@ -61,4 +61,14 @@ describe('pwiki get (FS)', () => {
     const r = runCli(['get']);
     expect(r.status).toBe(1);
   });
+
+  it('not inside a p-wiki repo → exit 1', () => {
+    const outside = mkdtempSync(join(tmpdir(), 'pwiki-get-outside-'));
+    try {
+      const r = spawnSync('node', [cli, 'get', 'docs/wiki/pages/concept/kafka.md'], { cwd: outside, encoding: 'utf-8' });
+      expect(r.status).toBe(1);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
 });
