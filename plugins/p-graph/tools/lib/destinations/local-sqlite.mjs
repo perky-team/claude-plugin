@@ -157,13 +157,12 @@ export function openStore(dbPath) {
     return null;
   };
   store.resolvePending = () => {
-    db.exec(`
+    db.prepare(`
       UPDATE edges SET dst_id = (
-        SELECT n.id FROM nodes n WHERE (n.qname = edges.dst_name OR n.name = edges.dst_name)
-        GROUP BY edges.dst_name HAVING count(DISTINCT n.id) = 1 LIMIT 1
+        SELECT n.id FROM nodes n WHERE (n.qname = dst_name OR n.name = dst_name) LIMIT 1
       )
       WHERE dst_id IS NULL AND dst_name IS NOT NULL
-        AND (SELECT count(DISTINCT n.id) FROM nodes n WHERE n.qname = edges.dst_name OR n.name = edges.dst_name) = 1`);
+        AND (SELECT count(DISTINCT n.id) FROM nodes n WHERE n.qname = dst_name OR n.name = dst_name) = 1`).run();
   };
 
   if (store.getMeta('schema_version') === null) {
