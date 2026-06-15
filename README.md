@@ -11,7 +11,7 @@ Open Claude Code CLI and add this repository as a marketplace, then install any 
 /plugin install <plugin-name>@perky.team
 ```
 
-`<plugin-name>` is one of `p-wiki`, `p-flow`, `p-tasks`, `p-statusline` (see below).
+`<plugin-name>` is one of `p-wiki`, `p-flow`, `p-tasks`, `p-statusline`, `p-graph` (see below).
 
 From a non-GitHub git host:
 
@@ -75,6 +75,12 @@ The leading segments of both lines (context / model+effort) are padded so the fi
 
 Skills: `install`.
 
+### [`p-graph`](./plugins/p-graph/)
+
+A local code knowledge graph with a bundled `pgraph` CLI. Indexes the project (TypeScript/JavaScript, Go, C++, Python) into a SQLite graph of symbols and their call/import/extend edges, so Claude answers structural questions — where a symbol is defined, what calls it, what breaks if it changes, how one symbol reaches another — from the index instead of grepping. Fully local, no MCP server.
+
+Skills: `init`, `sync`, `help`.
+
 ## Tests
 
 Static validation of `marketplace.json`, every `plugin.json`, every `SKILL.md`, and template references.
@@ -124,12 +130,19 @@ Complements `npm test`: tests catch structural drift in our manifests/skills, `v
 │   │   ├── docs/
 │   │   ├── skills/
 │   │   └── tools/
-│   └── p-statusline/        ← custom Claude Code status line renderer
+│   ├── p-statusline/        ← custom Claude Code status line renderer
+│   │   ├── .claude-plugin/
+│   │   │   └── plugin.json
+│   │   ├── README.md
+│   │   ├── skills/
+│   │   └── statusline/      ← the renderer script copied to ~/.claude/p-statusline/
+│   └── p-graph/             ← local code knowledge graph (tree-sitter → SQLite)
 │       ├── .claude-plugin/
 │       │   └── plugin.json
 │       ├── README.md
+│       ├── docs/superpowers/  ← per-plugin design spec + implementation plan
 │       ├── skills/
-│       └── statusline/      ← the renderer script copied to ~/.claude/p-statusline/
+│       └── tools/           ← the pgraph CLI + vendored web-tree-sitter + grammars
 └── README.md                ← this file
 ```
 
