@@ -49,7 +49,13 @@ For each page in the chosen scope:
 
 ### 4a. Read
 
-Read the page (frontmatter + body, including any callout).
+Load the page (frontmatter + body, including any callout) with:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/tools/pwiki.mjs" get <path> --format=json
+```
+
+Parse the JSON: `frontmatter` and `body` are returned separately. Detect the conflict callout in `body`. This works for both FS and Confluence wikis — do **not** use the `Read` tool for the wiki page (the source files in 4b are still read with `Read`).
 
 ### 4b. Gather authoritative sources
 
