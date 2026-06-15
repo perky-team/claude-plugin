@@ -39,7 +39,8 @@ function parseScalar(raw) {
   if (raw === 'true') return true;
   if (raw === 'false') return false;
   if (/^-?\d+$/.test(raw)) return Number(raw);
-  if (/^"(.*)"$/.test(raw)) return raw.slice(1, -1);
+  // Double-quoted: unescape \" and \\ so the value round-trips with serializeScalar.
+  if (/^"(.*)"$/.test(raw)) return raw.slice(1, -1).replace(/\\(["\\])/g, '$1');
   if (/^'(.*)'$/.test(raw)) return raw.slice(1, -1);
   return raw;
 }
@@ -61,12 +62,26 @@ export function stringifyYaml(obj) {
   return lines.join('\n') + '\n';
 }
 
+// A bare (unquoted) string must not be re-read by parseScalar/parseYaml as a
+// different type. Quote it when it would otherwise parse as a number, a keyword
+// (null/true/false/~), an inline array ([...]), or carries YAML-significant
+// characters / surrounding whitespace.
+function needsQuoting(s) {
+  if (s === '') return true;
+  if (/[:#"']/.test(s) || /^\s|\s$/.test(s)) return true;
+  if (/^-?\d+$/.test(s)) return true;                       // would parse as a number
+  if (s === 'null' || s === '~' || s === 'true' || s === 'false') return true;
+  if (s.startsWith('[') && s.endsWith(']')) return true;    // would parse as an inline array
+  if (s.startsWith('- ')) return true;                      // looks like a block-array item
+  return false;
+}
+
 function serializeScalar(val) {
   if (val === null) return 'null';
   if (typeof val === 'boolean') return val ? 'true' : 'false';
   if (typeof val === 'number') return String(val);
   if (typeof val === 'string') {
-    if (/[:#"']/.test(val) || /^\s|\s$/.test(val)) return `"${val.replace(/"/g, '\\"')}"`;
+    if (needsQuoting(val)) return `"${val.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
     return val;
   }
   throw new Error(`unsupported value for YAML: ${val}`);

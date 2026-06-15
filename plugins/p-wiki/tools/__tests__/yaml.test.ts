@@ -57,4 +57,27 @@ describe('yaml stringifier', () => {
     expect(out).toMatch(/source-url: null/);
     expect(out).toMatch(/compiled: false/);
   });
+
+  it('round-trips a title with embedded double quotes', () => {
+    const obj = { title: 'The "Twelve-Factor" App' };
+    expect(parseYaml(stringifyYaml(obj))).toEqual(obj);
+    // And stays stable across repeated serialize→parse (no backslash accumulation).
+    const once = parseYaml(stringifyYaml(obj));
+    expect(parseYaml(stringifyYaml(once))).toEqual(obj);
+  });
+
+  it('round-trips a bracketed string as a string, not an array', () => {
+    const obj = { title: '[WIP]' };
+    expect(parseYaml(stringifyYaml(obj))).toEqual(obj);
+  });
+
+  it('round-trips an all-digit string without coercing to a number', () => {
+    const obj = { id: '2024' };
+    expect(parseYaml(stringifyYaml(obj))).toEqual(obj);
+  });
+
+  it('round-trips strings that look like YAML keywords', () => {
+    const obj = { title: 'true', status: 'null' };
+    expect(parseYaml(stringifyYaml(obj))).toEqual(obj);
+  });
 });

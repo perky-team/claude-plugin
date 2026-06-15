@@ -10,6 +10,30 @@ const TYPE_FOR_DIR = {
 
 const linkRe = /\[[^\]]*\]\(([^)#\s]+)\)/g;
 
+// Code spans/blocks where a `[text](link)` is an illustration, not a real link.
+// Mirrors cross-links.mjs so a markdown example inside ``` … ``` isn't flagged
+// as a dead link.
+function findCodeRanges(body) {
+  const raw = [];
+  for (const m of body.matchAll(/```[\s\S]*?```/g)) raw.push([m.index, m.index + m[0].length]);
+  for (const m of body.matchAll(/`[^`\n]+`/g)) raw.push([m.index, m.index + m[0].length]);
+  raw.sort((a, b) => a[0] - b[0]);
+  const merged = [];
+  for (const [s, e] of raw) {
+    if (merged.length && s <= merged[merged.length - 1][1]) {
+      merged[merged.length - 1][1] = Math.max(merged[merged.length - 1][1], e);
+    } else {
+      merged.push([s, e]);
+    }
+  }
+  return merged;
+}
+
+function isInRanges(idx, ranges) {
+  for (const [s, e] of ranges) if (idx >= s && idx < e) return true;
+  return false;
+}
+
 // A body conflict callout: any blockquote line mentioning "conflict" or
 // "superseded" — covers the `> ⚠️ …`, `> **Superseded …**`, and
 // `> **Note:** … superseded …` shapes. The whole line is captured so the
@@ -45,10 +69,13 @@ export function runChecks(docs, { repoRoot, existsFn, sourceDateFn }) {
   // Build outgoing link graph (page → page targets)
   const outgoing = new Map();
   for (const d of docs) {
+    const body = d.body ?? '';
+    const codeRanges = findCodeRanges(body);
     const targets = [];
     let m;
     const re = new RegExp(linkRe);
-    while ((m = re.exec(d.body))) {
+    while ((m = re.exec(body))) {
+      if (isInRanges(m.index, codeRanges)) continue;
       const link = m[1];
       const resolved = resolveLink(d.path, link);
       targets.push({ link, resolved });

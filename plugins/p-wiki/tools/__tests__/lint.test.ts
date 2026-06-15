@@ -39,6 +39,28 @@ describe('lint.runChecks', () => {
     expect(r.errors['dead-links'][0].link).toBe('./missing.md');
   });
 
+  it('does not flag a markdown link inside a fenced code block as dead', () => {
+    const doc = validConcept('foo');
+    doc.body = '# foo\n\n```\n[example](./does-not-exist.md)\n```\n\n[real](./other.md)\n';
+    const r = runChecks([doc], { repoRoot: '/x', existsFn: (p: string) => !p.includes('does-not-exist') });
+    expect(r.errors['dead-links']).toEqual([]);
+  });
+
+  it('does not flag a markdown link inside an inline code span as dead', () => {
+    const doc = validConcept('foo');
+    doc.body = '# foo\n\nUse `[label](./gone.md)` syntax.\n\n[real](./other.md)\n';
+    const r = runChecks([doc], { repoRoot: '/x', existsFn: (p: string) => !p.includes('gone') });
+    expect(r.errors['dead-links']).toEqual([]);
+  });
+
+  it('still flags a real link outside a code block that contains an example', () => {
+    const doc = validConcept('foo');
+    doc.body = '# foo\n\n```\n[example](./ok-in-code.md)\n```\n\n[broken](./missing.md)\n';
+    const r = runChecks([doc], { repoRoot: '/x', existsFn: () => false });
+    expect(r.errors['dead-links']).toHaveLength(1);
+    expect(r.errors['dead-links'][0].link).toBe('./missing.md');
+  });
+
   it('reports frontmatter errors when fields missing', () => {
     const bad = { path: 'docs/wiki/pages/concept/x.md', frontmatter: { id: 'x', type: 'concept' }, body: '' };
     const r = runChecks([bad as any], { repoRoot: '/x', existsFn: () => true });
