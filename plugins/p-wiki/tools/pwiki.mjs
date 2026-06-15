@@ -201,10 +201,10 @@ export async function initConfluence(args, _opts = {}) {
   emitJson({ ok: true, configPath: 'docs/wiki/.pwiki.json', primary: 'confluence', mirrors }, 0);
 }
 
-export async function getPage(args) {
+export async function getPage(args, _opts = {}) {
   const path = args._[0];
   if (!path) die('get: <path> required', 1);
-  const res = resolveDestination({ cwd: process.cwd(), transport: makeRealTransport() });
+  const res = resolveDestination({ cwd: process.cwd(), transport: _opts.transport ?? makeRealTransport() });
   if (!res) die('not inside a p-wiki repo', 1);
   const dest = res.primary;
 
