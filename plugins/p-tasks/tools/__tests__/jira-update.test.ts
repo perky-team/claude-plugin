@@ -20,10 +20,11 @@ describe('jira destination — updateItem', () => {
   });
   it('reconciles blockers — DELETEs extras and POSTs missing', async () => {
     const fake = fakeJira([
-      // GET existing links: PROJ-1 inwardly linked from PROJ-99 (existing) and PROJ-100 (extra)
+      // GET existing links: PROJ-1 is blocked by PROJ-99 (existing) and PROJ-100 (extra).
+      // Real Jira shape — the blocker is the link's outwardIssue; PROJ-1 itself is not echoed.
       { status: 200, body: { fields: { issuelinks: [
-        { id: '500', type: { name: 'Blocks' }, inwardIssue: { key: 'PROJ-1' }, outwardIssue: { key: 'PROJ-99' } },
-        { id: '501', type: { name: 'Blocks' }, inwardIssue: { key: 'PROJ-1' }, outwardIssue: { key: 'PROJ-100' } },
+        { id: '500', type: { name: 'Blocks' }, outwardIssue: { key: 'PROJ-99' } },
+        { id: '501', type: { name: 'Blocks' }, outwardIssue: { key: 'PROJ-100' } },
       ] } } },
       { status: 204 },                                                       // DELETE 501
       { status: 201 },                                                       // POST new link to PROJ-50

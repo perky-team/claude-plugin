@@ -82,15 +82,35 @@ function arrayify(v) {
   return [];
 }
 
+// Read config + build destinations, emitting a clean JSON error envelope (and
+// exiting) on a malformed or structurally-invalid config instead of crashing
+// with a raw stack trace. emitJson() calls process.exit, so on the error paths
+// control never returns to the caller.
+function loadResolved({ root, transport }) {
+  let cfg;
+  try {
+    cfg = readConfig(root);
+  } catch (e) {
+    return emitJson({ error: { code: e?.code ?? 'config-invalid', message: e?.message ?? String(e) } }, 1);
+  }
+  try {
+    return resolveDestination({ root, config: cfg, transport });
+  } catch (e) {
+    return emitJson({ error: { code: e?.code ?? 'config-invalid', message: e?.message ?? String(e) } }, 1);
+  }
+}
+
 export async function addCommand({ root, args }) {
   const type = args._[0];
   if (type !== 'task' && type !== 'sub-task') return emitJson({ error: { code: 'internal', message: 'first arg must be "task" or "sub-task"' } }, 1);
   const parentId = type === 'sub-task' ? args._[1] : undefined;
   if (type === 'sub-task' && !parentId) return emitJson({ error: { code: 'internal', message: 'sub-task requires <parent-id>' } }, 1);
   if (!args.title) return emitJson({ error: { code: 'internal', message: '--title required' } }, 1);
+  if (args.status !== undefined && !STATUSES.includes(args.status)) {
+    return emitJson({ error: { code: 'invalid-status', message: `status must be one of ${STATUSES.join('/')}` } }, 1);
+  }
 
-  const cfg = readConfig(root);
-  const { primary } = resolveDestination({ root, config: cfg });
+  const { primary } = loadResolved({ root });
   await primary.ensureStructure();
 
   const blockedBy = arrayify(args['blocked-by']);
@@ -129,8 +149,7 @@ export async function setCommand({ root, args }) {
   const id = args._[0];
   if (!id) return emitJson({ error: { code: 'internal', message: 'id required' } }, 1);
 
-  const cfg = readConfig(root);
-  const { primary } = resolveDestination({ root, config: cfg });
+  const { primary } = loadResolved({ root });
   await primary.ensureStructure();
   const items = await primary.listItems();
   const current = items.find(i => i.id === id);
@@ -175,8 +194,7 @@ export async function setCommand({ root, args }) {
 }
 
 export async function nextCommand({ root, args }) {
-  const cfg = readConfig(root);
-  const { primary } = resolveDestination({ root, config: cfg });
+  const { primary } = loadResolved({ root });
   await primary.ensureStructure();
   const items = await primary.listItems();
   const warns = [];
@@ -191,8 +209,7 @@ export async function nextCommand({ root, args }) {
 }
 
 export async function summaryCommand({ root, args }) {
-  const cfg = readConfig(root);
-  const { primary } = resolveDestination({ root, config: cfg });
+  const { primary } = loadResolved({ root });
   await primary.ensureStructure();
   const items = await primary.listItems();
   const parentId = args._[0];
@@ -257,8 +274,7 @@ export async function initFs({ root }) {
 }
 
 export async function syncCommand({ root, args, transport }) {
-  const cfg = readConfig(root);
-  const resolved = resolveDestination({ root, config: cfg, transport });
+  const resolved = loadResolved({ root, transport });
   try {
     const results = await syncAll(resolved);
     const exitCode = results.some(r => r.errors.length > 0) ? 1 : 0;

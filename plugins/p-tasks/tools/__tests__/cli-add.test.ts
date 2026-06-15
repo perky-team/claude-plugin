@@ -41,6 +41,15 @@ describe('addCommand', () => {
     const out = JSON.parse(stdoutSpy.mock.calls[0][0]);
     expect(out.error.code).toBe('blocker-not-found');
   });
+  it('rejects an invalid --status (parity with set) and writes nothing', async () => {
+    try { await addCommand({ root: dir, args: { _: ['task'], title: 'X', status: 'frobnicate', json: true } }); }
+    catch (e: any) { expect(e.message).toBe('exit:1'); }
+    const out = JSON.parse(stdoutSpy.mock.calls[0][0]);
+    expect(out.error.code).toBe('invalid-status');
+    // nothing persisted
+    const doc = readFileSync(join(dir, 'docs', 'tasks', 'tasks.yml'), 'utf-8');
+    expect(doc).not.toContain('frobnicate');
+  });
   it('happy path: chain blocked-by', async () => {
     try { await addCommand({ root: dir, args: { _: ['task'], title: '1', json: true } }); } catch {}
     try { await addCommand({ root: dir, args: { _: ['task'], title: '2', 'blocked-by': 't-1', json: true } }); } catch {}

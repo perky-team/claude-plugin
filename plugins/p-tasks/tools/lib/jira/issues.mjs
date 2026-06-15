@@ -34,15 +34,19 @@ export async function transitionIssue(http, key, targetStatusName) {
 }
 
 export async function listIssues(http, jql) {
+  // Jira Cloud removed the legacy /rest/api/3/search (startAt/total paging) in
+  // 2025. The replacement /rest/api/3/search/jql uses opaque token paging and
+  // returns no total — iterate until isLast (or no nextPageToken).
   const out = [];
-  let startAt = 0;
+  let nextPageToken;
   while (true) {
-    const res = await http.post('/rest/api/3/search', { jql, startAt, maxResults: 100, fields: ['summary', 'description', 'status', 'issuetype', 'parent', 'issuelinks'] });
+    const body = { jql, maxResults: 100, fields: ['summary', 'description', 'status', 'issuetype', 'parent', 'issuelinks'] };
+    if (nextPageToken) body.nextPageToken = nextPageToken;
+    const res = await http.post('/rest/api/3/search/jql', body);
     if (res.status !== 200) throw Object.assign(new Error(`search failed: ${res.status}`), { status: res.status });
     out.push(...(res.body.issues ?? []));
-    const total = res.body.total ?? 0;
-    startAt += res.body.issues?.length ?? 0;
-    if (startAt >= total || !(res.body.issues?.length)) break;
+    nextPageToken = res.body.nextPageToken;
+    if (res.body.isLast === true || !nextPageToken) break;
   }
   return out;
 }

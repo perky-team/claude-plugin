@@ -22,7 +22,11 @@ export async function listBlocksLinks(http, issueKey) {
   const res = await http.get(`/rest/api/3/issue/${encodeURIComponent(issueKey)}?fields=issuelinks`);
   if (res.status !== 200) throw Object.assign(new Error(`list links failed: ${res.status}`), { status: res.status });
   const links = res.body?.fields?.issuelinks ?? [];
+  // Jira echoes only the *opposite* end of each link, never the fetched issue
+  // itself. When the fetched issue is blocked, it is the inward side, so the
+  // blocker arrives as `outwardIssue`. (Links carrying `inwardIssue` are this
+  // issue's outbound "blocks" edges — not its blockers.)
   return links
-    .filter(l => l.type?.name === 'Blocks' && l.inwardIssue?.key === issueKey && l.outwardIssue?.key)
+    .filter(l => l.type?.name === 'Blocks' && l.outwardIssue?.key)
     .map(l => ({ id: l.id, blockerKey: l.outwardIssue.key }));
 }

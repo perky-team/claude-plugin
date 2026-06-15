@@ -30,13 +30,17 @@ describe('jira/links', () => {
     expect(r.calls[0].method).toBe('DELETE');
   });
   it('listBlocksLinks returns inbound blockers only', async () => {
+    // Real Jira echoes only the OPPOSITE end of each link, never the fetched
+    // issue itself. For PROJ-1:
+    //   - a blocked-by edge (PROJ-2 blocks PROJ-1) appears as outwardIssue: PROJ-2
+    //   - an outbound edge (PROJ-1 blocks PROJ-3) appears as inwardIssue: PROJ-3
     const r = recordingTransport([{
       status: 200,
       body: {
         fields: {
           issuelinks: [
-            { id: '1', type: { name: 'Blocks' }, inwardIssue: { key: 'PROJ-1' }, outwardIssue: { key: 'PROJ-2' } },
-            { id: '2', type: { name: 'Blocks' }, outwardIssue: { key: 'PROJ-3' } }, // PROJ-1 blocks PROJ-3 — outbound, not a blocker of PROJ-1
+            { id: '1', type: { name: 'Blocks' }, outwardIssue: { key: 'PROJ-2' } }, // PROJ-1 is blocked by PROJ-2
+            { id: '2', type: { name: 'Blocks' }, inwardIssue: { key: 'PROJ-3' } },  // PROJ-1 blocks PROJ-3 — outbound, not a blocker
             { id: '3', type: { name: 'Relates' }, inwardIssue: { key: 'PROJ-4' } },
           ],
         },

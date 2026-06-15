@@ -37,6 +37,42 @@ describe('jira destination', () => {
     expect(items[0]).toMatchObject({ id: 'PROJ-1', type: 'task', title: 'T', status: 'todo' });
     expect(items[1]).toMatchObject({ id: 'PROJ-2', type: 'sub-task', parentId: 'PROJ-1', status: 'done' });
   });
+  it('listItems reads blockedBy from inbound Blocks links (outwardIssue is the blocker)', async () => {
+    const fake = fakeJira([{
+      status: 200, body: {
+        issues: [
+          { id: '1', key: 'PROJ-1', fields: {
+            summary: 'T', description: null, status: { name: 'To Do' }, issuetype: { name: 'Task' },
+            issuelinks: [
+              { id: '9', type: { name: 'Blocks' }, outwardIssue: { key: 'PROJ-2' } }, // PROJ-1 blocked by PROJ-2
+              { id: '8', type: { name: 'Blocks' }, inwardIssue: { key: 'PROJ-3' } },  // PROJ-1 blocks PROJ-3 — outbound
+            ],
+          } },
+        ],
+      },
+    }]);
+    const dst = createJiraDestination({
+      block: { kind: 'jira', siteUrl: 'https://x', projectKey: 'PROJ', issueTypes: { task: 'Task', subTask: 'Sub-task' }, statusMap: { todo:'To Do',in_progress:'In Progress',done:'Done' }, jql: 'project = PROJ' },
+      email: 'a@b.c', token: 't',
+      transport: fake.transport,
+    });
+    const items = await dst.listItems();
+    expect(items[0].blockedBy).toEqual(['PROJ-2']);
+  });
+  it('createItem with an untransitionable status falls back to todo instead of aborting', async () => {
+    const fake = fakeJira([
+      { status: 201, body: { id: '7', key: 'PROJ-7' } },                                  // create
+      { status: 200, body: { transitions: [{ id: '11', to: { name: 'In Progress' } }] } }, // no direct Done
+    ]);
+    const dst = createJiraDestination({
+      block: { kind: 'jira', siteUrl: 'https://x', projectKey: 'PROJ', issueTypes: { task: 'Task', subTask: 'Sub-task' }, statusMap: { todo:'To Do',in_progress:'In Progress',done:'Done' }, jql: '' },
+      email: 'a@b.c', token: 't',
+      transport: fake.transport,
+    });
+    const out = await dst.createItem({ type: 'task', title: 'New', description: '', status: 'done', blockedBy: [] });
+    expect(out.id).toBe('PROJ-7');
+    expect(out.status).toBe('todo');
+  });
   it('createItem returns the new Jira key as id', async () => {
     const fake = fakeJira([{ status: 201, body: { id: '99', key: 'PROJ-9' } }]);
     const dst = createJiraDestination({

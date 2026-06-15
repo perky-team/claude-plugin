@@ -36,6 +36,12 @@ describe('yaml round-trip', () => {
   it('rejects a doc without a top-level tasks: array', () => {
     expect(() => loadTasksDoc('something: else\n')).toThrow(/tasks/);
   });
+  it('preserves unknown top-level keys through a read→write cycle', () => {
+    const text = dumpTasksDoc({ version: 2, note: 'hand-written', tasks: [] });
+    const reloaded: any = loadTasksDoc(text);
+    expect(reloaded.version).toBe(2);
+    expect(reloaded.note).toBe('hand-written');
+  });
   it('preserves key order: id, title, description, status, blockedBy, jiraKeys, subTasks', () => {
     const out = dumpTasksDoc({
       tasks: [{ id: 't-1', title: 'T', description: 'D', status: 'todo', blockedBy: [], jiraKeys: { 'jira-prod': 'PROJ-9' }, subTasks: [] }],

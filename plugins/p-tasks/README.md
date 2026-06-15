@@ -14,7 +14,7 @@ Distributed via the [`perky.team`](../../) marketplace.
 ## Local development
 
 ```bash
-claude --plugin-dir C:/path/to/perky-team-wiki/plugins/p-tasks
+claude --plugin-dir C:/path/to/claude-plugin/plugins/p-tasks
 ```
 
 After edits, `/reload-plugins` inside Claude Code picks them up without restart.

@@ -46,4 +46,18 @@ describe('jira/issues', () => {
     const http = httpFor(r.transport);
     await expect(transitionIssue(http, 'PROJ-1', 'Done')).rejects.toMatchObject({ code: 'transition-not-found' });
   });
+  it('listIssues uses /search/jql and pages via nextPageToken until isLast', async () => {
+    const r = recordingTransport([
+      { status: 200, body: { issues: [{ key: 'PROJ-1' }], nextPageToken: 'tok2', isLast: false } },
+      { status: 200, body: { issues: [{ key: 'PROJ-2' }], isLast: true } },
+    ]);
+    const http = httpFor(r.transport);
+    const out = await listIssues(http, 'project = PROJ');
+    expect(out.map((i: any) => i.key)).toEqual(['PROJ-1', 'PROJ-2']);
+    // both calls hit the new endpoint; legacy startAt/total are not used
+    expect(r.calls.every((c: any) => c.url.includes('/rest/api/3/search/jql'))).toBe(true);
+    expect(JSON.parse(r.calls[0].body)).not.toHaveProperty('startAt');
+    // second page forwards the token from the first response
+    expect(JSON.parse(r.calls[1].body).nextPageToken).toBe('tok2');
+  });
 });

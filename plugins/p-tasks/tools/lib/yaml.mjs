@@ -22,6 +22,9 @@ export function loadTasksDoc(text) {
 }
 
 export function dumpTasksDoc(doc) {
-  const ordered = { tasks: doc.tasks.map(orderItem) };
+  // Preserve any non-`tasks` top-level keys a user may have added so a
+  // read→mutate→write cycle doesn't silently discard them.
+  const { tasks, ...rest } = doc;
+  const ordered = { tasks: (tasks ?? []).map(orderItem), ...rest };
   return yaml.dump(ordered, { lineWidth: 120, noCompatMode: true });
 }

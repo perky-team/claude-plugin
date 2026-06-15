@@ -32,8 +32,10 @@ export function createJiraDestination({ block, email, token, transport, name = '
       title: issue.fields.summary ?? '',
       description: extractAdfText(issue.fields.description),
       status: jiraStatusToInternal(issue.fields.status?.name, statusMap),
+      // Jira returns only the opposite end of each link; when this issue is
+      // blocked it is the inward side, so its blocker is the link's outwardIssue.
       blockedBy: (issue.fields.issuelinks ?? [])
-        .filter(l => l.type?.name === 'Blocks' && l.inwardIssue?.key === issue.key && l.outwardIssue?.key)
+        .filter(l => l.type?.name === 'Blocks' && l.outwardIssue?.key)
         .map(l => l.outwardIssue.key),
     };
     if (type === 'sub-task') base.parentId = issue.fields.parent?.key;
@@ -69,9 +71,17 @@ export function createJiraDestination({ block, email, token, transport, name = '
         description: input.description ?? '',
         parentKey: input.type === 'sub-task' ? input.parentId : undefined,
       });
-      // Apply non-default status if requested (single-hop only)
+      // Apply non-default status if requested (single-hop only). A workflow
+      // with no direct transition to the target must not abort the whole sync —
+      // leave the issue in its default status rather than throwing.
+      let status = input.status ?? 'todo';
       if (input.status && input.status !== 'todo') {
-        await transitionIssue(http, out.key, statusMap[input.status]);
+        try {
+          await transitionIssue(http, out.key, statusMap[input.status]);
+        } catch (e) {
+          if (e?.code === 'transition-not-found') status = 'todo';
+          else throw e;
+        }
       }
       // Blockers handled by sync pass 4 or by an explicit set call after creation
       return {
@@ -80,7 +90,7 @@ export function createJiraDestination({ block, email, token, transport, name = '
         parentId: input.parentId,
         title: input.title,
         description: input.description ?? '',
-        status: input.status ?? 'todo',
+        status,
         blockedBy: input.blockedBy ?? [],
       };
     },

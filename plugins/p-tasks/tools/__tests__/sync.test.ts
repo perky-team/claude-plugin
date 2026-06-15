@@ -46,6 +46,17 @@ describe('syncAll', () => {
     expect(out[0].created).toBe(0);
     expect(out[0].updated + out[0].linksAdded + out[0].linksRemoved).toBe(0);
   });
+  it('does not churn when only trailing whitespace differs in the description', async () => {
+    const primary = memDest('fs');
+    await primary.createItem({ type: 'task', title: 'A', description: 'body  ' }); // trailing whitespace
+    // A mirror that trims descriptions on write, mimicking Jira's ADF round-trip.
+    const trimming = memDest('m');
+    const origCreate = trimming.createItem.bind(trimming);
+    trimming.createItem = async (input: any) => origCreate({ ...input, description: (input.description ?? '').trim() });
+    await syncAll({ primary, primaryName: 'fs', mirrors: [trimming], mirrorNames: ['m'] });
+    const out = await syncAll({ primary, primaryName: 'fs', mirrors: [trimming], mirrorNames: ['m'] });
+    expect(out[0].updated).toBe(0);
+  });
   it('mirror A failure does not stop mirror B', async () => {
     const primary = memDest('fs');
     await primary.createItem({ type: 'task', title: 'A' });

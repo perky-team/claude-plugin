@@ -14,7 +14,15 @@ export function defaultConfig() {
 export function readConfig(root) {
   const p = configPath(root);
   if (!existsSync(p)) return defaultConfig();
-  return JSON.parse(readFileSync(p, 'utf-8'));
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync(p, 'utf-8'));
+  } catch (e) {
+    throw Object.assign(new Error(`invalid ${CONFIG_REL}: ${e.message}`), { code: 'config-invalid' });
+  }
+  const v = validateConfig(parsed);
+  if (!v.ok) throw Object.assign(new Error(`invalid ${CONFIG_REL}: ${v.error}`), { code: 'config-invalid' });
+  return parsed;
 }
 
 export function writeConfig(root, cfg) {

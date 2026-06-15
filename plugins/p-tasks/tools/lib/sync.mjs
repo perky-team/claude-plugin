@@ -14,9 +14,12 @@ function counterTemplate(name, kind) {
 }
 
 function fieldsDiffer(existing, candidate) {
+  // Jira round-trips descriptions through ADF and trims them, so compare
+  // descriptions trimmed to avoid a perpetual "updated" on every sync.
+  const desc = (v) => (v ?? '').trim();
   return (
     existing.title !== candidate.title ||
-    existing.description !== candidate.description ||
+    desc(existing.description) !== desc(candidate.description) ||
     existing.status !== candidate.status
   );
 }
@@ -113,17 +116,12 @@ export async function syncAll({ primary, primaryName, mirrors, mirrorNames }) {
           beforeSet.size === afterSet.size &&
           [...afterSet].every(t => beforeSet.has(t));
         if (!same) {
-          try {
-            await mirror.updateItem(dstId, { blockedBy: targetBlockedBy });
-            for (const t of afterSet) if (!beforeSet.has(t)) counters.linksAdded++;
-            for (const t of beforeSet) if (!afterSet.has(t)) counters.linksRemoved++;
-          } catch (e) {
-            if (e?.code === 'transition-not-found') {
-              counters.warnings.push({ code: 'transition-not-found', id: s.id, from: s.status, to: s.status });
-            } else {
-              throw e;
-            }
-          }
+          // A blockedBy patch only adds/removes links — it never transitions
+          // status — so any failure here is a real error; let it propagate to
+          // the mirror-level handler below.
+          await mirror.updateItem(dstId, { blockedBy: targetBlockedBy });
+          for (const t of afterSet) if (!beforeSet.has(t)) counters.linksAdded++;
+          for (const t of beforeSet) if (!afterSet.has(t)) counters.linksRemoved++;
         }
       }
     } catch (e) {
