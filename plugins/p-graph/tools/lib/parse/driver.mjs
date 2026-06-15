@@ -17,7 +17,7 @@ export async function extract({ file, lang, langId, scm, source }) {
   const language = await loadLanguage(langId);
   const caps = await parseAndQuery(language, scm, source);
 
-  const defKinds = ['function', 'method', 'class', 'struct', 'interface', 'type', 'enum', 'var'];
+  const defKinds = ['function', 'method', 'class', 'struct', 'interface', 'type', 'enum'];
   const defs = [];
   const defCaps = caps.filter((c) => c.name.startsWith('definition.'));
   const nameCaps = caps.filter((c) => c.name === 'name');

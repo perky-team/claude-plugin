@@ -27,4 +27,24 @@ describe('incremental index', () => {
     expect(store.node('bar')).toBeNull();
     store.close();
   }, 30000);
+
+  it('reconnects a call edge when its target symbol moves to another file', async () => {
+    writeFileSync(join(dir, 'a.ts'), 'export function f() { g(); }');
+    writeFileSync(join(dir, 'b.ts'), 'export function g() {}');
+    const store = openStore(':memory:');
+    await indexFull({ root: dir, store, ignorePatterns: [] });
+    expect(store.callers('g').map((x) => x.name)).toContain('f');
+
+    // g moves from b.ts to c.ts — a.ts (the caller) is untouched.
+    rmSync(join(dir, 'b.ts'));
+    writeFileSync(join(dir, 'c.ts'), '\n\nexport function g() {}');
+    await indexChanged({
+      root: dir, store, ignorePatterns: [],
+      changedFiles: () => ({ modified: ['c.ts'], deleted: ['b.ts'] }),
+    });
+    // Without re-resolving dangling dst_id the edge would silently vanish.
+    expect(store.callers('g').map((x) => x.name)).toContain('f');
+    expect(store.trace('f', 'g')).toEqual(['f', 'g']);
+    store.close();
+  }, 30000);
 });

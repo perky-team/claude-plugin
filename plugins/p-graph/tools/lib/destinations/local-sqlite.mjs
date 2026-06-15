@@ -74,6 +74,19 @@ export function openStore(dbPath) {
     ? db.prepare('DELETE FROM nodes_fts WHERE id IN (SELECT id FROM nodes WHERE file = ?)')
     : null;
 
+  // Truncate all graph data (keeps meta: schema_version, created_at).
+  // Used by a full reindex so symbols/edges of files deleted since the last
+  // index don't survive the rebuild.
+  store.clear = () => {
+    db.prepare('BEGIN').run();
+    try {
+      if (hasFts) db.exec('DELETE FROM nodes_fts');
+      db.exec('DELETE FROM edges');
+      db.exec('DELETE FROM nodes');
+      db.exec('DELETE FROM files');
+      db.prepare('COMMIT').run();
+    } catch (err) { db.prepare('ROLLBACK').run(); throw err; }
+  };
   store.upsertFile = (path, hash, lang) => insFile.run(path, hash, lang);
   store.removeFile = (path) => {
     if (delFtsByFile) delFtsByFile.run(path);
@@ -164,6 +177,13 @@ export function openStore(dbPath) {
     return null;
   };
   store.resolvePending = () => {
+    // Invalidate edges whose resolved target no longer exists (its defining
+    // file was reindexed or deleted). Without this an incremental sync keeps a
+    // stale dst_id forever, so callers/callees/trace/impact silently drop the
+    // edge — diverging from what a full rebuild would produce.
+    db.prepare(`
+      UPDATE edges SET dst_id = NULL
+      WHERE dst_id IS NOT NULL AND dst_id NOT IN (SELECT id FROM nodes)`).run();
     db.prepare(`
       UPDATE edges SET dst_id = (
         SELECT n.id FROM nodes n WHERE (n.qname = dst_name OR n.name = dst_name) LIMIT 1

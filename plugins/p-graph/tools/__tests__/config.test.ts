@@ -19,4 +19,20 @@ describe('config', () => {
     expect(isIgnored('gen/out.ts', ['gen'])).toBe(true);
     expect(isIgnored('src/out.ts', ['gen'])).toBe(false);
   });
+  it('root-only ignores do not skip same-named source dirs nested deeper', () => {
+    // build/out/dist only ignored at the repo root...
+    expect(isIgnored('build/x.ts', [])).toBe(true);
+    expect(isIgnored('out/x.go', [])).toBe(true);
+    // ...not when they are a real source subdirectory.
+    expect(isIgnored('src/build/api.ts', [])).toBe(false);
+    expect(isIgnored('app/out/handler.go', [])).toBe(false);
+  });
+  it('node_modules is ignored at any depth', () => {
+    expect(isIgnored('node_modules/x.js', [])).toBe(true);
+    expect(isIgnored('packages/a/node_modules/x.js', [])).toBe(true);
+  });
+  it('multi-segment extra patterns match as a prefix', () => {
+    expect(isIgnored('src/legacy/x.ts', ['src/legacy'])).toBe(true);
+    expect(isIgnored('src/active/x.ts', ['src/legacy'])).toBe(false);
+  });
 });

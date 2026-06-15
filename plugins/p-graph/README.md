@@ -81,8 +81,8 @@ Refresh with `/p-graph:sync`. Prefer these commands over grep for structural que
 
 `pgraph` uses [web-tree-sitter](https://github.com/tree-sitter/tree-sitter/tree/master/lib/binding_web) (vendored WASM grammars, no network required) to parse every source file into an AST, then extracts:
 
-- **Symbols** — functions, methods, classes, interfaces, variables, constants.
-- **Edges** — call references, import/require statements, `#include` directives, type references, inheritance.
+- **Symbols** — functions, methods, classes, structs, interfaces, type aliases, enums, and arrow-function variables/fields.
+- **Edges** — call references (including `new` and method calls), `import` statements, and C/C++ `#include` directives.
 
 Everything is stored in a local SQLite database at `.pgraph/graph.db` (gitignored, rebuildable at any time — it is never committed). The schema is append-friendly: a full index truncates and repopulates; an incremental index (`--changed`) diffs by commit SHA against the last indexed state, reparses only the changed files, and splices their symbols and edges back in.
 

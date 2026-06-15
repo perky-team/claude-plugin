@@ -28,6 +28,7 @@ export async function indexFile(root, store, rel) {
 }
 
 export async function indexFull({ root, store, ignorePatterns, onError }) {
+  store.clear(); // truncate so files deleted since the last index don't survive
   const files = walk(root, root, ignorePatterns, []);
   let skipped = 0;
   for (const rel of files) {

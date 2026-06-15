@@ -36,4 +36,22 @@ describe('store traverse', () => {
     expect(s.callees('a').map((x) => x.qname)).toContain('b');
     s.close();
   });
+  it('resolvePending re-resolves a dangling dst_id to a same-named replacement', () => {
+    const s = openStore(':memory:');
+    // a -> b, with b defined in b.ts
+    s.replaceFileSymbols('a.ts', [node('a')], [
+      { src_id: 'a', dst_id: null, dst_name: 'b', kind: 'call', file: 'a.ts', line: 1 },
+    ]);
+    s.replaceFileSymbols('b.ts', [{ ...node('b'), id: 'b_old' }], []);
+    s.resolvePending();
+    expect(s.callees('a').map((x) => x.qname)).toContain('b');
+
+    // b.ts removed and b reappears in c.ts with a different node id.
+    s.removeFile('b.ts');
+    s.replaceFileSymbols('c.ts', [{ ...node('b'), id: 'b_new', file: 'c.ts' }], []);
+    s.resolvePending();
+    // The edge's stale dst_id (b_old) must be re-pointed at b_new.
+    expect(s.callees('a').map((x) => x.qname)).toContain('b');
+    s.close();
+  });
 });
