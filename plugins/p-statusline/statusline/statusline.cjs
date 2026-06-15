@@ -52,27 +52,45 @@ process.stdin.on("end", () => {
       return `\x1b[38;5;${RESET_RAMP[idx]}m`;
     };
 
-    // Cache hit %, read from the transcript.
+    // Cache hit %, read from the transcript. The transcript is an append-only
+    // JSONL file that grows unbounded over a session; the latest assistant turn
+    // with usage sits at/near the end. Read only the tail and scan it backwards
+    // — reading and JSON-parsing the whole file on every ~300ms render would be
+    // O(file size) and visibly lag the status line on long sessions.
     let cachePct = null;
     const tp = j.transcript_path;
     if (tp) {
       try {
-        const objs = [];
-        for (const line of fs.readFileSync(tp, "utf8").split(/\r?\n/)) {
-          if (!line) continue;
-          try { objs.push(JSON.parse(line)); } catch (_) {}
+        const TAIL_BYTES = 524288; // 512 KB — comfortably covers the latest turn
+        const fd = fs.openSync(tp, "r");
+        let chunk = "", truncated = false;
+        try {
+          const size = fs.fstatSync(fd).size;
+          const start = size > TAIL_BYTES ? size - TAIL_BYTES : 0;
+          truncated = start > 0;
+          const len = size - start;
+          const buf = Buffer.allocUnsafe(len);
+          const read = fs.readSync(fd, buf, 0, len, start);
+          chunk = buf.toString("utf8", 0, read);
+        } finally {
+          fs.closeSync(fd);
         }
-        // Last assistant message carrying usage.
-        let lastIdx = -1;
-        for (let i = objs.length - 1; i >= 0; i--) {
-          if (objs[i].type === "assistant" && objs[i].message && objs[i].message.usage) { lastIdx = i; break; }
-        }
-        if (lastIdx >= 0) {
-          const u = objs[lastIdx].message.usage;
-          const cr = u.cache_read_input_tokens || 0;
-          const cc = u.cache_creation_input_tokens || 0;
-          const it = u.input_tokens || 0;
-          if (cr + cc + it > 0) cachePct = (cr / (cr + cc + it)) * 100;
+        const lines = chunk.split(/\r?\n/);
+        // A truncated read can slice mid-record; drop the partial first line.
+        if (truncated) lines.shift();
+        // Scan from the end for the last assistant message carrying usage.
+        for (let i = lines.length - 1; i >= 0; i--) {
+          if (!lines[i]) continue;
+          let obj;
+          try { obj = JSON.parse(lines[i]); } catch (_) { continue; }
+          if (obj.type === "assistant" && obj.message && obj.message.usage) {
+            const u = obj.message.usage;
+            const cr = u.cache_read_input_tokens || 0;
+            const cc = u.cache_creation_input_tokens || 0;
+            const it = u.input_tokens || 0;
+            if (cr + cc + it > 0) cachePct = (cr / (cr + cc + it)) * 100;
+            break;
+          }
         }
       } catch (_) {}
     }

@@ -129,4 +129,54 @@ describe('p-statusline statusline.cjs', () => {
     const out = run({});
     expect(typeof out).toBe('string');
   });
+
+  // Write a JSONL transcript in a throwaway dir and return its path.
+  function writeTranscript(lines: string[]): string {
+    const d = mkdtempSync(join(tmpdir(), 'p-sl-tx-'));
+    tempDirs.push(d);
+    const p = join(d, 'transcript.jsonl');
+    writeFileSync(p, lines.join('\n') + '\n');
+    return p;
+  }
+
+  const assistantUsage = (cr: number, cc: number, it: number) =>
+    JSON.stringify({ type: 'assistant', message: { usage: { cache_read_input_tokens: cr, cache_creation_input_tokens: cc, input_tokens: it } } });
+
+  it('renders cache hit % from the last assistant usage in the transcript', () => {
+    const tp = writeTranscript([
+      assistantUsage(100, 100, 800),   // older turn — should be ignored
+      JSON.stringify({ type: 'user', message: { content: 'hi' } }),
+      assistantUsage(990, 0, 10),      // latest turn → 990/1000 = 99%
+    ]);
+    const out = plain(run({
+      context_window: { used_percentage: 8, context_window_size: 200000, total_input_tokens: 80000 },
+      transcript_path: tp,
+      workspace: { current_dir: nonGit, project_dir: nonGit },
+    }));
+    expect(out).toContain('c99%');
+  });
+
+  it('reads the latest usage even when the transcript is larger than the tail window', () => {
+    // >512 KB of leading filler so the read is truncated; the final usage line
+    // must still be found (proves the tail-read scans the end, not the start).
+    const filler = Array.from({ length: 9000 }, (_, i) =>
+      JSON.stringify({ type: 'user', message: { content: 'x'.repeat(80), n: i } }));
+    const tp = writeTranscript([...filler, assistantUsage(750, 0, 250)]); // 75%
+    const out = plain(run({
+      context_window: { used_percentage: 8, context_window_size: 200000, total_input_tokens: 80000 },
+      transcript_path: tp,
+      workspace: { current_dir: nonGit, project_dir: nonGit },
+    }));
+    expect(out).toContain('c75%');
+  });
+
+  it('omits the cache segment when the transcript has no assistant usage', () => {
+    const tp = writeTranscript([JSON.stringify({ type: 'user', message: { content: 'hi' } })]);
+    const out = plain(run({
+      context_window: { used_percentage: 8, context_window_size: 200000, total_input_tokens: 80000 },
+      transcript_path: tp,
+      workspace: { current_dir: nonGit, project_dir: nonGit },
+    }));
+    expect(out).not.toMatch(/c\d+%/);
+  });
 });
