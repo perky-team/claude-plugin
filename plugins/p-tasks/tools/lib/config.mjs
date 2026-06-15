@@ -48,5 +48,15 @@ export function validateConfig(cfg) {
       }
     }
   }
+  // An FS mirror cannot correlate with a Jira primary: FS generates its own
+  // t-/st- ids and has nowhere to store the Jira key, so every sync would
+  // re-create instead of update. Reject the pair instead of silently duplicating.
+  if (cfg.destinations[cfg.primary]?.kind === 'jira') {
+    for (const m of cfg.mirrors ?? []) {
+      if (cfg.destinations[m]?.kind === 'fs') {
+        return { ok: false, error: `fs mirror "${m}" cannot mirror a jira primary (no stable id correlation)` };
+      }
+    }
+  }
   return { ok: true };
 }

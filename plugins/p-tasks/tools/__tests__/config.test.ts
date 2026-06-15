@@ -41,4 +41,14 @@ describe('config', () => {
   it('validateConfig rejects jira block missing required fields', () => {
     expect(validateConfig({ primary: 'jira', mirrors: [], destinations: { jira: { kind: 'jira' } } }).ok).toBe(false);
   });
+  it('validateConfig rejects an fs mirror of a jira primary (no id correlation)', () => {
+    const cfg = { primary: 'jira', mirrors: ['fs'], destinations: { jira: jiraBlock, fs: { kind: 'fs' } } };
+    const v = validateConfig(cfg);
+    expect(v.ok).toBe(false);
+    expect(v.error).toMatch(/fs mirror/);
+  });
+  it('validateConfig allows a jira mirror of an fs primary', () => {
+    const cfg = { primary: 'fs', mirrors: ['jira'], destinations: { fs: { kind: 'fs' }, jira: jiraBlock } };
+    expect(validateConfig(cfg).ok).toBe(true);
+  });
 });

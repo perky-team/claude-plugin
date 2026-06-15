@@ -28,7 +28,15 @@ export async function transitionIssue(http, key, targetStatusName) {
   const res = await http.get(`/rest/api/3/issue/${encodeURIComponent(key)}/transitions`);
   if (res.status !== 200) throw Object.assign(new Error(`transitions failed: ${res.status}`), { status: res.status });
   const t = (res.body?.transitions ?? []).find(x => x.to?.name === targetStatusName);
-  if (!t) throw Object.assign(new Error(`no transition to ${targetStatusName}`), { code: 'transition-not-found' });
+  if (!t) {
+    // Jira never lists a transition into the current status, so "no transition"
+    // can simply mean the issue is already there. Confirm via the live status
+    // and treat that as an idempotent no-op — otherwise re-asserting an unchanged
+    // status (e.g. a sync that only edited the title) would fail spuriously.
+    const cur = await http.get(`/rest/api/3/issue/${encodeURIComponent(key)}?fields=status`);
+    if (cur.status === 200 && cur.body?.fields?.status?.name === targetStatusName) return;
+    throw Object.assign(new Error(`no transition to ${targetStatusName}`), { code: 'transition-not-found' });
+  }
   const apply = await http.post(`/rest/api/3/issue/${encodeURIComponent(key)}/transitions`, { transition: { id: t.id } });
   if (apply.status !== 204) throw Object.assign(new Error(`transition apply failed: ${apply.status}`), { status: apply.status });
 }

@@ -57,6 +57,26 @@ describe('syncAll', () => {
     const out = await syncAll({ primary, primaryName: 'fs', mirrors: [trimming], mirrorNames: ['m'] });
     expect(out[0].updated).toBe(0);
   });
+  it('does not re-assert an unchanged status when only the title changed', async () => {
+    const primary = memDest('fs');
+    const created = await primary.createItem({ type: 'task', title: 'A', description: '' });
+    // Mirror mimics Jira: re-asserting the status the item is already in throws.
+    const mirror = memDest('m', { kind: 'jira' });
+    const origUpdate = mirror.updateItem.bind(mirror);
+    mirror.updateItem = async (id: string, patch: any) => {
+      const cur = mirror.state.find((i: any) => i.id === id);
+      if ('status' in patch && cur && patch.status === cur.status) {
+        throw Object.assign(new Error('no transition'), { code: 'transition-not-found' });
+      }
+      return origUpdate(id, patch);
+    };
+    await syncAll({ primary, primaryName: 'fs', mirrors: [mirror], mirrorNames: ['m'] });
+    // Edit only the title on the primary, then re-sync.
+    await primary.updateItem(created.id, { title: 'A2' });
+    const out = await syncAll({ primary, primaryName: 'fs', mirrors: [mirror], mirrorNames: ['m'] });
+    expect(out[0].errors).toEqual([]);
+    expect(out[0].updated).toBe(1);
+  });
   it('mirror A failure does not stop mirror B', async () => {
     const primary = memDest('fs');
     await primary.createItem({ type: 'task', title: 'A' });

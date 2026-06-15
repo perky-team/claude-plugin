@@ -40,8 +40,24 @@ describe('jira destination — updateItem', () => {
   it('status transition propagates transition-not-found as hard error', async () => {
     const fake = fakeJira([
       { status: 200, body: { transitions: [{ id: '11', to: { name: 'In Progress' } }] } },
+      // confirm-current-status probe: issue is in 'In Progress', not the target 'Done'
+      { status: 200, body: { fields: { status: { name: 'In Progress' } } } },
     ]);
     const dst = createJiraDestination({ block, email: 'a@b.c', token: 't', transport: fake.transport });
     await expect(dst.updateItem('PROJ-1', { status: 'done' })).rejects.toMatchObject({ code: 'transition-not-found' });
+  });
+
+  it('re-asserting the current status is an idempotent no-op (no spurious error)', async () => {
+    // Jira lists no transition into the status the issue is already in. Setting
+    // it to that same status must succeed silently — this is the case sync hits
+    // when only the title/description changed.
+    const fake = fakeJira([
+      { status: 200, body: { transitions: [{ id: '11', to: { name: 'In Progress' } }, { id: '21', to: { name: 'Done' } }] } },
+      { status: 200, body: { fields: { status: { name: 'To Do' } } } }, // already in target
+    ]);
+    const dst = createJiraDestination({ block, email: 'a@b.c', token: 't', transport: fake.transport });
+    await expect(dst.updateItem('PROJ-1', { status: 'todo' })).resolves.toMatchObject({ id: 'PROJ-1' });
+    // No transition POST was issued — only the two GETs.
+    expect(fake.calls.map((c: any) => c.method)).toEqual(['GET', 'GET']);
   });
 });

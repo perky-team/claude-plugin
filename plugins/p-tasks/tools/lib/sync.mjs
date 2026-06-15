@@ -13,15 +13,18 @@ function counterTemplate(name, kind) {
   return { mirror: name, kind, created: 0, updated: 0, linksAdded: 0, linksRemoved: 0, warnings: [], errors: [] };
 }
 
-function fieldsDiffer(existing, candidate) {
-  // Jira round-trips descriptions through ADF and trims them, so compare
-  // descriptions trimmed to avoid a perpetual "updated" on every sync.
+// Build a patch containing ONLY the fields that actually changed. Sending the
+// full {title, description, status} on every diff makes the Jira mirror re-assert
+// an unchanged status, which has no transition and would throw — so a title-only
+// edit must not carry status along. Descriptions are compared trimmed because
+// Jira round-trips them through ADF and trims, which would otherwise churn.
+function buildFieldPatch(existing, candidate) {
   const desc = (v) => (v ?? '').trim();
-  return (
-    existing.title !== candidate.title ||
-    desc(existing.description) !== desc(candidate.description) ||
-    existing.status !== candidate.status
-  );
+  const patch = {};
+  if (existing.title !== candidate.title) patch.title = candidate.title;
+  if (desc(existing.description) !== desc(candidate.description)) patch.description = candidate.description;
+  if (existing.status !== candidate.status) patch.status = candidate.status;
+  return patch;
 }
 
 export async function syncAll({ primary, primaryName, mirrors, mirrorNames }) {
@@ -53,8 +56,9 @@ export async function syncAll({ primary, primaryName, mirrors, mirrorNames }) {
         const mappedKey = mappedKeyFor(s, primary, mirror);
         const existing = mappedKey ? dstByKey.get(mappedKey) : undefined;
         if (existing) {
-          if (fieldsDiffer(existing, s)) {
-            await mirror.updateItem(existing.id, { title: s.title, description: s.description, status: s.status });
+          const patch = buildFieldPatch(existing, s);
+          if (Object.keys(patch).length > 0) {
+            await mirror.updateItem(existing.id, patch);
             counters.updated++;
           }
           srcToDstId.set(s.id, existing.id);
@@ -79,8 +83,9 @@ export async function syncAll({ primary, primaryName, mirrors, mirrorNames }) {
         const existing = mappedKey ? dstByKey.get(mappedKey) : undefined;
         const dstParentId = srcToDstId.get(s.parentId);
         if (existing) {
-          if (fieldsDiffer(existing, s)) {
-            await mirror.updateItem(existing.id, { title: s.title, description: s.description, status: s.status });
+          const patch = buildFieldPatch(existing, s);
+          if (Object.keys(patch).length > 0) {
+            await mirror.updateItem(existing.id, patch);
             counters.updated++;
           }
           srcToDstId.set(s.id, existing.id);
