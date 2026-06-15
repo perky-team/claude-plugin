@@ -3,6 +3,13 @@
 > Marketplace tag → p-flow plugin version → date → headline.
 > Authored 2026-05-27; backfilled from `v4.6.0` onward (the first p-flow release on the marketplace was `v3.1.0` with `plugins/p-flow 0.1.0` — a minimal `init` skill; see `git log v4.5.0..v4.6.0 -- plugins/p-flow/`).
 
+## v4.17.1 — `plugins/p-flow 0.7.1` — 2026-06-15 — task-start invocation + tooling fixes
+
+- `/p-flow:init` and `README.md` now instruct `/p-flow:task-start <slug>` (bare slug — the branch type is asked interactively), not `/p-flow:task-start <type>/<slug>`. The prefixed form was swallowed whole into the slug, producing a doubled-type branch `feature/feature/<slug>` and `specs/feature/<slug>/`.
+- `init` `allowed-tools` gains `Bash(grep:*) Bash(echo:*)` and `task-end` gains `Bash(grep:*)` — their Bash snippets pipe through `grep`/`echo`, which Claude Code's per-subcommand permission check would otherwise prompt for mid-skill.
+- `init` replaces a fragile hardcoded `task-brainstorming/SKILL.md:41` line reference with a section anchor.
+- New `tests/p-flow-cross-skill-consistency.test.ts` block guards the `task-start` invocation form (no `<type>/` prefix in any skill body or README).
+
 ## v4.13.0 — `plugins/p-flow 0.7.0` — 2026-06-04 — `/p-flow:init` Phase 2 brainstorm
 
 - `/p-flow:init` now runs in two phases. Phase 1 is the existing scaffolding (rules + templates + settings merge). Phase 2 is a new repo-level brainstorm dialog that captures vision / problem / users / out-of-scope and identifies an initial feature list, then materialises one stub `specs/<slug>/specification.md` per agreed feature.

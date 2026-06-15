@@ -49,7 +49,7 @@ In the current git repo (or current working directory if not a git repo):
 - `.claude/settings.json` — `permissions.deny` patterns blocking reads/writes of common secret-bearing files (`.env*`, `*.pem`, `*.key`, `*credentials*`, `*secrets*`, SSH/AWS dotdirs, etc.). Merged if the file already exists.
 - `.claude/rules/p-flow.md` — security guidance, Git workflow (Conventional Commits + `feature/<slug>` / `bugfix/<slug>` / `hotfix/<slug>` / `chore/<slug>` / `docs/<slug>`), specifications layout, and a §4 describing the skill flow.
 - `.claude/templates/p-flow/` — three template files (`adr.md`, `feature-spec.feature`, `specification.md`).
-- `specs/<slug>/specification.md` — one stub per feature agreed during Phase 2's brainstorm dialog (skippable). Each stub fills metadata + problem + user story + 1–3 acceptance bullets; the rest stays as `{{PLACEHOLDERS}}` for `task-brainstorming` to resume later via `/p-flow:task-start feature/<slug>`.
+- `specs/<slug>/specification.md` — one stub per feature agreed during Phase 2's brainstorm dialog (skippable). Each stub fills metadata + problem + user story + 1–3 acceptance bullets; the rest stays as `{{PLACEHOLDERS}}` for `task-brainstorming` to resume later via `/p-flow:task-start <slug>`.
 
 ### Idempotency
 

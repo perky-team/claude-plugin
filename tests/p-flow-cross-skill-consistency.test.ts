@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { repoRoot } from './helpers.js';
+import { repoRoot, findSkills } from './helpers.js';
 
 const read = (rel: string) => readFileSync(join(repoRoot(), rel), 'utf-8');
 
@@ -81,6 +81,34 @@ describe('p-flow branch type list consistency', () => {
     });
     it(`task-end mentions branch type "${t}"`, () => {
       expect(taskEnd).toMatch(new RegExp(`\\b${t}\\b`));
+    });
+  }
+});
+
+// ----------------------------------------------------------------------------
+// task-start invocation form — the command's only argument is a bare <slug>;
+// the branch type is asked interactively. User-facing surfaces (skills + README)
+// must NOT instruct `/p-flow:task-start <type>/<slug>` (or a literal type prefix
+// like `feature/<slug>`), which task-start would swallow whole into the slug and
+// produce a doubled-type branch `feature/feature/<slug>`.
+
+const BAD_INVOCATION = new RegExp(
+  `task-start\\s+(?:<type>/|${BRANCH_TYPES.join('/|')}/)`,
+);
+
+describe('p-flow task-start invocation form consistency', () => {
+  const surfaces: Array<{ label: string; text: string }> = [
+    ...findSkills(join(repoRoot(), 'plugins', 'p-flow')).map((s) => ({
+      label: `skills/${s.name}/SKILL.md`,
+      text: s.raw,
+    })),
+    { label: 'README.md', text: read('plugins/p-flow/README.md') },
+  ];
+
+  for (const { label, text } of surfaces) {
+    it(`${label} invokes task-start with a bare <slug> (no <type>/ prefix)`, () => {
+      const match = text.match(BAD_INVOCATION);
+      expect(match, match ? `found "${match[0]}"` : undefined).toBeNull();
     });
   }
 });

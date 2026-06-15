@@ -2,7 +2,7 @@
 name: task-end
 description: Exit point of the p-flow task development flow. Runs pre-checks (no main branch, no uncommitted changes, plan steps checked, verification marker fresh), pushes the branch, and prints ready-to-copy MR creation commands for both GitHub (`gh`) and GitLab (`glab`). Never runs `gh` or `glab` itself. Usage `/p-flow:task-end`.
 argument-hint: (no arguments)
-allowed-tools: Bash(git status:*) Bash(git rev-parse:*) Bash(git log:*) Bash(git diff:*) Bash(git push:*) Bash(git branch:*) Bash(git merge-base:*) Bash(git worktree:*) Bash(git remote:*) Bash(test:*) Read Glob
+allowed-tools: Bash(git status:*) Bash(git rev-parse:*) Bash(git log:*) Bash(git diff:*) Bash(git push:*) Bash(git branch:*) Bash(git merge-base:*) Bash(git worktree:*) Bash(git remote:*) Bash(test:*) Bash(grep:*) Read Glob
 ---
 
 # /p-flow:task-end

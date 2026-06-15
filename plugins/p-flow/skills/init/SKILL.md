@@ -2,7 +2,7 @@
 name: init
 description: Initialize Claude-Code workflow rules in the current repo AND brainstorm the initial high-level feature breakdown. Phase 1 — scaffold `.claude/settings.json` (secret deny-list), `.claude/rules/p-flow.md`, and three templates under `.claude/templates/p-flow/`. Phase 2 — dialog with the user to identify vision + features, then create `specs/<slug>/specification.md` stubs for each. Use when the user says "init p-flow", "setup p-flow", or asks to bootstrap a new repo.
 argument-hint: (no arguments)
-allowed-tools: Bash(git rev-parse:*) Bash(mkdir:*) Bash(test:*) Bash(ls:*) Read Write
+allowed-tools: Bash(git rev-parse:*) Bash(mkdir:*) Bash(test:*) Bash(ls:*) Bash(grep:*) Bash(echo:*) Read Write
 ---
 
 # /p-flow:init
@@ -34,7 +34,7 @@ Branch on the result:
 |---|---|---|
 | no | no | Run **Phase 1** (Steps 3–5) then **Phase 2** (Steps 6–9). Greenfield path. |
 | yes | no | **Skip Phase 1.** Tell the user: *"Scaffolding already in place. Resuming with the feature brainstorm."* Then run Phase 2 only. |
-| yes | yes | **Refuse.** Tell the user: *"p-flow is already initialised and at least one feature spec exists under `specs/`. To add a new feature use `/p-flow:task-start <type>/<slug>`. To regenerate everything from scratch, delete `.claude/rules/p-flow.md` AND all `specs/<slug>/` folders manually first."* Stop. |
+| yes | yes | **Refuse.** Tell the user: *"p-flow is already initialised and at least one feature spec exists under `specs/`. To add a new feature use `/p-flow:task-start <slug>`. To regenerate everything from scratch, delete `.claude/rules/p-flow.md` AND all `specs/<slug>/` folders manually first."* Stop. |
 | no | yes | **Refuse.** Tell the user: *"Inconsistent state: feature folders exist under `specs/` but the p-flow rules file is missing. Resolve manually — either restore `.claude/rules/p-flow.md` (e.g. via git) or remove the orphaned `specs/<slug>/` folders — then re-run."* Stop. |
 
 Do **not** check for `.claude/settings.json` as a marker — it may exist for unrelated reasons.
@@ -142,7 +142,7 @@ For each agreed feature:
    - `{{PROBLEM_STATEMENT}}` — derived from the project-level Problem (Step 7 question 2) narrowed to what this feature addresses. 1–3 sentences. If unclear from dialog, leave the placeholder literal.
    - `{{USER_STORY}}` — *"As a <target user>, I want <one-line summary>, so that <project-level problem narrowed to this feature>."* Best-effort; leave placeholder if dialog didn't yield enough.
    - `{{ACCEPTANCE_CRITERIA}}` — the 1–3 bullets captured in Step 7 question 6, as a markdown bulleted list. If user said "skip", leave the placeholder literal.
-4. **Every other `{{PLACEHOLDER}}`** in the template — leave literal. `task-brainstorming`'s refine-mode (`task-brainstorming/SKILL.md:41` — "resume filling / discard and restart / cancel") will fill them later when the user runs `/p-flow:task-start feature/<slug>`.
+4. **Every other `{{PLACEHOLDER}}`** in the template — leave literal. `task-brainstorming`'s refine-mode (see its `## Procedure` → precheck step "resume filling / discard and restart / cancel") will fill them later when the user runs `/p-flow:task-start <slug>`.
 5. Write the file. Format: preserve template formatting verbatim; no extra blank lines or trailing whitespace introduced.
 
 After all features materialised: confirm to the user how many stubs were written and where.
@@ -161,8 +161,8 @@ Tell the user, in this order:
    > - `specs/billing/specification.md`
    > - `specs/notifications/specification.md`
    >
-   > Run `/p-flow:task-start feature/<slug>` when you're ready to start work on one — `task-brainstorming` will resume filling the placeholders in its refine-mode."
-3. **If Phase 2 was skipped OR produced no stubs (zero features confirmed):** *"No feature stubs were created. When ready, use `/p-flow:task-start <type>/<slug>` for each new feature — it creates the branch and runs `task-brainstorming` automatically."*
+   > Run `/p-flow:task-start <slug>` when you're ready to start work on one — `task-brainstorming` will resume filling the placeholders in its refine-mode."
+3. **If Phase 2 was skipped OR produced no stubs (zero features confirmed):** *"No feature stubs were created. When ready, use `/p-flow:task-start <slug>` for each new feature — it creates the branch and runs `task-brainstorming` automatically."*
 4. One-line reminder: *"Conventional Commits (`<type>(<scope>)?: <subject>`) and `<type>/<slug>` branches are now the rule in this repo. Full details in `.claude/rules/p-flow.md`."*
 
 ## Edge cases
