@@ -3,7 +3,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
-import { parseFrontmatter } from './lib/fm.mjs';
+import { parseFrontmatter, serializeFrontmatter } from './lib/fm.mjs';
 import { extractSummary, renderIndex } from './lib/index.mjs';
 import { resolveDestination } from './lib/destination.mjs';
 import { TYPES, templateBody, isRawType } from './lib/schema.mjs';
@@ -201,6 +201,31 @@ export async function initConfluence(args, _opts = {}) {
   emitJson({ ok: true, configPath: 'docs/wiki/.pwiki.json', primary: 'confluence', mirrors }, 0);
 }
 
+export async function getPage(args) {
+  const path = args._[0];
+  if (!path) die('get: <path> required', 1);
+  const res = resolveDestination({ cwd: process.cwd(), transport: makeRealTransport() });
+  if (!res) die('not inside a p-wiki repo', 1);
+  const dest = res.primary;
+
+  let page;
+  try {
+    // FS readPage is synchronous, Confluence is async; a single await covers both.
+    page = await dest.readPage(path);
+  } catch (e) {
+    const msg = e?.message ?? String(e);
+    if (/^page not found:/.test(msg)) emitJson({ error: { code: 'page-not-found', message: msg } }, 1);
+    if (/not a confluence:\/\//.test(msg)) emitJson({ error: { code: 'bad-path', message: msg } }, 1);
+    throw e; // auth/rate-limit/network errors carry .status/.code → top-level mapErrorToCode
+  }
+
+  if ((args.format ?? 'text') === 'json') {
+    emitJson({ path: page.path, frontmatter: page.frontmatter, body: page.body }, 0);
+  }
+  process.stdout.write(serializeFrontmatter(page.frontmatter, page.body));
+  process.exit(0);
+}
+
 const isMain = process.argv[1] && resolve(fileURLToPath(import.meta.url)) === resolve(process.argv[1]);
 
 if (isMain) {
@@ -213,7 +238,7 @@ if (process.argv.slice(2)[0] === '--version') {
 const command = process.argv[2];
 const args = parseArgs(process.argv.slice(3));
 
-const KNOWN = ['new', 'set', 'promote', 'search', 'lint', 'backlinks', 'index', 'init', 'sync'];
+const KNOWN = ['new', 'set', 'promote', 'search', 'lint', 'backlinks', 'index', 'init', 'sync', 'get'];
 if (!KNOWN.includes(command)) die(`unknown command: ${command}`, 1);
 
 try {
@@ -393,6 +418,10 @@ try {
 
     const r = dest.search(query, opts);
     emitJson({ query, total: r.total, results: r.results }, 0);
+  }
+
+  if (command === 'get') {
+    await getPage(args);
   }
 
   if (command === 'lint') {
