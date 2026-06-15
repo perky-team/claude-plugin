@@ -1,7 +1,7 @@
 # Design: `p-graph` — code knowledge graph plugin
 
 **Date:** 2026-06-15
-**Status:** Approved (brainstorming)
+**Status:** Approved (brainstorming); self-review pass applied (distribution, FTS5 fallback, default ignores, path normalization, cycle guards)
 **Targets:** new plugin `plugins/p-graph` at `0.1.0`; new entry in `.claude-plugin/marketplace.json`. Monorepo tag bump per the repo's release rule (new plugin → minor at minimum on the monorepo tag).
 
 ---
@@ -42,13 +42,24 @@ A language-agnostic engine is required (TS Compiler API would cover only TS/JS),
 
 C++ is explicitly **best-effort**: tree-sitter parses syntax, but there is no preprocessor expansion beyond capturing `#include` edges, and overload/template resolution is name-based only. Stated as a known limitation, not a bug.
 
+### 2.1 Distribution (the one dep-bearing plugin)
+
+`p-wiki`/`p-tasks` are zero-dependency (Node built-ins only). `p-graph` is the first plugin with a runtime parser dependency, so distribution is a deliberate design point: **everything is vendored and committed into the plugin bundle — zero install at use time.**
+
+- The `web-tree-sitter` runtime (`tree-sitter.wasm` + its JS loader) is vendored under `tools/vendor/`.
+- Prebuilt grammar `.wasm` files come from `tree-sitter-wasms` (confirmed to ship `cpp`, `go`, `python`, `typescript`, `tsx`, `javascript` — exactly the v1 set) and are committed under `tools/lib/grammars/`.
+- No `npm install`, no `node-gyp`, no network at use time — consistent with how the other plugins "just run".
+
+Tradeoff: this adds a few MB of committed `.wasm` to the repo (the C++ grammar is the largest, ~2–3 MB). Accepted as the cost of zero-install, cross-platform parsing. The grammar set is fetched/refreshed at *development* time via a dev script (pinned `tree-sitter-wasms` version), never at user time.
+
 ---
 
 ## 3. Destination abstraction
 
 Mirrors `p-wiki`'s destination architecture (`lib/destination.mjs` resolver + `lib/destinations/<name>.mjs` adapters):
 
-- `lib/config.mjs` reads `destination` from `.pgraph/config.json` (default `local`), resolves repo root, reads `.pgraphignore`.
+- `lib/config.mjs` reads `destination` from `.pgraph/config.json` (default `local`), resolves repo root, reads `.pgraphignore`. **Default ignores** (applied even without a `.pgraphignore`): `.git/`, `.pgraph/`, `node_modules/`, `vendor/`, `third_party/`, `dist/`, `build/`, `out/`, and minified bundles (`*.min.js`). `.pgraphignore` adds to (does not replace) these.
+- **Path normalization:** all stored paths are repo-relative and POSIX-separated. The FS walk and `git` output are normalized to `/` before storage so the index, `.pgraphignore` matching, and `git diff` paths line up identically on Windows and POSIX.
 - `lib/destination.mjs` — resolver that loads and returns the configured adapter.
 - `lib/destinations/local-sqlite.mjs` — the **only** v1 adapter, backed by `node:sqlite`.
 
@@ -69,18 +80,23 @@ Read side (used by queries):
 
 - `search`, `node`, `callers`, `callees`, `impact`, `trace`, `files`, `status`.
 
-A future remote/server destination implements the same interface. Graph traversal (`impact`, `trace`) is expressed in terms the local adapter satisfies with recursive SQL; pushing traversal into a remote backend is a v1.1 concern and deliberately not abstracted further now (YAGNI).
+`context` and `explore` (§5) are **not** destination primitives — they are query-layer compositions over `search`/`node`/`callers`/`callees`, so a new destination only implements the eight primitives above.
+
+A future remote/server destination implements the same interface. Graph traversal (`impact`, `trace`) is expressed in terms the local adapter satisfies with recursive SQL; pushing traversal into a remote backend is a v1.1 concern and deliberately not abstracted further now (YAGNI). The recursive CTEs carry a `visited` set and a depth cap so cyclic call graphs terminate.
 
 ### 3.2 `node:sqlite` requirement
 
 `node:sqlite` is built into Node ≥ 22.5 (experimental flag on 22.x, stable on 24+). `open()` detects an unavailable `node:sqlite` and exits 1 with a clear "Node ≥ 22.5 required for p-graph" message. No native dependency, no `node-gyp`.
+
+- **FTS5:** verified present in the official Node 24 build's bundled SQLite (and recursive CTEs likewise). The adapter still degrades gracefully: if `CREATE VIRTUAL TABLE … USING fts5` throws (a custom build without FTS5), it falls back to an indexed normalized-`LIKE` search on `name`/`qname`. So §4's `nodes_fts` is an optimization, not a hard requirement.
+- **Experimental warning:** `node:sqlite` prints an `ExperimentalWarning` to stderr. CLI text/JSON goes to stdout so parsing is unaffected, but to keep skill output clean the `pgraph` invocations run with the warning suppressed (`NODE_OPTIONS=--disable-warning=ExperimentalWarning`, or `process.removeAllListeners('warning')` at startup).
 
 ---
 
 ## 4. Data model (local-sqlite schema)
 
 - **nodes**: `id` (stable string: hash of `file` + `qname` + `kind`), `name`, `qname` (qualified, e.g. `pkg.Type.method`), `kind` (`function|method|class|struct|interface|type|enum|var|file`), `lang`, `file`, `start_line`, `end_line`, `signature`, `doc` (leading doc-comment, if any), `container_id` (enclosing symbol, nullable).
-- **nodes_fts**: FTS5 over `name`, `qname`, `signature` for `search`.
+- **nodes_fts**: FTS5 over `name`, `qname`, `signature` for `search` (optional — see §3.2 fallback to normalized `LIKE`).
 - **edges**: `src_id`, `dst_id` (nullable when unresolved), `dst_name` (raw callee/type name, kept for unresolved edges so `callers`-by-name works and `resolvePending` can link later), `kind` (`call|import|include|extends|implements|reference`), `file`, `line`.
 - **files**: `path`, `hash`, `lang`, `indexed_at`.
 - **meta**: key/value — `schema_version`, `indexed_sha`, `created_at`.
@@ -146,7 +162,7 @@ Queries themselves are **not** a skill — Claude runs the CLI directly, governe
 - Default text output is compact and line-oriented (one symbol/edge per line: `kind qname  file:line  signature`), tuned for Claude to read cheaply. `--json` emits structured objects for any programmatic use.
 - `skills/_shared/templates/p-graph-rule.template.md` — the rule installed into the target repo's `CLAUDE.md`. It contains:
   - A **decision table**: structural questions ("where is X", "what calls Y", "impact of Z", "trace X→Y") → `pgraph`; literal-text questions (string contents, comments, log messages) → grep/Read.
-  - A freshness reminder: run `/p-graph:sync` before relying on the graph if code changed this session.
+  - A freshness reminder: if `pgraph status` reports drift (files changed since the index), or code changed this session, run `/p-graph:sync` before trusting structural answers — a stale graph giving a confidently wrong answer is worse than grep.
   - A note that the index lags writes until synced (no file watcher in v1).
 - `skills/_shared/templates/pgraph-claude-md.template.md` — a short snippet the `init` skill merges into the target repo's `CLAUDE.md` documenting the available `pgraph` commands.
 
@@ -165,10 +181,13 @@ plugins/p-graph/
     _shared/templates/
       p-graph-rule.template.md
       pgraph-claude-md.template.md
+  scripts/
+    fetch-grammars.mjs                 # DEV-only: pull pinned tree-sitter-wasms grammars into tools/lib/grammars/
   tools/
     pgraph.mjs                         # subcommand router
+    vendor/                            # committed web-tree-sitter runtime (tree-sitter.wasm + loader)
     lib/
-      config.mjs                       # repo root, .pgraph paths, .pgraphignore, destination
+      config.mjs                       # repo root, .pgraph paths, .pgraphignore, default ignores, destination
       destination.mjs                  # resolver
       destinations/local-sqlite.mjs    # the one v1 adapter (node:sqlite)
       parse/
@@ -197,6 +216,8 @@ Module boundaries: `parse/` only turns file text into `{nodes, edges}`; `destina
 - **index/build**: `--full` on a fixture repo populates expected counts; `--changed` after editing one file updates only that file's symbols and fixes a dangling edge; a deleted file's symbols disappear; works with `git` absent (full-walk fallback).
 - **CLI e2e** (`pgraph` subprocess over a multi-language fixture repo): `search`, `node`, `callers`, `callees`, `impact`, `trace`, `files`, `status` produce expected text and `--json`; `status` reports drift after an out-of-band edit; unknown command / missing arg → exit 1.
 - **Node version guard**: `open()` on a simulated missing `node:sqlite` → exit 1 with the required-version message.
+- **Config**: default ignores exclude `node_modules/`/`vendor/`/etc. even with no `.pgraphignore`; `.pgraphignore` entries add to them; paths are stored repo-relative POSIX on both separators.
+- **FTS fallback**: with FTS5 unavailable, `search` still returns correct results via the `LIKE` path (same assertions as the FTS path).
 
 ---
 
