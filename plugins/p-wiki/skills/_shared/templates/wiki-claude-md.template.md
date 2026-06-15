@@ -160,11 +160,12 @@ A bundled Node CLI `pwiki` lives in the plugin (`${CLAUDE_PLUGIN_ROOT}/tools/pwi
 - **Mutating frontmatter** — `pwiki set <path> --bump-updated --add-source=... --add-tag=...`; flag/clear a conflict with `--conflict-since <date>` (no `updated` bump) / `--clear-conflict` (bumps `updated`).
 - **Promoting query → concept** — `pwiki promote <path> --to=concept`.
 - **Ranked search** — `pwiki search "<question>" --format=json --limit=10`.
+- **Reading a page** — `pwiki get <path> [--format=json]` (returns the page's frontmatter + body for FS *or* Confluence; use this instead of the `Read` tool for any wiki page, since `Read` only opens local files).
 - **Lint** — `pwiki lint` (text) or `pwiki lint --format=json`.
 - **Backlink audit** — `pwiki backlinks <path>` (inserts hyperlinks to `<path>` in other pages where its `title:` is mentioned; exit 2 if the count exceeds the suspicion threshold).
 - **Index regeneration** — `pwiki index` (rewrites `docs/wiki/index.md` from frontmatter; `--format=text` prints to stdout without writing).
 
-Generic Read/Write/Edit remain for **body editing** in skills (adding facts to sections, synthesizing answers, conflict callouts). The CLI touches body text only in two specific deterministic operations: rendering the template body of a new page (`pwiki new`) and inserting backlink hyperlinks (`pwiki backlinks`).
+Reading a wiki **page** goes through `pwiki get` (backend-agnostic). Generic Read/Write/Edit remain for reading **non-page** files (sources in `raw/`, templates) and for **body editing** of FS pages in skills (adding facts to sections, synthesizing answers, conflict callouts). The CLI touches body text only in deterministic operations: rendering the template body of a new page (`pwiki new`), inserting backlink hyperlinks (`pwiki backlinks`), and returning content for reads (`pwiki get`).
 
 All CLI commands accept `--format=json` for machine-parseable output. Exit codes: 0 success, 1 user/env error, 2 conflict/schema violation (JSON body carries detail), 3 internal CLI bug.
 
