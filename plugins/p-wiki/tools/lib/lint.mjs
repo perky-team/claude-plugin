@@ -57,8 +57,11 @@ export function runChecks(docs, { repoRoot, existsFn, sourceDateFn }) {
   }
 
   for (const d of docs) {
-    // dead-links
+    // dead-links — only relative, in-repo links are checkable. External links
+    // (http:, mailto:, …) and protocol-relative (//host) are not filesystem
+    // paths; treating them as such flagged every external citation as dead.
     for (const t of outgoing.get(d.path)) {
+      if (isExternalLink(t.link)) continue;
       if (!existsFn(join(repoRoot, t.resolved))) {
         errors['dead-links'].push({ file: d.path, link: t.link, target: t.resolved });
       }
@@ -156,6 +159,12 @@ export function runChecks(docs, { repoRoot, existsFn, sourceDateFn }) {
       },
     },
   };
+}
+
+// A link is external (not an in-repo path) if it carries a URL scheme
+// (http:, https:, mailto:, …) or is protocol-relative (//host/…).
+function isExternalLink(link) {
+  return /^[a-z][a-z0-9+.\-]*:/i.test(link) || link.startsWith('//');
 }
 
 function resolveLink(fromPath, link) {

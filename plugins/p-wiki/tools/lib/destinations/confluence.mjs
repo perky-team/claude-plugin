@@ -53,7 +53,7 @@ export function createConfluenceDestination({ root, config, destinationConfig, t
       id: 'pwiki-id', type: 'pwiki-type', title: 'pwiki-title',
       created: 'pwiki-created', updated: 'pwiki-updated', status: 'pwiki-status',
       'source-url': 'pwiki-source-url', 'source-type': 'pwiki-source-type',
-      question: 'pwiki-question',
+      question: 'pwiki-question', 'conflict-since': 'pwiki-conflict-since',
     };
     for (const [k, v] of Object.entries(fm)) {
       if (v === undefined || v === null) continue;
@@ -153,6 +153,7 @@ export function createConfluenceDestination({ root, config, destinationConfig, t
       'pwiki-id': 'id', 'pwiki-type': 'type', 'pwiki-title': 'title',
       'pwiki-created': 'created', 'pwiki-updated': 'updated', 'pwiki-status': 'status',
       'pwiki-source-url': 'source-url', 'pwiki-source-type': 'source-type', 'pwiki-question': 'question',
+      'pwiki-conflict-since': 'conflict-since',
     };
     for (const [k, v] of Object.entries(properties)) {
       if (scalarMap[k] && v !== undefined) fm[scalarMap[k]] = v;
@@ -160,11 +161,35 @@ export function createConfluenceDestination({ root, config, destinationConfig, t
     return fm;
   }
 
+  // CQL search returns at most one page; follow `_links.next` so wikis with more
+  // than the per-page limit aren't silently truncated (a truncated source list
+  // would make sync delete real mirror pages in its prune pass).
+  function nextSearchPath(resBody) {
+    const next = resBody?._links?.next;
+    if (!next) return null;
+    if (/^https?:\/\//.test(next)) { const u = new URL(next); return u.pathname + u.search; }
+    if (next.startsWith('/wiki/')) return next;
+    if (next.startsWith('/rest/')) return `/wiki${next}`;
+    return next;
+  }
+
+  async function searchAllHits(initialPath) {
+    const hits = [];
+    let path = initialPath;
+    let guard = 0;
+    while (path && guard++ < 1000) {
+      const res = await http.get(path);
+      hits.push(...(res.body?.results ?? []));
+      path = nextSearchPath(res.body);
+    }
+    return hits;
+  }
+
   async function listConfluencePages(types) {
     const cql = buildListCql({ rootPageId: c.rootPageId, types });
-    const res = await http.get(`/wiki/rest/api/search?cql=${encodeURIComponent(cql)}&limit=250`);
+    const hits = await searchAllHits(`/wiki/rest/api/search?cql=${encodeURIComponent(cql)}&limit=250`);
     const out = [];
-    for (const hit of res.body?.results ?? []) {
+    for (const hit of hits) {
       const id = hit.content?.id ?? hit.id;
       if (!id) continue;
       const props = await properties.readAll(id);
@@ -281,7 +306,7 @@ export function createConfluenceDestination({ root, config, destinationConfig, t
     }
     // Removed fields: actually DELETE the matching property.
     if (mutations.removeFields) {
-      const fmKeyToPropKey = { question: 'pwiki-question', 'informed-by': 'pwiki-informed-by', tags: 'pwiki-tags', sources: 'pwiki-sources' };
+      const fmKeyToPropKey = { question: 'pwiki-question', 'informed-by': 'pwiki-informed-by', tags: 'pwiki-tags', sources: 'pwiki-sources', 'conflict-since': 'pwiki-conflict-since' };
       for (const k of mutations.removeFields) {
         const propKey = fmKeyToPropKey[k];
         if (propKey && props[propKey] !== undefined) await properties.remove(id, propKey);
@@ -353,7 +378,9 @@ export function createConfluenceDestination({ root, config, destinationConfig, t
     if (!id) { await pageExists({ type: from.type, slug: from.slug }); id = identity.get(from.type, from.slug); }
     if (!id) throw new Error(`page not found: ${fromPath}`);
 
-    const cur = await http.get(`/wiki/api/v2/pages/${id}`);
+    // body-format is required — a v2 page GET omits the body otherwise, which
+    // would make the move write back an empty document (wiping the page).
+    const cur = await http.get(`/wiki/api/v2/pages/${id}?body-format=atlas_doc_format`);
     const curVersion = cur.body.version.number;
     const title = cur.body.title;
     const adfStr = cur.body?.body?.atlas_doc_format?.value;
@@ -444,13 +471,17 @@ export function createConfluenceDestination({ root, config, destinationConfig, t
       if (!adfStr) continue;
       const adf = JSON.parse(adfStr);
       const found = findFirstAdfMatch(adf, title);
-      if (found) matches.push({ id, version: pageRes.body.version.number, adf, found });
+      if (!found) continue;
+      // Resolve the matched page's own path for accurate reporting (not the target's).
+      const fm = reassembleFm(await properties.readAll(id));
+      const path = fm.type && fm.id ? formatPath(fm.type, fm.id) : `confluence://${id}`;
+      matches.push({ id, version: pageRes.body.version.number, adf, found, path });
     }
 
     if (matches.length > maxSuggestions && !force) {
       return {
         target: targetPath, title, suspicious: true, total: matches.length,
-        candidates: matches.map(m => ({ file: formatPath(parsePath(targetPath).type, parsePath(targetPath).slug), line: -1, preview: '' })),
+        candidates: matches.map(m => ({ file: m.path, line: -1, preview: '' })),
       };
     }
 
@@ -463,7 +494,7 @@ export function createConfluenceDestination({ root, config, destinationConfig, t
         version: { number: m.version + 1 },
         body: { representation: 'atlas_doc_format', value: JSON.stringify(m.adf) },
       });
-      inserted.push({ file: formatPath('concept', 'unknown'), line: -1 });
+      inserted.push({ file: m.path, line: -1 });
     }
 
     return { target: targetPath, title, inserted, total: inserted.length };

@@ -23,6 +23,22 @@ describe('lint.runChecks', () => {
     expect(r.errors['dead-links'].length).toBeGreaterThan(0);
   });
 
+  it('does not flag external links (http/https/mailto) as dead', () => {
+    const doc = validConcept('foo');
+    doc.body = '# foo\n[site](https://example.com)\n[mail](mailto:a@b.c)\n[proto](//cdn.example.com/x)\n';
+    // existsFn=false would mark any "resolved" path dead — external links must be skipped entirely.
+    const r = runChecks([doc], { repoRoot: '/x', existsFn: () => false });
+    expect(r.errors['dead-links']).toEqual([]);
+  });
+
+  it('still flags a broken relative link even when external links are present', () => {
+    const doc = validConcept('foo');
+    doc.body = '# foo\n[ext](https://example.com)\n[gone](./missing.md)\n';
+    const r = runChecks([doc], { repoRoot: '/x', existsFn: () => false });
+    expect(r.errors['dead-links']).toHaveLength(1);
+    expect(r.errors['dead-links'][0].link).toBe('./missing.md');
+  });
+
   it('reports frontmatter errors when fields missing', () => {
     const bad = { path: 'docs/wiki/pages/concept/x.md', frontmatter: { id: 'x', type: 'concept' }, body: '' };
     const r = runChecks([bad as any], { repoRoot: '/x', existsFn: () => true });

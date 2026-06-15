@@ -64,7 +64,13 @@ export function createFakeConfluence({ spaces = [], initialPages = [] } = {}) {
       const p = pageById.get(m[1]);
       if (!p) return { status: 404 };
       if (method === 'GET') {
-        return { status: 200, body: { id: p.id, title: p.title, parentId: p.parentId, version: { number: p.version }, body: { atlas_doc_format: { value: JSON.stringify(p.body) } } } };
+        // Real Confluence v2 returns the body ONLY when body-format is requested.
+        // Modeling that here so callers that forget the param (and would wipe the
+        // body on a subsequent PUT) are caught by tests.
+        const wantsBody = /[?&]body-format=/.test(path);
+        const out = { id: p.id, title: p.title, parentId: p.parentId, version: { number: p.version } };
+        if (wantsBody) out.body = { atlas_doc_format: { value: JSON.stringify(p.body) } };
+        return { status: 200, body: out };
       }
       if (method === 'PUT') {
         const adfValue = typeof body.body.value === 'string' ? JSON.parse(body.body.value) : body.body.value;
