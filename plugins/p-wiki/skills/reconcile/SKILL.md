@@ -73,6 +73,8 @@ Read each of these source files.
 
 ### 4d. Reconcile (supersession)
 
+Body editing here applies to a **filesystem** wiki. The `Edit` tool requires the page file to have been opened with `Read` first, so `Read` the page file now before rewriting it (Step 4a's `pwiki get` loaded the content for analysis but does not satisfy the `Edit` precondition). Rewriting a **Confluence** primary's body is not supported — see the storage-backend notes; leave such pages flagged.
+
 1. Rewrite the affected body sections so they match the current sources. Remove now-wrong content; add the corrected facts in the appropriate sections (Key facts / pipeline / etc.). Apply [Markdown sanitization](#markdown-sanitization). **No invention** — every claim must trace to a source.
 2. Remove the conflict callout block entirely.
 3. Clear the flag, record the new source(s), and bump `updated` in one call:
