@@ -68,4 +68,57 @@ describe('initConfluence', () => {
     expect(onDisk.mirrors).toEqual([]);
     expect(onDisk.destinations.fs).toBeUndefined();
   });
+
+  it('writes v3 shape with fs primary and confluence mirror', async () => {
+    const fake = createFakeConfluence({
+      spaces: [{ id: '100', key: 'ENG', name: 'Eng' }],
+      initialPages: [{ id: '200', title: 'Root', parentId: null }],
+    });
+    try {
+      await initConfluence({
+        'mirror-confluence': true, 'mirror-site': 'https://x.atlassian.net',
+        'mirror-space': 'ENG', 'mirror-parent': '200',
+      }, { transport: fake.transport });
+    } catch (e: any) {
+      expect(e.message).toBe('exit:0');
+    }
+    const onDisk = JSON.parse(readFileSync(join(dir, 'docs', 'wiki', '.pwiki.json'), 'utf-8'));
+    expect(onDisk.primary).toBe('fs');
+    expect(onDisk.mirrors).toEqual(['confluence-mirror']);
+    expect(onDisk.destinations.fs).toEqual({ kind: 'fs' });
+    const cm = onDisk.destinations['confluence-mirror'];
+    expect(cm.kind).toBe('confluence');
+    expect(cm.siteUrl).toBe('https://x.atlassian.net');
+    expect(cm.spaceKey).toBe('ENG');
+    expect(cm.spaceId).toBe('100');
+    expect(cm.rootPageId).toBe('200');
+    for (const t of ['concept', 'person', 'source', 'query']) {
+      expect(typeof cm.subParents[t]).toBe('string');
+      expect(cm.subParents[t]).toBeTruthy();
+    }
+  });
+
+  it('init --mirror-confluence is idempotent (same config, no new sub-parents)', async () => {
+    const fake = createFakeConfluence({
+      spaces: [{ id: '100', key: 'ENG', name: 'Eng' }],
+      initialPages: [{ id: '200', title: 'Root', parentId: null }],
+    });
+    const run = async () => {
+      try {
+        await initConfluence({
+          'mirror-confluence': true, 'mirror-site': 'https://x.atlassian.net',
+          'mirror-space': 'ENG', 'mirror-parent': '200',
+        }, { transport: fake.transport });
+      } catch (e: any) {
+        expect(e.message).toBe('exit:0');
+      }
+    };
+    await run();
+    const first = readFileSync(join(dir, 'docs', 'wiki', '.pwiki.json'), 'utf-8');
+    const sizeAfterFirst = fake.pageById.size;
+    await run();
+    const second = readFileSync(join(dir, 'docs', 'wiki', '.pwiki.json'), 'utf-8');
+    expect(second).toBe(first);
+    expect(fake.pageById.size).toBe(sizeAfterFirst);
+  });
 });
