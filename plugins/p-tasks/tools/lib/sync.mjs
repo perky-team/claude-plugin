@@ -50,11 +50,26 @@ export async function syncAll({ primary, primaryName, mirrors, mirrorNames }) {
       const dstByKey = new Map(dstItems.map(i => [i.id, i]));
 
       const srcToDstId = new Map(); // src.id → dst.id
+      const dstCurrentById = new Map(); // dst.id → current mirror item (for pass 4)
+
+      // Resolve a previously-mirrored item by its mapped key. mirror.listItems()
+      // (Jira JQL search) is eventually consistent and may omit an issue created
+      // moments ago, which would make sync re-create it (duplicate) every run.
+      // When we already hold a mapped key, confirm the item by key (read-your-
+      // writes) before deciding it's missing.
+      async function resolveExisting(mappedKey) {
+        if (!mappedKey) return undefined;
+        const hit = dstByKey.get(mappedKey);
+        if (hit) return hit;
+        if (!mirror.readItem) return undefined;
+        try { return await mirror.readItem(mappedKey); }
+        catch (e) { if (e?.code === 'item-not-found') return undefined; throw e; }
+      }
 
       // Pass 3a: tasks (type === 'task')
       for (const s of srcItems.filter(i => i.type === 'task')) {
         const mappedKey = mappedKeyFor(s, primary, mirror);
-        const existing = mappedKey ? dstByKey.get(mappedKey) : undefined;
+        const existing = await resolveExisting(mappedKey);
         if (existing) {
           const patch = buildFieldPatch(existing, s);
           if (Object.keys(patch).length > 0) {
@@ -62,6 +77,7 @@ export async function syncAll({ primary, primaryName, mirrors, mirrorNames }) {
             counters.updated++;
           }
           srcToDstId.set(s.id, existing.id);
+          dstCurrentById.set(existing.id, existing);
         } else {
           const created = await mirror.createItem({
             type: 'task',
@@ -70,6 +86,7 @@ export async function syncAll({ primary, primaryName, mirrors, mirrorNames }) {
             status: s.status,
           });
           srcToDstId.set(s.id, created.id);
+          dstCurrentById.set(created.id, { ...created, blockedBy: [] });
           counters.created++;
           if (primary.kind === 'fs' && mirror.kind === 'jira') {
             await primary.updateItem(s.id, { jiraKeys: { [mirror.name]: created.id } });
@@ -80,7 +97,7 @@ export async function syncAll({ primary, primaryName, mirrors, mirrorNames }) {
       // Pass 3b: sub-tasks (type === 'sub-task')
       for (const s of srcItems.filter(i => i.type === 'sub-task')) {
         const mappedKey = mappedKeyFor(s, primary, mirror);
-        const existing = mappedKey ? dstByKey.get(mappedKey) : undefined;
+        const existing = await resolveExisting(mappedKey);
         const dstParentId = srcToDstId.get(s.parentId);
         if (existing) {
           const patch = buildFieldPatch(existing, s);
@@ -89,6 +106,7 @@ export async function syncAll({ primary, primaryName, mirrors, mirrorNames }) {
             counters.updated++;
           }
           srcToDstId.set(s.id, existing.id);
+          dstCurrentById.set(existing.id, existing);
         } else {
           const created = await mirror.createItem({
             type: 'sub-task',
@@ -98,6 +116,7 @@ export async function syncAll({ primary, primaryName, mirrors, mirrorNames }) {
             status: s.status,
           });
           srcToDstId.set(s.id, created.id);
+          dstCurrentById.set(created.id, { ...created, blockedBy: [] });
           counters.created++;
           if (primary.kind === 'fs' && mirror.kind === 'jira') {
             await primary.updateItem(s.id, { jiraKeys: { [mirror.name]: created.id } });
@@ -112,8 +131,9 @@ export async function syncAll({ primary, primaryName, mirrors, mirrorNames }) {
         const targetBlockedBy = (s.blockedBy ?? [])
           .map(b => srcToDstId.get(b))
           .filter(Boolean);
-        // Use the freshly-updated dstByKey state, or fall back to empty
-        const before = (dstByKey.get(dstId)?.blockedBy ?? []);
+        // Current mirror blocker state (read-your-writes, from pass 3); newly
+        // created items start with none.
+        const before = (dstCurrentById.get(dstId)?.blockedBy ?? []);
         const beforeSet = new Set(before);
         const afterSet = new Set(targetBlockedBy);
         // Only update if the blocker list actually changed

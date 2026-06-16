@@ -9,14 +9,14 @@ import { configPath, writeConfig, defaultConfig, validateConfig } from './lib/co
 import { createFsDestination } from './lib/destinations/fs.mjs';
 import { createJiraDestination } from './lib/destinations/jira.mjs';
 import { readConfig } from './lib/config.mjs';
-import { resolveDestination } from './lib/destination.mjs';
+import { resolveDestination, makeTransport } from './lib/destination.mjs';
 import { findCycle } from './lib/cycles.mjs';
 import { STATUSES } from './lib/schema.mjs';
 import { pickNext } from './lib/next.mjs';
 import { summarize } from './lib/summary.mjs';
 import { syncAll } from './lib/sync.mjs';
 
-export const VERSION = '0.1.0';
+export const VERSION = '1.0.0';
 
 export function parseArgs(argv) {
   const opts = { _: [] };
@@ -100,7 +100,7 @@ function loadResolved({ root, transport }) {
   }
 }
 
-export async function addCommand({ root, args }) {
+export async function addCommand({ root, args, transport }) {
   const type = args._[0];
   if (type !== 'task' && type !== 'sub-task') return emitJson({ error: { code: 'internal', message: 'first arg must be "task" or "sub-task"' } }, 1);
   const parentId = type === 'sub-task' ? args._[1] : undefined;
@@ -110,19 +110,26 @@ export async function addCommand({ root, args }) {
     return emitJson({ error: { code: 'invalid-status', message: `status must be one of ${STATUSES.join('/')}` } }, 1);
   }
 
-  const { primary } = loadResolved({ root });
+  const { primary } = loadResolved({ root, transport });
   await primary.ensureStructure();
 
   const blockedBy = arrayify(args['blocked-by']);
   const existing = await primary.listItems();
   const ids = new Set(existing.map(i => i.id));
+  // A blocker created moments ago may not be in the (eventually-consistent) JQL
+  // list yet — confirm those by key before rejecting, and add them as graph
+  // nodes so the cycle check below sees a complete picture.
+  const extraNodes = [];
   for (const b of blockedBy) {
-    if (!ids.has(b)) return emitJson({ error: { code: 'blocker-not-found', message: `id ${b} not found` } }, 1);
+    if (ids.has(b)) continue;
+    try { await primary.readItem(b); extraNodes.push({ id: b, blockedBy: [] }); }
+    catch { return emitJson({ error: { code: 'blocker-not-found', message: `id ${b} not found` } }, 1); }
   }
 
   // cycle check: hypothetically add a new id with these blockers and run findCycle
   const newId = `__pending__`;
   const hypothetical = existing.map(i => ({ id: i.id, blockedBy: i.blockedBy }))
+    .concat(extraNodes)
     .concat([{ id: newId, blockedBy }]);
   const cycle = findCycle(hypothetical);
   if (cycle && cycle.includes(newId)) {
@@ -145,15 +152,22 @@ export async function addCommand({ root, args }) {
   return emitJson(created, 0);
 }
 
-export async function setCommand({ root, args }) {
+export async function setCommand({ root, args, transport }) {
   const id = args._[0];
   if (!id) return emitJson({ error: { code: 'internal', message: 'id required' } }, 1);
 
-  const { primary } = loadResolved({ root });
+  const { primary } = loadResolved({ root, transport });
   await primary.ensureStructure();
-  const items = await primary.listItems();
-  const current = items.find(i => i.id === id);
-  if (!current) return emitJson({ error: { code: 'item-not-found', message: `id ${id} not found` } }, 1);
+  // Resolve the target by key (read-your-writes) rather than via listItems: a
+  // Jira JQL search lags writes, so an issue created moments ago may be absent
+  // from the list even though it is directly readable by key.
+  let current;
+  try {
+    current = await primary.readItem(id);
+  } catch (e) {
+    if (e?.code === 'item-not-found') return emitJson({ error: { code: 'item-not-found', message: `id ${id} not found` } }, 1);
+    return emitJson({ error: { code: e?.code ?? 'internal', message: e?.message ?? String(e) } }, 1);
+  }
 
   const patch = {};
   if (args.title !== undefined) patch.title = args.title;
@@ -179,11 +193,17 @@ export async function setCommand({ root, args }) {
   }
 
   if (touchedBlockers) {
+    // Cycle detection needs the whole dependency graph. listItems (JQL) may lag,
+    // so validate each blocker by key and ensure the target node is represented
+    // even if the search list hasn't caught up with it yet.
+    const items = await primary.listItems();
     const ids = new Set(items.map(i => i.id));
     for (const b of newBlockedBy) {
-      if (!ids.has(b)) return emitJson({ error: { code: 'blocker-not-found', message: `id ${b} not found` } }, 1);
+      if (ids.has(b)) continue;
+      try { await primary.readItem(b); } catch { return emitJson({ error: { code: 'blocker-not-found', message: `id ${b} not found` } }, 1); }
     }
     const hypothetical = items.map(i => i.id === id ? { id, blockedBy: newBlockedBy } : { id: i.id, blockedBy: i.blockedBy });
+    if (!ids.has(id)) hypothetical.push({ id, blockedBy: newBlockedBy });
     const cycle = findCycle(hypothetical);
     if (cycle) return emitJson({ error: { code: 'cycle-detected', message: `would create cycle: ${cycle.join(' → ')}` } }, 1);
     patch.blockedBy = newBlockedBy;
@@ -193,8 +213,8 @@ export async function setCommand({ root, args }) {
   return emitJson(updated, 0);
 }
 
-export async function nextCommand({ root, args }) {
-  const { primary } = loadResolved({ root });
+export async function nextCommand({ root, args, transport }) {
+  const { primary } = loadResolved({ root, transport });
   await primary.ensureStructure();
   const items = await primary.listItems();
   const warns = [];
@@ -208,8 +228,8 @@ export async function nextCommand({ root, args }) {
   return emitJson({ next: one ?? null }, 0);
 }
 
-export async function summaryCommand({ root, args }) {
-  const { primary } = loadResolved({ root });
+export async function summaryCommand({ root, args, transport }) {
+  const { primary } = loadResolved({ root, transport });
   await primary.ensureStructure();
   const items = await primary.listItems();
   const parentId = args._[0];
@@ -242,7 +262,9 @@ export async function initWithArgs({ root, args, transport }) {
       block: destinations.jira,
       email: process.env.PTASKS_JIRA_EMAIL,
       token: process.env.PTASKS_JIRA_TOKEN,
-      transport,
+      // Default to the real HTTP transport when the CLI didn't inject one —
+      // otherwise the probe calls `undefined(req)` ("transport is not a function").
+      transport: transport ?? makeTransport(),
     });
     try { await probe.ensureStructure(); }
     catch (e) { return emitJson({ error: { code: 'config-invalid', message: e.message } }, 1); }

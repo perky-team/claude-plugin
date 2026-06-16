@@ -2,11 +2,17 @@
 // and assert on actual stdout/exit-code. Complements the in-process function tests
 // that run the same code via direct imports.
 
-import { describe, expect, it, beforeEach, afterEach } from 'vitest';
+import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+
+// Each test spawns several `node ptasks.mjs` subprocesses synchronously. Cold
+// Node start-up is ~100-300ms each, so the multi-step tests sit near the 5s
+// default and tip over it under parallel-suite CPU contention (a flaky timeout,
+// not a logic failure). Give this spawn-heavy file generous headroom.
+vi.setConfig({ testTimeout: 30_000 });
 
 const CLI = resolve(__dirname, '..', 'ptasks.mjs');
 

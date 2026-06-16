@@ -1,16 +1,37 @@
 import { createFsDestination } from './destinations/fs.mjs';
 import { createJiraDestination } from './destinations/jira.mjs';
 
-function makeTransport() {
+export function makeTransport() {
+  // Use node:https (not global fetch/undici). The CLI calls process.exit()
+  // immediately after a request resolves; undici's keep-alive socket pool is
+  // still tearing down at that point, which trips a libuv assertion
+  // (UV_HANDLE_CLOSING) and crashes the process with a non-zero code on Windows.
+  // A per-request https agent with keepAlive:false closes the socket before exit.
   return async function transport(req) {
-    const res = await globalThis.fetch(req.url, { method: req.method, headers: req.headers, body: req.body });
-    let body = null;
-    const ct = res.headers.get('content-type') ?? '';
-    if (ct.includes('application/json')) { try { body = await res.json(); } catch { body = null; } }
-    else { await res.text(); }
-    const headers = {};
-    res.headers.forEach((v, k) => { headers[k] = v; });
-    return { status: res.status, headers, body };
+    const https = await import('node:https');
+    const agent = new https.Agent({ keepAlive: false });
+    return new Promise((resolve, reject) => {
+      const request = https.request;
+      const url = new URL(req.url);
+      const r = request(
+        { host: url.host, path: url.pathname + url.search, method: req.method, headers: req.headers, agent },
+        (res) => {
+          let buf = '';
+          res.on('data', (c) => (buf += c));
+          res.on('end', () => {
+            let body = null;
+            const ct = String(res.headers['content-type'] ?? '');
+            if (ct.includes('application/json')) { try { body = JSON.parse(buf); } catch { body = null; } }
+            const headers = {};
+            for (const [k, v] of Object.entries(res.headers)) headers[k.toLowerCase()] = Array.isArray(v) ? v.join(',') : (v ?? '');
+            resolve({ status: res.statusCode ?? 0, headers, body });
+          });
+        },
+      );
+      r.on('error', reject);
+      if (req.body !== undefined && req.body !== null) r.write(req.body);
+      r.end();
+    });
   };
 }
 

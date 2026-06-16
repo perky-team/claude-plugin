@@ -73,6 +73,26 @@ describe('jira destination', () => {
     expect(out.id).toBe('PROJ-7');
     expect(out.status).toBe('todo');
   });
+  it('createItem creates a Blocks link for each blocker (add --blocked-by persists immediately)', async () => {
+    const fake = fakeJira([
+      { status: 201, body: { id: '7', key: 'PROJ-7' } }, // create issue
+      { status: 201, body: {} },                          // POST /issueLink
+    ]);
+    const dst = createJiraDestination({
+      block: { kind: 'jira', siteUrl: 'https://x', projectKey: 'PROJ', issueTypes: { task: 'Task', subTask: 'Sub-task' }, statusMap: { todo:'To Do',in_progress:'In Progress',done:'Done' }, jql: '' },
+      email: 'a@b.c', token: 't',
+      transport: fake.transport,
+    });
+    const out = await dst.createItem({ type: 'task', title: 'New', description: '', status: 'todo', blockedBy: ['PROJ-2'] });
+    expect(out.blockedBy).toEqual(['PROJ-2']);
+    const linkCall = fake.calls.find((c: any) => c.url.includes('/rest/api/3/issueLink'));
+    expect(linkCall, 'a /issueLink POST should have been made').toBeDefined();
+    const body = JSON.parse(linkCall.body);
+    expect(body.type.name).toBe('Blocks');
+    expect(body.inwardIssue.key).toBe('PROJ-7');  // the new issue is blocked…
+    expect(body.outwardIssue.key).toBe('PROJ-2'); // …by PROJ-2
+  });
+
   it('createItem returns the new Jira key as id', async () => {
     const fake = fakeJira([{ status: 201, body: { id: '99', key: 'PROJ-9' } }]);
     const dst = createJiraDestination({

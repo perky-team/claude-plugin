@@ -26,6 +26,26 @@ function memDest(name: string, opts: { kind: 'fs' | 'jira' } = { kind: 'fs' }) {
   };
 }
 
+// A Jira-like mirror whose search index ALWAYS lags: listItems never returns
+// freshly-created issues, but readItem resolves them by key (read-your-writes).
+function laggyJiraDest(name: string) {
+  const items: any[] = [];
+  let n = 0;
+  return {
+    kind: 'jira' as const, name, state: items,
+    async ensureStructure() {},
+    async listItems() { return []; },
+    async readItem(id: string) { const x = items.find(i => i.id === id); if (!x) throw Object.assign(new Error('item-not-found'), { code: 'item-not-found' }); return { ...x }; },
+    async createItem(input: any) {
+      const id = `Q-${++n}`;
+      const it = { id, type: input.type, parentId: input.parentId, title: input.title, description: input.description ?? '', status: input.status ?? 'todo', blockedBy: [] };
+      items.push(it);
+      return { ...it };
+    },
+    async updateItem(id: string, patch: any) { const x = items.find(i => i.id === id); if (!x) throw Object.assign(new Error('item-not-found'), { code: 'item-not-found' }); Object.assign(x, patch); return { ...x }; },
+  };
+}
+
 describe('syncAll', () => {
   it('creates missing items on the mirror', async () => {
     const primary = memDest('fs');
@@ -46,6 +66,20 @@ describe('syncAll', () => {
     expect(out[0].created).toBe(0);
     expect(out[0].updated + out[0].linksAdded + out[0].linksRemoved).toBe(0);
   });
+  it('does not duplicate on the mirror when its listItems lags (Jira JQL eventual consistency)', async () => {
+    const primary = memDest('fs');
+    await primary.createItem({ type: 'task', title: 'A' });
+    const mirror = laggyJiraDest('jira');
+    const r1 = await syncAll({ primary, primaryName: 'fs', mirrors: [mirror], mirrorNames: ['jira'] });
+    expect(r1[0].created).toBe(1);
+    expect(mirror.state).toHaveLength(1);
+    // Second run: the mirror's search still doesn't show the new issue, but the
+    // mapped key resolves it by key — so no duplicate is created.
+    const r2 = await syncAll({ primary, primaryName: 'fs', mirrors: [mirror], mirrorNames: ['jira'] });
+    expect(r2[0].created).toBe(0);
+    expect(mirror.state).toHaveLength(1);
+  });
+
   it('does not churn when only trailing whitespace differs in the description', async () => {
     const primary = memDest('fs');
     await primary.createItem({ type: 'task', title: 'A', description: 'body  ' }); // trailing whitespace

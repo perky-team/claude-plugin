@@ -83,7 +83,13 @@ export function createJiraDestination({ block, email, token, transport, name = '
           else throw e;
         }
       }
-      // Blockers handled by sync pass 4 or by an explicit set call after creation
+      // Create blocker links immediately. The CLI `add --blocked-by` validates
+      // each blocker exists before calling, so the targets are present. (Sync
+      // does NOT pass blockedBy here — it reconciles links in its own later pass
+      // once every mirror issue exists — so this only affects direct creation.)
+      for (const blockerKey of input.blockedBy ?? []) {
+        await createBlocksLink(http, { sourceKey: out.key, targetKey: blockerKey });
+      }
       return {
         id: out.key,
         type: input.type,
