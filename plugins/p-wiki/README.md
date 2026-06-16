@@ -67,6 +67,8 @@ A wiki can have one **primary** destination (where every command writes) and zer
 }
 ```
 
+The reverse topology is equally supported — FS as `primary` with a Confluence `mirror` (named `confluence-mirror`), where markdown is canonical and Confluence is the published view.
+
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/tools/pwiki.mjs" sync
 ```

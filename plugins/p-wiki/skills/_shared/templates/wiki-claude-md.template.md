@@ -198,6 +198,8 @@ A wiki can have one **primary** destination (where every command writes) and zer
 }
 ```
 
+The reverse topology is equally supported — FS as `primary` with a Confluence `mirror` (named `confluence-mirror`), where markdown is canonical and Confluence is the published view.
+
 To populate the mirror, run `pwiki sync`. It walks the primary, writes every page into each mirror (with cross-link `href`s translated to the mirror's format), deletes mirror-only pages (true-mirror semantics), and regenerates the Index on each mirror.
 
 **Adding a mirror after init:**
