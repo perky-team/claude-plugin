@@ -47,6 +47,7 @@ export function validateConfig(cfg) {
       for (const f of ['siteUrl', 'spaceKey', 'spaceId', 'rootPageId']) {
         if (typeof block[f] !== 'string' || !block[f]) return { ok: false, error: `destinations.${name}.${f} required` };
       }
+      if (block.titlePrefix !== undefined && (typeof block.titlePrefix !== 'string' || !block.titlePrefix)) return { ok: false, error: `destinations.${name}.titlePrefix must be a non-empty string` };
       if (!block.subParents || typeof block.subParents !== 'object') return { ok: false, error: `destinations.${name}.subParents required` };
       for (const t of TYPES) {
         if (typeof block.subParents[t] !== 'string' || !block.subParents[t]) return { ok: false, error: `destinations.${name}.subParents.${t} required` };

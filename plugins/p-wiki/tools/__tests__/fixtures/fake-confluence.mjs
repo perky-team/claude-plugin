@@ -9,6 +9,7 @@ export function createFakeConfluence({ spaces = [], initialPages = [] } = {}) {
     return {
       id: String(p.id),
       title: p.title,
+      spaceId: p.spaceId != null ? String(p.spaceId) : null,
       parentId: p.parentId ? String(p.parentId) : null,
       version: p.version ?? 1,
       body: p.body ?? { type: 'doc', version: 1, content: [] },
@@ -86,10 +87,20 @@ export function createFakeConfluence({ spaces = [], initialPages = [] } = {}) {
 
     // ----- pages -----
     if (method === 'POST' && path === '/wiki/api/v2/pages') {
+      const spaceId = body.spaceId != null ? String(body.spaceId) : null;
+      // Confluence Cloud enforces title uniqueness within a space: a POST whose
+      // title is already taken in the same space returns HTTP 400. Model that so
+      // a second p-wiki sharing a space (its structural pages colliding by title)
+      // is caught by tests instead of only blowing up live.
+      for (const existing of pageById.values()) {
+        if (existing.title === body.title && existing.spaceId === spaceId) {
+          return { status: 400, body: { message: `A page with this title already exists: ${body.title}` } };
+        }
+      }
       const id = String(nextPageId++);
       const adfValue = typeof body.body.value === 'string' ? JSON.parse(body.body.value) : body.body.value;
       sanitizeLinks(adfValue);
-      pageById.set(id, { id, title: body.title, parentId: String(body.parentId), version: 1, body: adfValue, properties: new Map(), labels: new Set() });
+      pageById.set(id, { id, title: body.title, spaceId, parentId: String(body.parentId), version: 1, body: adfValue, properties: new Map(), labels: new Set() });
       return { status: 200, body: { id, title: body.title, version: { number: 1 } } };
     }
     if ((m = /^\/wiki\/api\/v2\/pages\/(\d+)(\?.*)?$/.exec(path))) {

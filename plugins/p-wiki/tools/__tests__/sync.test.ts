@@ -107,6 +107,25 @@ describe('syncToMirror integration', () => {
     expect(warnings[0]).toMatchObject({ type: 'concept', slug: 'gone' });
   });
 
+  it('ensureStructure reuses the saved titlePrefix when creating missing containers', async () => {
+    const fake = createFakeConfluence({
+      spaces: [{ id: '100', key: 'ENG', name: 'Eng' }],
+      initialPages: [{ id: '200', title: 'Wiki Root', parentId: null }],
+    });
+    process.env.PWIKI_CONFLUENCE_EMAIL = 'a@b.c';
+    process.env.PWIKI_CONFLUENCE_TOKEN = 't';
+    const cfg = {
+      kind: 'confluence', siteUrl: 'https://example.atlassian.net', spaceKey: 'ENG',
+      spaceId: '100', rootPageId: '200', titlePrefix: 'Saved Prefix', subParents: {},
+    };
+    const dst = createConfluenceDestination({ root: '/tmp', destinationConfig: cfg, transport: fake.transport });
+    await dst.ensureStructure();
+    const titles = [...fake.pageById.values()].map((p: any) => p.title);
+    expect(titles).toContain('Saved Prefix — Concepts');
+    expect(titles).toContain('Saved Prefix — People');
+    expect((cfg.subParents as any).concept).toBeTruthy();
+  });
+
   it('re-running sync after partial failure is safe (idempotent)', async () => {
     const src = makeFs(dir);
     await src.writePage(sampleConcept('a'));

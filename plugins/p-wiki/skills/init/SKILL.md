@@ -30,6 +30,7 @@ If the user picks `confluence`:
 4. Prompt: parent page title or numeric ID under which wiki pages will live.
 5. Call `node "${CLAUDE_PLUGIN_ROOT}/tools/pwiki.mjs" init --confluence --site=<url> --space=<key> --parent=<title-or-id>`.
    - The CLI resolves the space (GET /wiki/api/v2/spaces?keys=<key>), looks up the parent page, ensures sub-parents, and writes `docs/wiki/.pwiki.json`.
+   - Structural pages (the Concepts/People/Sources/Queries containers and the Index) get a per-wiki title prefix so several wikis can share one space — Confluence Cloud requires page titles to be unique space-wide. The prefix defaults to the parent page's title (e.g. `Technical Specifications — Concepts`) and is persisted into `.pwiki.json` as `titlePrefix`. Pass `--title-prefix="<text>"` to override it. Content page titles are never prefixed.
    - On `error.code = config-invalid`, show the suggested fix and prompt again.
 6. Continue with the rest of the scaffold (CLAUDE.md template, `.claude/rules/p-wiki.md`).
 
@@ -55,7 +56,7 @@ If the user picks `confluence` and the primary is FS:
 - Prompt for mirror Confluence site URL, space key, and parent (same prompts as the Confluence-primary branch).
 - After the FS scaffold completes, add a Confluence mirror by re-running init with:
   `node "${CLAUDE_PLUGIN_ROOT}/tools/pwiki.mjs" init --mirror-confluence --mirror-site=<...> --mirror-space=<...> --mirror-parent=<...>`
-  (FS-primary init creates `.pwiki.json` with `primary: "fs", mirrors: ["confluence-mirror"]`; the mirror flags persist into `destinations`.)
+  (FS-primary init creates `.pwiki.json` with `primary: "fs", mirrors: ["confluence-mirror"]`; the mirror flags persist into `destinations`. The mirror's structural pages are prefixed from the mirror parent's title; override with `--mirror-title-prefix="<text>"`.)
 
 After mirror setup, regardless of branch, continue with the FS-side scaffold step (CLAUDE.md template, `.claude/rules/p-wiki.md`).
 

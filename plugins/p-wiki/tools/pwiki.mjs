@@ -14,7 +14,7 @@ import { ensureSubParent } from './lib/confluence/tree.mjs';
 import { writeConfig, validateConfig } from './lib/config.mjs';
 import { syncToMirror } from './lib/sync.mjs';
 
-const VERSION = '3.2.3';
+const VERSION = '3.3.0';
 
 export function mapErrorToCode(err) {
   if (err?.message && /invalid \.pwiki\.json/.test(err.message)) return 'config-invalid';
@@ -131,16 +131,18 @@ function makeRealTransport() {
   };
 }
 
-async function resolveConfluenceBlock(transport, email, token, { site, space, parent }) {
+async function resolveConfluenceBlock(transport, email, token, { site, space, parent, titlePrefix }) {
   const http = createHttpClient({ baseUrl: site, email, token, transport });
   const spaceRes = await http.get(`/wiki/api/v2/spaces?keys=${encodeURIComponent(space)}`);
   const spaceObj = spaceRes.body?.results?.[0];
   if (!spaceObj) emitJson({ error: { code: 'config-invalid', message: `space ${space} not found` } }, 1);
 
   let rootPageId;
+  let rootTitle;
   if (/^\d+$/.test(parent)) {
     rootPageId = parent;
-    await http.get(`/wiki/api/v2/pages/${rootPageId}`);
+    const rootRes = await http.get(`/wiki/api/v2/pages/${rootPageId}`);
+    rootTitle = rootRes.body?.title;
   } else {
     const cql = `title = "${parent.replace(/"/g, '\\"')}" AND space = "${space}"`;
     const r = await http.get(`/wiki/rest/api/search?cql=${encodeURIComponent(cql)}&limit=2`);
@@ -148,13 +150,19 @@ async function resolveConfluenceBlock(transport, email, token, { site, space, pa
     if (hits.length === 0) emitJson({ error: { code: 'config-invalid', message: `parent page "${parent}" not found in space ${space} — create it in UI first` } }, 1);
     if (hits.length > 1) emitJson({ error: { code: 'config-invalid', message: `parent page title ambiguous (${hits.length} matches) — pass numeric ID instead` } }, 1);
     rootPageId = hits[0].content?.id ?? hits[0].id;
+    rootTitle = hits[0].content?.title ?? parent;
   }
+
+  // Structural-page titles must be unique within the space. Default the prefix
+  // to the root page's title (itself space-unique), so two wikis in one space
+  // never collide. Persisted into the config so sync (ensureStructure) reuses it.
+  const prefix = titlePrefix || rootTitle;
 
   const subParents = {};
   for (const type of ['concept', 'person', 'source', 'query']) {
-    subParents[type] = await ensureSubParent(http, spaceObj.id, rootPageId, type);
+    subParents[type] = await ensureSubParent(http, spaceObj.id, rootPageId, type, prefix);
   }
-  return { kind: 'confluence', siteUrl: site, spaceKey: space, spaceId: spaceObj.id, rootPageId, subParents };
+  return { kind: 'confluence', siteUrl: site, spaceKey: space, spaceId: spaceObj.id, rootPageId, titlePrefix: prefix, subParents };
 }
 
 export async function initConfluence(args, _opts = {}) {
@@ -172,7 +180,7 @@ export async function initConfluence(args, _opts = {}) {
   if (args.confluence) {
     const site = args.site, space = args.space, parent = args.parent;
     if (!site || !space || !parent) die('--site, --space, and --parent required', 1);
-    destinations.confluence = await resolveConfluenceBlock(transport, email, token, { site, space, parent });
+    destinations.confluence = await resolveConfluenceBlock(transport, email, token, { site, space, parent, titlePrefix: args['title-prefix'] });
     primaryName = 'confluence';
   } else {
     destinations.fs = { kind: 'fs' };
@@ -187,7 +195,7 @@ export async function initConfluence(args, _opts = {}) {
   if (args['mirror-confluence']) {
     const site = args['mirror-site'], space = args['mirror-space'], parent = args['mirror-parent'];
     if (!site || !space || !parent) die('--mirror-confluence requires --mirror-site, --mirror-space, --mirror-parent', 1);
-    destinations['confluence-mirror'] = await resolveConfluenceBlock(transport, email, token, { site, space, parent });
+    destinations['confluence-mirror'] = await resolveConfluenceBlock(transport, email, token, { site, space, parent, titlePrefix: args['mirror-title-prefix'] });
     mirrors.push('confluence-mirror');
   }
 

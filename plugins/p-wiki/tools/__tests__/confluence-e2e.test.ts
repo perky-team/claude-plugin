@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { createHttpClient } from '../lib/confluence/http.mjs';
 import { createConfluenceDestination } from '../lib/destinations/confluence.mjs';
-import { ensureSubParent } from '../lib/confluence/tree.mjs';
+import { ensureSubParent, ensureIndex } from '../lib/confluence/tree.mjs';
 import { request as httpsRequest } from 'node:https';
 
 const skip = !process.env.PWIKI_E2E_CONFLUENCE;
@@ -275,6 +275,41 @@ describe.skipIf(skip)('Confluence E2E', () => {
     const idx = createdIds.indexOf(createdId);
     if (idx >= 0) createdIds.splice(idx, 1);
   }, 180_000);
+
+  // Direct live reproduction of the structural-title collision bug: Confluence
+  // Cloud enforces space-wide unique titles, so a SECOND wiki under a different
+  // root in the same space cannot create bare-titled containers (they're already
+  // taken). beforeAll already created/found "Concepts" under the configured root,
+  // so a bare ensureSubParent under a fresh sibling root must 400 — and the
+  // per-wiki title prefix must make it succeed.
+  it('two wikis in one space: bare structural title 400s, prefixed succeeds (live)', async () => {
+    const stamp = Date.now().toString();
+    const spaceId = dest._config.spaceId;
+    const rootPageId = process.env.PWIKI_E2E_ROOT_PAGE_ID!;
+
+    // A fresh sibling root (root "B") in the same space.
+    const rootBTitle = `pwiki-e2e-root-B-${stamp}`;
+    const rootB = await http.post('/wiki/api/v2/pages', {
+      spaceId, parentId: rootPageId, title: rootBTitle,
+      body: { representation: 'atlas_doc_format', value: JSON.stringify({ type: 'doc', version: 1, content: [] }) },
+    });
+    const rootBId = rootB.body.id;
+    createdIds.push(rootBId);
+
+    // Bare title — collides with the existing "Concepts" space-wide → HTTP 400.
+    await expect(ensureSubParent(http, spaceId, rootBId, 'concept')).rejects.toMatchObject({ status: 400 });
+
+    // Per-wiki prefix (defaulted from root B's title) makes the title unique.
+    const conceptId = await ensureSubParent(http, spaceId, rootBId, 'concept', rootBTitle);
+    createdIds.push(conceptId);
+    const indexId = await ensureIndex(http, spaceId, rootBId, rootBTitle);
+    createdIds.push(indexId);
+
+    const got = await http.get(`/wiki/api/v2/pages/${conceptId}`);
+    expect(got.body.title).toBe(`${rootBTitle} — Concepts`);
+    const gotIndex = await http.get(`/wiki/api/v2/pages/${indexId}`);
+    expect(gotIndex.body.title).toBe(`${rootBTitle} — Index`);
+  }, 120_000);
 
   // The CLI command handlers must `await` the (async) Confluence destination —
   // a missing await makes `new`/`set`/etc. operate on a Promise and silently

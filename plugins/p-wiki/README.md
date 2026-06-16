@@ -61,7 +61,7 @@ A wiki can have one **primary** destination (where every command writes) and zer
   "primary": "confluence",
   "mirrors": ["fs"],
   "destinations": {
-    "confluence": { "kind": "confluence", "siteUrl": "...", "spaceKey": "...", "spaceId": "...", "rootPageId": "...", "subParents": {} },
+    "confluence": { "kind": "confluence", "siteUrl": "...", "spaceKey": "...", "spaceId": "...", "rootPageId": "...", "titlePrefix": "...", "subParents": {} },
     "fs": { "kind": "fs" }
   }
 }
