@@ -1,17 +1,24 @@
+import { listChildren } from './children.mjs';
+
 const SUB_PARENT_TITLES = {
   concept: 'Concepts', person: 'People', source: 'Sources', query: 'Queries',
 };
 
-function cqlEncode(cql) {
-  return encodeURIComponent(cql);
-}
-
+// Structural pages (sub-parents + index) carry a `pwiki-role` property and live
+// directly under the root. CQL can't search by property AND its index lags
+// writes, so resolving a role via search would both 400 and miss freshly
+// created pages. Enumerate the root's direct children via the read-your-writes
+// children API and match `pwiki-role` in memory. The child set is small (≈5).
 export async function findByRole(http, rootPageId, role) {
-  const cql = `property["pwiki-role"] = "${role}" AND ancestor = ${rootPageId}`;
-  const res = await http.get(`/wiki/rest/api/search?cql=${cqlEncode(cql)}&limit=1`);
-  const results = res.body?.results ?? [];
-  if (results.length === 0) return null;
-  return results[0].content?.id ?? results[0].id ?? null;
+  const children = await listChildren(http, rootPageId);
+  for (const child of children) {
+    const propsRes = await http.get(`/wiki/api/v2/pages/${child.id}/properties`);
+    const match = (propsRes.body?.results ?? []).some(
+      (p) => p.key === 'pwiki-role' && p.value === role,
+    );
+    if (match) return child.id;
+  }
+  return null;
 }
 
 export async function ensureSubParent(http, spaceId, rootPageId, type) {

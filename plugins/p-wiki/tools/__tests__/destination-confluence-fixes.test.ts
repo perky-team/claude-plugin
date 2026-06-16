@@ -46,19 +46,24 @@ describe('Confluence conflict-since (#3 round-trip)', () => {
 });
 
 describe('Confluence listPages (#4 pagination)', () => {
-  it('follows _links.next across multiple search pages', async () => {
+  it('follows _links.next across multiple children pages', async () => {
     const props: Record<string, any[]> = {
       P1: [{ key: 'pwiki-id', value: 'p1' }, { key: 'pwiki-type', value: 'concept' }],
       P2: [{ key: 'pwiki-id', value: 'p2' }, { key: 'pwiki-type', value: 'concept' }],
     };
-    let searchCalls = 0;
+    let childCalls = 0;
     const transport = async (req: any) => {
-      if (req.method === 'GET' && req.path.startsWith('/wiki/rest/api/search')) {
-        searchCalls++;
+      // children of the concept sub-parent (101) — paginated via _links.next
+      if (req.method === 'GET' && /^\/wiki\/api\/v2\/pages\/101\/children/.test(req.path)) {
+        childCalls++;
         if (!req.path.includes('cursor=')) {
-          return { status: 200, body: { results: [{ content: { id: 'P1' } }], _links: { next: '/rest/api/search?cql=x&cursor=abc&limit=250' } } };
+          return { status: 200, body: { results: [{ id: 'P1', title: 'P1' }], _links: { next: '/wiki/api/v2/pages/101/children?cursor=abc&limit=250' } } };
         }
-        return { status: 200, body: { results: [{ content: { id: 'P2' } }] } };
+        return { status: 200, body: { results: [{ id: 'P2', title: 'P2' }], _links: {} } };
+      }
+      // other sub-parents have no children
+      if (req.method === 'GET' && /^\/wiki\/api\/v2\/pages\/\d+\/children/.test(req.path)) {
+        return { status: 200, body: { results: [], _links: {} } };
       }
       const pm = req.path.match(/^\/wiki\/api\/v2\/pages\/(\w+)\/properties$/);
       if (req.method === 'GET' && pm) {
@@ -69,6 +74,6 @@ describe('Confluence listPages (#4 pagination)', () => {
     const dest = createConfluenceDestination({ root: '/tmp', destinationConfig: CONF, transport });
     const r = await dest.listPages({ types: ['concept'] });
     expect(r.map((p: any) => p.frontmatter.id).sort()).toEqual(['p1', 'p2']);
-    expect(searchCalls).toBe(2); // first page + one follow of _links.next
+    expect(childCalls).toBe(2); // first page + one follow of _links.next
   });
 });

@@ -3,7 +3,9 @@ import { createIdentityCache, parsePath, formatPath } from '../confluence/identi
 import { createPropertiesHelper } from '../confluence/properties.mjs';
 import { markdownToAdf, adfToMarkdown } from '../confluence/adf.mjs';
 import { syncLabels } from '../confluence/labels.mjs';
-import { buildListCql, buildSearchCql, mapSearchResult } from '../confluence/search.mjs';
+import { buildSearchCql, mapSearchResult } from '../confluence/search.mjs';
+import { listChildren } from '../confluence/children.mjs';
+import { rewriteCrossLinks } from '../cross-links.mjs';
 import { withDateSuffix } from '../slug.mjs';
 import { today, toRepoRelative } from '../paths.mjs';
 import { parseFrontmatter } from '../fm.mjs';
@@ -31,16 +33,36 @@ export function createConfluenceDestination({ root, config, destinationConfig, t
     return formatPath(type, slug);
   }
 
+  // Confluence Cloud CQL cannot resolve a page by its content properties
+  // (pwiki-id / pwiki-type) — `property[...]` returns HTTP 400. So we can't
+  // query identity directly. Instead scan pages under the root via the
+  // supported `ancestor` field, read each page's properties, and populate the
+  // identity cache in memory. Built at most once per run, so a sync touching
+  // many pages pays the property reads only once.
+  let identityIndexBuilt = false;
+  async function ensureIdentityIndex() {
+    if (identityIndexBuilt) return;
+    // Content pages live directly under their type's sub-parent. Enumerate each
+    // sub-parent's children via the read-your-writes children API (CQL search
+    // lags writes), read properties, and populate the identity cache.
+    const seenScopes = new Set();
+    for (const subParent of Object.values(c.subParents)) {
+      if (!subParent || seenScopes.has(subParent)) continue;
+      seenScopes.add(subParent);
+      for (const child of await listChildren(http, subParent)) {
+        const props = await properties.readAll(child.id);
+        const pid = props['pwiki-id'];
+        const ptype = props['pwiki-type'];
+        if (pid && ptype) identity.set(ptype, pid, child.id);
+      }
+    }
+    identityIndexBuilt = true;
+  }
+
   async function pageExists({ type, slug }) {
-    const cached = identity.get(type, slug);
-    if (cached) return true;
-    const subParent = c.subParents[type];
-    const cql = `ancestor = ${subParent} AND property["pwiki-id"] = "${slug}" AND property["pwiki-type"] = "${type}"`;
-    const res = await http.get(`/wiki/rest/api/search?cql=${encodeURIComponent(cql)}&limit=1`);
-    const r = res.body?.results?.[0];
-    if (!r) return false;
-    identity.set(type, slug, r.content?.id ?? r.id);
-    return true;
+    if (identity.get(type, slug)) return true;
+    await ensureIdentityIndex();
+    return identity.get(type, slug) !== undefined;
   }
 
   function viewUrl(numericId) {
@@ -96,7 +118,7 @@ export function createConfluenceDestination({ root, config, destinationConfig, t
       // overwrite: fall through
     }
 
-    const adf = markdownToAdf(body);
+    const adf = markdownToAdf(rewriteBodyForStorage(body, formatPath(type, useSlug)));
     const fm = { ...frontmatter, id: useSlug };
     const pairs = fmToPropertyPairs(fm);
 
@@ -161,42 +183,27 @@ export function createConfluenceDestination({ root, config, destinationConfig, t
     return fm;
   }
 
-  // CQL search returns at most one page; follow `_links.next` so wikis with more
-  // than the per-page limit aren't silently truncated (a truncated source list
-  // would make sync delete real mirror pages in its prune pass).
-  function nextSearchPath(resBody) {
-    const next = resBody?._links?.next;
-    if (!next) return null;
-    if (/^https?:\/\//.test(next)) { const u = new URL(next); return u.pathname + u.search; }
-    if (next.startsWith('/wiki/')) return next;
-    if (next.startsWith('/rest/')) return `/wiki${next}`;
-    return next;
-  }
-
-  async function searchAllHits(initialPath) {
-    const hits = [];
-    let path = initialPath;
-    let guard = 0;
-    while (path && guard++ < 1000) {
-      const res = await http.get(path);
-      hits.push(...(res.body?.results ?? []));
-      path = nextSearchPath(res.body);
-    }
-    return hits;
-  }
-
   async function listConfluencePages(types) {
-    const cql = buildListCql({ rootPageId: c.rootPageId, types });
-    const hits = await searchAllHits(`/wiki/rest/api/search?cql=${encodeURIComponent(cql)}&limit=250`);
+    // List content pages as the direct children of each type's sub-parent via
+    // the read-your-writes children API (CQL `ancestor` search lags writes and
+    // would make sync miss freshly written pages). Filter by pwiki-type in
+    // memory; `!fm.type` drops structural pages (sub-parents, index).
+    const wanted = types && types.length ? types : ['concept', 'person', 'source', 'query'];
+    const typeFilter = types && types.length ? new Set(types) : null;
     const out = [];
-    for (const hit of hits) {
-      const id = hit.content?.id ?? hit.id;
-      if (!id) continue;
-      const props = await properties.readAll(id);
-      const fm = reassembleFm(props);
-      if (!fm.type) continue;
-      identity.set(fm.type, fm.id, id);
-      out.push({ path: formatPath(fm.type, fm.id), frontmatter: fm });
+    const seenScopes = new Set();
+    for (const type of wanted) {
+      const subParent = c.subParents[type];
+      if (!subParent || seenScopes.has(subParent)) continue;
+      seenScopes.add(subParent);
+      for (const child of await listChildren(http, subParent)) {
+        const props = await properties.readAll(child.id);
+        const fm = reassembleFm(props);
+        if (!fm.type) continue;
+        if (typeFilter && !typeFilter.has(fm.type)) continue;
+        identity.set(fm.type, fm.id, child.id);
+        out.push({ path: formatPath(fm.type, fm.id), frontmatter: fm });
+      }
     }
     return out;
   }
@@ -317,7 +324,7 @@ export function createConfluenceDestination({ root, config, destinationConfig, t
     if (hasBody) {
       const cur = await http.get(`/wiki/api/v2/pages/${id}`);
       const ver = cur.body?.version?.number ?? 1;
-      const adf = markdownToAdf(mutations.setBody);
+      const adf = markdownToAdf(rewriteBodyForStorage(mutations.setBody, path));
       try {
         await http.put(`/wiki/api/v2/pages/${id}`, {
           id, status: 'current',
@@ -349,18 +356,21 @@ export function createConfluenceDestination({ root, config, destinationConfig, t
   }
 
   async function search(query, opts = {}) {
+    // Type isn't a CQL filter (no property search); tags map to labels, which
+    // CQL supports. Filter by type in memory below.
     const cql = buildSearchCql({
-      query, rootPageId: c.rootPageId,
-      types: opts.type, tags: opts.tags,
+      query, rootPageId: c.rootPageId, tags: opts.tags,
     });
     const limit = opts.limit ?? 10;
     const res = await http.get(`/wiki/rest/api/search?cql=${encodeURIComponent(cql)}&limit=${limit}&expand=excerpt`);
+    const typeFilter = opts.type && opts.type.length ? new Set(opts.type) : null;
     const results = [];
     for (const hit of res.body?.results ?? []) {
       const m = mapSearchResult(hit);
       const props = await properties.readAll(m.id);
       const fm = reassembleFm(props);
       if (!fm.type) continue;
+      if (typeFilter && !typeFilter.has(fm.type)) continue;
       identity.set(fm.type, fm.id, m.id);
       results.push({
         path: formatPath(fm.type, fm.id),
@@ -368,7 +378,8 @@ export function createConfluenceDestination({ root, config, destinationConfig, t
         score: m.score, snippet: m.excerpt,
       });
     }
-    return { total: res.body?.totalSize ?? results.length, results };
+    const total = typeFilter ? results.length : (res.body?.totalSize ?? results.length);
+    return { total, results };
   }
 
   async function movePage(fromPath, toPath) {
@@ -404,12 +415,28 @@ export function createConfluenceDestination({ root, config, destinationConfig, t
 
   function parseWikiLink(href, _fromPath) {
     if (!href) return null;
+    // Portable cross-link form (the authoring format): confluence://type/slug.
+    // Encodes type+slug directly, so it resolves without the identity cache.
+    if (href.startsWith('confluence://')) {
+      try { return parsePath(href); } catch { return null; }
+    }
     const m = URL_RE.exec(href);
     if (!m) return null;
     const numericId = m[1];
     const hit = identity.getByNumericId(numericId);
     if (!hit) return null;
     return { type: hit.type, slug: hit.slug };
+  }
+
+  // Rewrite cross-links in a body to this space's native page URLs before
+  // storing. Confluence sanitizes the portable `confluence://type/slug` scheme
+  // to "#", so any portable (or already-native) cross-link must become a real
+  // page URL first. Targets not yet created (forward references) can't resolve
+  // and are left verbatim — create the target first, or let sync's 2-pass
+  // rewrite (stub then resolve) handle ordering.
+  function rewriteBodyForStorage(body, selfPath) {
+    const helper = { parseWikiLink, formatWikiLink };
+    return rewriteCrossLinks(body, helper, selfPath, helper, selfPath);
   }
 
   function formatWikiLink({ type, slug }, _fromPath) {
@@ -422,14 +449,11 @@ export function createConfluenceDestination({ root, config, destinationConfig, t
     const { type, slug } = parsePath(path);
     let id = identity.get(type, slug);
     if (!id) {
-      // Resolve via CQL (same shape as pageExists). Cache miss + page actually missing → return {deleted:false}.
-      const subParent = c.subParents[type];
-      const cql = `ancestor = ${subParent} AND property["pwiki-id"] = "${slug}" AND property["pwiki-type"] = "${type}"`;
-      const res = await http.get(`/wiki/rest/api/search?cql=${encodeURIComponent(cql)}&limit=1`);
-      const r = res.body?.results?.[0];
-      if (!r) return { deleted: false, path };
-      id = r.content?.id ?? r.id;
-      identity.set(type, slug, id);
+      // Resolve via the identity index (no property CQL). Cache miss + page
+      // actually missing → return {deleted:false}.
+      await ensureIdentityIndex();
+      id = identity.get(type, slug);
+      if (!id) return { deleted: false, path };
     }
     try {
       await http.delete(`/wiki/api/v2/pages/${id}`);

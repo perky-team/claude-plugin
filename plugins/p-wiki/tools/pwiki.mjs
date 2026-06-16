@@ -14,7 +14,7 @@ import { ensureSubParent } from './lib/confluence/tree.mjs';
 import { writeConfig, validateConfig } from './lib/config.mjs';
 import { syncToMirror } from './lib/sync.mjs';
 
-const VERSION = '3.2.2';
+const VERSION = '3.2.3';
 
 export function mapErrorToCode(err) {
   if (err?.message && /invalid \.pwiki\.json/.test(err.message)) return 'config-invalid';
@@ -99,22 +99,35 @@ function formatLintReport(r) {
 }
 
 function makeRealTransport() {
+  // Use node:https (not global fetch/undici). The CLI calls process.exit()
+  // immediately after a request resolves; undici's keep-alive socket pool is
+  // still tearing down then, which trips a libuv assertion (UV_HANDLE_CLOSING)
+  // and crashes the process with a non-zero exit code on Windows. A per-request
+  // agent with keepAlive:false closes the socket before exit.
   return async function transport(req) {
-    const res = await globalThis.fetch(req.url, {
-      method: req.method,
-      headers: req.headers,
-      body: req.body,
+    const https = await import('node:https');
+    const agent = new https.Agent({ keepAlive: false });
+    return new Promise((resolve, reject) => {
+      const url = new URL(req.url);
+      const r = https.request(
+        { host: url.host, path: url.pathname + url.search, method: req.method, headers: req.headers, agent },
+        (res) => {
+          let buf = '';
+          res.on('data', (c) => (buf += c));
+          res.on('end', () => {
+            let body = null;
+            const ct = String(res.headers['content-type'] ?? '');
+            if (ct.includes('application/json')) { try { body = JSON.parse(buf); } catch { body = null; } }
+            const headers = {};
+            for (const [k, v] of Object.entries(res.headers)) headers[k.toLowerCase()] = Array.isArray(v) ? v.join(',') : (v ?? '');
+            resolve({ status: res.statusCode ?? 0, headers, body });
+          });
+        },
+      );
+      r.on('error', reject);
+      if (req.body !== undefined && req.body !== null) r.write(req.body);
+      r.end();
     });
-    let body = null;
-    const ct = res.headers.get('content-type') ?? '';
-    if (ct.includes('application/json')) {
-      try { body = await res.json(); } catch { body = null; }
-    } else {
-      await res.text(); // drain the body
-    }
-    const headers = {};
-    res.headers.forEach((v, k) => { headers[k] = v; });
-    return { status: res.status, headers, body };
   };
 }
 
@@ -292,7 +305,7 @@ try {
       body = templateBody(type, { title: args.title, body: pasteBody });
     }
 
-    const r = dest.writePage({
+    const r = await dest.writePage({
       type, slug, frontmatter, body,
       onConflict: args['on-conflict'] ?? 'fail',
     });
@@ -342,7 +355,7 @@ try {
     }
 
     try {
-      const r = dest.mutatePage(path, mutations);
+      const r = await dest.mutatePage(path, mutations);
       emitJson(r, 0);
     } catch (e) {
       die(e.message, 1);
@@ -358,13 +371,13 @@ try {
     const dest = res.primary;
 
     let source;
-    try { source = dest.readPage(path); } catch (e) { die(e.message, 1); }
+    try { source = await dest.readPage(path); } catch (e) { die(e.message, 1); }
     if (source.frontmatter.type !== 'query') die(`promote: source must be type=query`, 1);
 
     const informedBy = source.frontmatter['informed-by'] ?? [];
     const slug = stripDatePrefix(source.frontmatter.id);
     const targetPath = `docs/wiki/pages/concept/${slug}.md`;
-    if (dest.pageExists({ type: 'concept', slug })) {
+    if (await dest.pageExists({ type: 'concept', slug })) {
       emitJson({ 'existing-path': targetPath }, 2);
     }
 
@@ -373,19 +386,19 @@ try {
     for (const ibPath of informedBy) {
       try {
         const ibAbs = ibPath.startsWith('docs/wiki/') ? ibPath : `docs/wiki/${ibPath}`;
-        const p = dest.readPage(ibAbs);
+        const p = await dest.readPage(ibAbs);
         for (const s of (p.frontmatter.sources ?? [])) collected.add(s);
       } catch { /* skip missing — lint will surface */ }
     }
     const sourcesArr = [...collected].sort();
 
-    dest.movePage(path, targetPath);
+    await dest.movePage(path, targetPath);
     const mutations = {
       setFields: { type: 'concept', status: 'active', sources: sourcesArr },
       removeFields: ['question', 'informed-by'],
       bumpUpdated: true,
     };
-    dest.mutatePage(targetPath, mutations);
+    await dest.mutatePage(targetPath, mutations);
     emitJson({ from: path, to: targetPath, sources: sourcesArr }, 0);
   }
 
@@ -404,7 +417,7 @@ try {
       snippet: args.snippet === 'false' ? false : true,
     };
 
-    const r = dest.search(query, opts);
+    const r = await dest.search(query, opts);
     emitJson({ query, total: r.total, results: r.results }, 0);
   }
 
@@ -416,7 +429,7 @@ try {
     const res = resolveDestination({ cwd: process.cwd(), transport: makeRealTransport() });
     if (!res) die(`not inside a p-wiki repo`, 1);
     const dest = res.primary;
-    const r = dest.lint({});
+    const r = await dest.lint({});
     const format = args.format ?? 'text';
     if (format === 'json') {
       emitJson(r, 0);
@@ -438,7 +451,7 @@ try {
       : 20;
     const force = args.force === true || args.force === 'true';
     try {
-      const r = dest.applyBacklinks({ targetPath: path, maxSuggestions, force });
+      const r = await dest.applyBacklinks({ targetPath: path, maxSuggestions, force });
       if (r.suspicious) emitJson(r, 2);
       emitJson(r, 0);
     } catch (e) {
@@ -460,7 +473,7 @@ try {
     if (format === 'text') {
       // Render without writing. Build the same input the destination's
       // regenerateIndex builds, but pipe to stdout instead of writing.
-      const allPages = dest.listPages({ in: 'pages' });
+      const allPages = await dest.listPages({ in: 'pages' });
       const groups = { concept: [], person: [], source: [], query: [] };
       for (const { path: pagePath, frontmatter } of allPages) {
         const t = frontmatter.type;
@@ -481,7 +494,7 @@ try {
       process.stdout.write(renderIndex(groups));
       process.exit(0);
     }
-    const r = dest.regenerateIndex();
+    const r = await dest.regenerateIndex();
     emitJson(r, 0);
   }
 

@@ -33,4 +33,18 @@ describe('Confluence search', () => {
     const r = await dest.search('kafka', { tags: ['streaming'] });
     expect(r.total).toBe(1);
   });
+
+  it('filters by type in memory (no property CQL): matching type keeps the hit', async () => {
+    const dest = setup();
+    const r = await dest.search('kafka', { type: ['concept'] });
+    expect(r.total).toBe(1);
+    expect(r.results[0].path).toBe('confluence://concept/kafka');
+  });
+
+  it('filters by type in memory: non-matching type drops the hit', async () => {
+    const dest = setup();
+    const r = await dest.search('kafka', { type: ['person'] });
+    expect(r.total).toBe(0);
+    expect(r.results).toEqual([]);
+  });
 });

@@ -2,27 +2,18 @@ export function escapeCqlText(s) {
   return s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
-function typeDisjunction(types) {
-  if (!types?.length) return '';
-  return '(' + types.map(t => `property["pwiki-type"] = "${t}"`).join(' OR ') + ')';
-}
-
 function tagConjunction(tags) {
   if (!tags?.length) return '';
   return tags.map(t => `labels = "${escapeCqlText(t)}"`).join(' AND ');
 }
 
-export function buildSearchCql({ query, rootPageId, types, tags }) {
+// Confluence Cloud CQL cannot filter by content property (`property[...]` →
+// HTTP 400), so type filtering is NOT expressed in CQL — callers enumerate by
+// `ancestor` and filter by pwiki-type in memory after reading properties.
+// `labels` IS a supported CQL field, so tag intersection stays in the query.
+export function buildSearchCql({ query, rootPageId, tags }) {
   const parts = [`text ~ "${escapeCqlText(query)}"`, `ancestor = ${rootPageId}`];
-  const td = typeDisjunction(types); if (td) parts.push(td);
   const tc = tagConjunction(tags); if (tc) parts.push(tc);
-  return parts.join(' AND ');
-}
-
-export function buildListCql({ rootPageId, types }) {
-  const parts = [`ancestor = ${rootPageId}`];
-  const td = typeDisjunction(types ?? ['concept', 'person', 'source', 'query']);
-  if (td) parts.push(td);
   return parts.join(' AND ');
 }
 

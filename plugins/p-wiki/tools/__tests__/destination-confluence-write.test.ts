@@ -69,6 +69,21 @@ describe('Confluence writePage', () => {
     expect(r.slug).toMatch(/^foo-\d{4}-\d{2}-\d{2}$/);
   });
 
+  it('rewrites portable confluence:// cross-links in the body to real page URLs', async () => {
+    // Target page B already exists under the concept sub-parent.
+    const { dest, fake } = makeDest([
+      { id: '300', title: 'Beta', parentId: '101', properties: [{ key: 'pwiki-id', value: 'beta' }, { key: 'pwiki-type', value: 'concept' }] },
+    ]);
+    const fm = { id: 'alpha', type: 'concept', title: 'Alpha', created: '2026-05-15', updated: '2026-05-15', status: 'active', tags: [], sources: [] };
+    await dest.writePage({ type: 'concept', slug: 'alpha', frontmatter: fm, body: '# Alpha\n\nSee [Beta](confluence://concept/beta).\n' });
+    const page = [...fake.pageById.values()].find(p => p.title === 'Alpha')!;
+    const adf = JSON.stringify(page.body);
+    // Real Confluence keeps a real page URL but sanitizes confluence:// to '#'.
+    expect(adf).toContain('https://x/wiki/spaces/ENG/pages/300');
+    expect(adf).not.toContain('confluence://');
+    expect(adf).not.toContain('"href":"#"');
+  });
+
   it('overwrite updates body and bumps version', async () => {
     const { dest, fake } = makeDest([
       { id: '200', title: 'Foo', parentId: '101', version: 1, body: { type: 'doc', version: 1, content: [] }, properties: [{ key: 'pwiki-id', value: 'foo' }, { key: 'pwiki-type', value: 'concept' }] },
@@ -82,12 +97,41 @@ describe('Confluence writePage', () => {
 });
 
 describe('Confluence listPages', () => {
-  it('lists pages under root by type', async () => {
-    const { dest } = makeDest([
-      { id: '201', title: 'A', parentId: '101', properties: [{ key: 'pwiki-id', value: 'a' }, { key: 'pwiki-type', value: 'concept' }, { key: 'pwiki-title', value: 'A' }, { key: 'pwiki-created', value: '2026-05-15' }, { key: 'pwiki-updated', value: '2026-05-15' }, { key: 'pwiki-status', value: 'active' }, { key: 'pwiki-tags', value: '[]' }, { key: 'pwiki-sources', value: '[]' }] },
-      { id: '202', title: 'B', parentId: '102', properties: [{ key: 'pwiki-id', value: 'b' }, { key: 'pwiki-type', value: 'person' }, { key: 'pwiki-title', value: 'B' }, { key: 'pwiki-created', value: '2026-05-15' }, { key: 'pwiki-updated', value: '2026-05-15' }, { key: 'pwiki-status', value: 'active' }, { key: 'pwiki-tags', value: '[]' }, { key: 'pwiki-sources', value: '[]' }] },
-    ]);
+  // Sub-parents must exist as real pages under root so the `ancestor = root`
+  // scan reaches the content pages (root → sub-parent → page).
+  const tree = () => [
+    { id: '101', title: 'Concepts', parentId: '100' },
+    { id: '102', title: 'People', parentId: '100' },
+    { id: '201', title: 'A', parentId: '101', properties: [{ key: 'pwiki-id', value: 'a' }, { key: 'pwiki-type', value: 'concept' }, { key: 'pwiki-title', value: 'A' }, { key: 'pwiki-created', value: '2026-05-15' }, { key: 'pwiki-updated', value: '2026-05-15' }, { key: 'pwiki-status', value: 'active' }, { key: 'pwiki-tags', value: '[]' }, { key: 'pwiki-sources', value: '[]' }] },
+    { id: '202', title: 'B', parentId: '102', properties: [{ key: 'pwiki-id', value: 'b' }, { key: 'pwiki-type', value: 'person' }, { key: 'pwiki-title', value: 'B' }, { key: 'pwiki-created', value: '2026-05-15' }, { key: 'pwiki-updated', value: '2026-05-15' }, { key: 'pwiki-status', value: 'active' }, { key: 'pwiki-tags', value: '[]' }, { key: 'pwiki-sources', value: '[]' }] },
+  ];
+
+  it('filters by type in memory (no property CQL)', async () => {
+    const { dest } = makeDest(tree());
     const r = await dest.listPages({ types: ['concept'] });
-    expect(Array.isArray(r)).toBe(true);
+    expect(r.map((p: any) => p.frontmatter.id)).toEqual(['a']);
+  });
+
+  it('returns all content types when none requested', async () => {
+    const { dest } = makeDest(tree());
+    const r = await dest.listPages({});
+    expect(r.map((p: any) => p.frontmatter.id).sort()).toEqual(['a', 'b']);
+  });
+});
+
+describe('Confluence deletePage (cold cache, no property CQL)', () => {
+  it('resolves an existing page via the identity scan and deletes it', async () => {
+    const { dest, fake } = makeDest([
+      { id: '200', title: 'Foo', parentId: '101', properties: [{ key: 'pwiki-id', value: 'foo' }, { key: 'pwiki-type', value: 'concept' }] },
+    ]);
+    const r = await dest.deletePage('confluence://concept/foo');
+    expect(r.deleted).toBe(true);
+    expect(fake.pageById.has('200')).toBe(false);
+  });
+
+  it('returns {deleted:false} when the page does not exist', async () => {
+    const { dest } = makeDest();
+    const r = await dest.deletePage('confluence://concept/missing');
+    expect(r.deleted).toBe(false);
   });
 });

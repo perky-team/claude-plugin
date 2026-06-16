@@ -17,6 +17,26 @@ export function createFakeConfluence({ spaces = [], initialPages = [] } = {}) {
     };
   }
 
+  // Confluence Cloud sanitizes link hrefs with an unknown URI scheme (anything
+  // that isn't http/https/mailto/ftp, or a relative/anchor link) down to "#" on
+  // storage. So a portable `confluence://type/slug` link written verbatim is
+  // lost — code must rewrite cross-links to real page URLs before storing.
+  // Model that here so the fixture doesn't hide the bug.
+  function sanitizeLinks(node) {
+    if (Array.isArray(node)) { for (const n of node) sanitizeLinks(n); return; }
+    if (!node || typeof node !== 'object') return;
+    if (Array.isArray(node.marks)) {
+      for (const mk of node.marks) {
+        if (mk.type === 'link' && mk.attrs && typeof mk.attrs.href === 'string') {
+          const scheme = /^([a-z][a-z0-9+.\-]*):/i.exec(mk.attrs.href);
+          const ok = !scheme || ['http', 'https', 'mailto', 'ftp'].includes(scheme[1].toLowerCase());
+          if (!ok) mk.attrs.href = '#';
+        }
+      }
+    }
+    if (node.content) sanitizeLinks(node.content);
+  }
+
   function isAncestor(pageId, candidateAncestorId) {
     let cur = pageById.get(pageId);
     while (cur) {
@@ -26,15 +46,26 @@ export function createFakeConfluence({ spaces = [], initialPages = [] } = {}) {
     return false;
   }
 
-  // Naive CQL: supports `text ~ "x"`, `ancestor = N`, `property["k"] = "v"`, `labels = "v"`, AND, OR, parens.
+  // Confluence Cloud's CQL parser does NOT support searching by content
+  // property (`property[...]` / `content.property[...]`): it returns
+  // HTTP 400 "Could not parse cql". Model that here so any code that tries to
+  // resolve identity/role through a property CQL is caught by tests instead of
+  // only blowing up live. Returns a reason string when the CQL is unsupported.
+  function unsupportedCqlReason(cql) {
+    if (/\bproperty\s*\[/i.test(cql) || /\bcontent\.property\b/i.test(cql)) {
+      return `Could not parse cql : "${cql}"`;
+    }
+    return null;
+  }
+
+  // Naive CQL: supports `text ~ "x"`, `ancestor = N`, `labels = "v"`,
+  // `id != N`, AND, OR, parens. (No `property[...]` — see unsupportedCqlReason.)
   function cqlMatches(page, cql) {
     const body = page.body?.content ? JSON.stringify(page.body.content).toLowerCase() : '';
     const titleAndBody = (page.title + ' ' + body).toLowerCase();
     let expr = cql;
     expr = expr.replace(/text\s*~\s*"([^"]+)"/g, (_, q) => titleAndBody.includes(q.toLowerCase()) ? 'true' : 'false');
     expr = expr.replace(/ancestor\s*=\s*(\d+)/g, (_, a) => (isAncestor(page.id, String(a)) || page.parentId === String(a)) ? 'true' : 'false');
-    expr = expr.replace(/property\["([^"]+)"\]\s*=\s*"([^"]+)"/g, (_, k, v) => page.properties.get(k)?.value === v ? 'true' : 'false');
-    expr = expr.replace(/property\["([^"]+)"\]\s*IS\s+NOT\s+EMPTY/gi, (_, k) => page.properties.has(k) ? 'true' : 'false');
     expr = expr.replace(/labels\s*=\s*"([^"]+)"/g, (_, l) => page.labels.has(l) ? 'true' : 'false');
     expr = expr.replace(/id\s*!=\s*(\d+)/g, (_, id) => page.id !== String(id) ? 'true' : 'false');
     expr = expr.replace(/\bAND\b/g, '&&').replace(/\bOR\b/g, '||');
@@ -57,6 +88,7 @@ export function createFakeConfluence({ spaces = [], initialPages = [] } = {}) {
     if (method === 'POST' && path === '/wiki/api/v2/pages') {
       const id = String(nextPageId++);
       const adfValue = typeof body.body.value === 'string' ? JSON.parse(body.body.value) : body.body.value;
+      sanitizeLinks(adfValue);
       pageById.set(id, { id, title: body.title, parentId: String(body.parentId), version: 1, body: adfValue, properties: new Map(), labels: new Set() });
       return { status: 200, body: { id, title: body.title, version: { number: 1 } } };
     }
@@ -75,6 +107,7 @@ export function createFakeConfluence({ spaces = [], initialPages = [] } = {}) {
       if (method === 'PUT') {
         const adfValue = typeof body.body.value === 'string' ? JSON.parse(body.body.value) : body.body.value;
         if (body.version.number !== p.version + 1) return { status: 409, body: { message: 'version conflict' } };
+        sanitizeLinks(adfValue);
         p.version = body.version.number;
         p.title = body.title ?? p.title;
         p.parentId = body.parentId ? String(body.parentId) : p.parentId;
@@ -121,9 +154,20 @@ export function createFakeConfluence({ spaces = [], initialPages = [] } = {}) {
       }
     }
 
+    // ----- children (v2, read-your-writes) -----
+    if (method === 'GET' && (m = /^\/wiki\/api\/v2\/pages\/(\d+)\/children(\?.*)?$/.exec(path))) {
+      const parentId = m[1];
+      const results = [...pageById.values()]
+        .filter(p => p.parentId === String(parentId))
+        .map(p => ({ id: p.id, status: 'current', title: p.title }));
+      return { status: 200, body: { results, _links: {} } };
+    }
+
     // ----- search (v1 CQL) -----
     if (method === 'GET' && (m = /^\/wiki\/rest\/api\/search\?cql=([^&]+)/.exec(path))) {
       const cql = decodeURIComponent(m[1]);
+      const reason = unsupportedCqlReason(cql);
+      if (reason) return { status: 400, body: { message: reason } };
       const results = [];
       for (const p of pageById.values()) {
         if (cqlMatches(p, cql)) results.push({ content: { id: p.id, title: p.title }, excerpt: '', score: 1 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildSearchCql, buildListCql, escapeCqlText } from '../lib/confluence/search.mjs';
+import { buildSearchCql, escapeCqlText } from '../lib/confluence/search.mjs';
 
 describe('CQL builder', () => {
   it('escapes double quotes and backslashes in text~', () => {
@@ -11,9 +11,11 @@ describe('CQL builder', () => {
     expect(cql).toBe('text ~ "kafka" AND ancestor = 100');
   });
 
-  it('build with type filter OR-disjunction', () => {
-    const cql = buildSearchCql({ query: 'k', rootPageId: '100', types: ['concept', 'person'] });
-    expect(cql).toContain('(property["pwiki-type"] = "concept" OR property["pwiki-type"] = "person")');
+  it('never emits a property[...] clause (Confluence Cloud CQL rejects it)', () => {
+    // Type filtering moved to in-memory post-filtering; the CQL must stay free
+    // of `property[...]` or live Confluence returns HTTP 400.
+    const cql = buildSearchCql({ query: 'k', rootPageId: '100', tags: ['streaming'] });
+    expect(cql).not.toContain('property[');
   });
 
   it('build with tags AND-intersection via labels', () => {
@@ -22,8 +24,4 @@ describe('CQL builder', () => {
     expect(cql).toContain('labels = "kafka"');
   });
 
-  it('buildListCql for pages of given types', () => {
-    const cql = buildListCql({ rootPageId: '100', types: ['concept'] });
-    expect(cql).toBe('ancestor = 100 AND (property["pwiki-type"] = "concept")');
-  });
 });
