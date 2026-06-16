@@ -3,6 +3,11 @@
 > Marketplace tag → p-flow plugin version → date → headline.
 > Authored 2026-05-27; backfilled from `v4.6.0` onward (the first p-flow release on the marketplace was `v3.1.0` with `plugins/p-flow 0.1.0` — a minimal `init` skill; see `git log v4.5.0..v4.6.0 -- plugins/p-flow/`).
 
+## v5.0.0 — `plugins/p-flow 1.0.0` — 2026-06-16 — first stable release
+
+- Promotes p-flow to its first stable major. **No functional changes** since `0.7.1` — this is a stability declaration: the command set (`init`, `task-start`, `task-end`), the 13-skill stack, the plan.md section contract, the verification marker path, and the reviewer-template dispatch pattern are considered settled after five design waves (A–E).
+- Known limitations are unchanged and documented (reviewer scope ~80% on Sonnet; Sonnet+ required for review dispatch; SessionStart discovery needs Git-Bash on PATH on Windows). See README `## Known limitations`.
+
 ## v4.17.1 — `plugins/p-flow 0.7.1` — 2026-06-15 — task-start invocation + tooling fixes
 
 - `/p-flow:init` and `README.md` now instruct `/p-flow:task-start <slug>` (bare slug — the branch type is asked interactively), not `/p-flow:task-start <type>/<slug>`. The prefixed form was swallowed whole into the slug, producing a doubled-type branch `feature/feature/<slug>` and `specs/feature/<slug>/`.
