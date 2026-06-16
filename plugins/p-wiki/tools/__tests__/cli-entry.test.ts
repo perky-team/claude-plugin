@@ -11,7 +11,7 @@ describe('pwiki CLI entry', () => {
   it('prints version on --version', () => {
     const r = spawnSync('node', [cli, '--version'], { encoding: 'utf-8' });
     expect(r.status).toBe(0);
-    expect(r.stdout.trim()).toBe('3.2.1');
+    expect(r.stdout.trim()).toBe('3.2.2');
   });
 
   it('exits 1 on unknown command', () => {
@@ -34,5 +34,30 @@ describe('pwiki CLI entry', () => {
     expect(r.status).toBe(3);
     const payload = JSON.parse(r.stdout);
     expect(payload.error.code).toBe('internal');
+  });
+
+  it('init without confluence flags exits 1 with the guard message', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'pwiki-init-guard-'));
+    mkdirSync(join(dir, 'docs', 'wiki'), { recursive: true });
+    writeFileSync(join(dir, 'docs', 'wiki', 'CLAUDE.md'), '# rules');
+    const r = spawnSync('node', [cli, 'init'], { cwd: dir, encoding: 'utf-8' });
+    rmSync(dir, { recursive: true, force: true });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/only --confluence is supported/);
+  });
+
+  it('init --mirror-confluence passes the guard (fails on missing env, not the guard)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'pwiki-init-guard2-'));
+    mkdirSync(join(dir, 'docs', 'wiki'), { recursive: true });
+    writeFileSync(join(dir, 'docs', 'wiki', 'CLAUDE.md'), '# rules');
+    const r = spawnSync(
+      'node',
+      [cli, 'init', '--mirror-confluence', '--mirror-site=https://x', '--mirror-space=ENG', '--mirror-parent=200'],
+      { cwd: dir, encoding: 'utf-8', env: { ...process.env, PWIKI_CONFLUENCE_EMAIL: '', PWIKI_CONFLUENCE_TOKEN: '' } },
+    );
+    rmSync(dir, { recursive: true, force: true });
+    expect(r.status).toBe(1);
+    expect(r.stderr).not.toMatch(/only --confluence is supported/);
+    expect(r.stderr).toMatch(/PWIKI_CONFLUENCE_EMAIL/);
   });
 });
