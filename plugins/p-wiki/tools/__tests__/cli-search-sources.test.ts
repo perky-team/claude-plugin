@@ -42,6 +42,17 @@ describe('pwiki search — union over sources (FS primary + FS source)', () => {
     expect(json.total).toBe(2);
     expect(json.warnings).toEqual([]);
   });
+
+  it('trims the union to --limit and reports total as the returned count', () => {
+    // primary has kafka.md; source has kafka-ext.md — both match "kafka".
+    const r = spawnSync('node', [cli, 'search', 'kafka', '--limit=1', '--format=json'],
+      { cwd: primaryDir, encoding: 'utf-8' });
+    expect(r.status).toBe(0);
+    const json = JSON.parse(r.stdout);
+    expect(json.results).toHaveLength(1);
+    expect(json.total).toBe(1);
+    expect(json.results[0].source).toBe('fs'); // primary first
+  });
 });
 
 describe('pwiki search — a failing source becomes a warning (in-process)', () => {

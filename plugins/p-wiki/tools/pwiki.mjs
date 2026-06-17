@@ -261,7 +261,6 @@ export async function searchCommand(args, _opts = {}) {
   const warnings = [];
   const primary = await res.primary.search(query, opts);
   let results = primary.results.map(r => ({ ...r, source: res.primaryName }));
-  let total = primary.total;
 
   for (let i = 0; i < res.sourceNames.length; i++) {
     const name = res.sourceNames[i];
@@ -269,13 +268,14 @@ export async function searchCommand(args, _opts = {}) {
       const dest = res.sources[i];                       // construction may throw → caught below
       const sr = await dest.search(query, opts);
       results = results.concat(sr.results.map(r => ({ ...r, source: name })));
-      total += sr.total;
     } catch (e) {
       warnings.push({ source: name, code: mapErrorToCode(e), message: e?.message ?? String(e) });
     }
   }
 
-  emitJson({ query, total, results, warnings }, 0);
+  const limit = opts.limit;
+  const trimmed = results.slice(0, limit);
+  emitJson({ query, total: trimmed.length, results: trimmed, warnings }, 0);
 }
 
 const isMain = process.argv[1] && resolve(fileURLToPath(import.meta.url)) === resolve(process.argv[1]);
