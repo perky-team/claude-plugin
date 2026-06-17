@@ -98,6 +98,8 @@ If `pwiki <command>` exits non-zero, parse the JSON `error.code` field:
 | `page-not-found` | "Page `<path>` no longer exists in Confluence." |
 | `rate-limited` | "Confluence rate-limited; retry in a few minutes." |
 | `network-error` | "Confluence is unavailable; retry later." |
+| `unknown-source` | "Search result references source `<name>` not in `.pwiki.json`; the config may have changed." |
+| `bad-path` | "Malformed page path for this backend." |
 | `version-conflict` | "Page was modified concurrently; re-run the command." |
 | `slug-taken` | Existing slug-conflict prompt (overwrite / date-suffix) — unchanged. |
 | `target-exists` | Existing callout — unchanged. |
