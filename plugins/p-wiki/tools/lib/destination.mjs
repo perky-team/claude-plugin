@@ -17,6 +17,8 @@ import { readConfig, validateConfig } from './config.mjs';
  * @property {string} primaryName
  * @property {Destination[]} mirrors   - same length and order as mirrorNames; entries lazily constructed
  * @property {string[]} mirrorNames
+ * @property {Destination[]} sources   - same length and order as sourceNames; entries lazily constructed
+ * @property {string[]} sourceNames
  */
 
 const DEFAULT_FS_CONFIG = { primary: 'fs', mirrors: [], destinations: { fs: { kind: 'fs' } } };
