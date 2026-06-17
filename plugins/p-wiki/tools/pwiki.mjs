@@ -508,6 +508,7 @@ try {
     const format = args.format ?? 'json';
 
     if (format === 'text') {
+      if (dest.kind !== 'fs') die('index --format=text is only supported for filesystem wikis; use --format=json', 1);
       // Render without writing. Build the same input the destination's
       // regenerateIndex builds, but pipe to stdout instead of writing.
       const allPages = await dest.listPages({ in: 'pages' });

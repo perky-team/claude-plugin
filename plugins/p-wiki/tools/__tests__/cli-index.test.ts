@@ -71,4 +71,28 @@ describe('pwiki index', () => {
     expect(r.stderr).toMatch(/not inside a p-wiki repo/i);
     rmSync(orphan, { recursive: true, force: true });
   });
+
+  it('exit 1 with --format=json hint when primary is Confluence', () => {
+    const confDir = mkdtempSync(join(tmpdir(), 'pwiki-cli-index-conf-'));
+    mkdirSync(join(confDir, 'docs', 'wiki'), { recursive: true });
+    writeFileSync(join(confDir, 'docs', 'wiki', 'CLAUDE.md'), '# rules', 'utf-8');
+    writeFileSync(join(confDir, 'docs', 'wiki', '.pwiki.json'), JSON.stringify({
+      primary: 'confluence',
+      mirrors: [],
+      destinations: {
+        confluence: {
+          kind: 'confluence', siteUrl: 'https://x', spaceKey: 'ENG', spaceId: 'S1',
+          rootPageId: '100', subParents: { concept: '101', person: '102', source: '103', query: '104' },
+        },
+      },
+    }), 'utf-8');
+    const r = spawnSync('node', [cli, 'index', '--format=text'], {
+      cwd: confDir,
+      encoding: 'utf-8',
+      env: { ...process.env, PWIKI_CONFLUENCE_EMAIL: 'a@b.c', PWIKI_CONFLUENCE_TOKEN: 't' },
+    });
+    rmSync(confDir, { recursive: true, force: true });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/--format=json/);
+  });
 });
