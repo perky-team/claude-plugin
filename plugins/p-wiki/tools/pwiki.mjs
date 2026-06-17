@@ -211,7 +211,16 @@ export async function getPage(args, _opts = {}) {
   if (!path) die('get: <path> required', 1);
   const res = resolveDestination({ cwd: process.cwd(), transport: _opts.transport ?? makeRealTransport() });
   if (!res) die('not inside a p-wiki repo', 1);
-  const dest = res.primary;
+
+  const srcName = typeof args.source === 'string' ? args.source : undefined;
+  let dest;
+  if (!srcName || srcName === res.primaryName) {
+    dest = res.primary;
+  } else {
+    const idx = res.sourceNames.indexOf(srcName);
+    if (idx === -1) emitJson({ error: { code: 'unknown-source', message: `unknown source: ${srcName}` } }, 1);
+    dest = res.sources[idx];
+  }
 
   let page;
   try {
