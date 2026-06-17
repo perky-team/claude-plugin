@@ -121,8 +121,8 @@ Handle the exit code:
   - "insert all" → re-run with `--force`.
   - "skip" → continue with the next target; record this target in the "deferred" list for the final report.
   - "raise to N" → re-run with `--max-suggestions=N`.
-- **exit 1:** report the failed target in the final summary; continue with the next target (per-page failure does not abort compile).
-- **exit 3:** forward stderr; abort compile and ask the user to file an issue.
+- **exit 1:** a plain `pwiki: <msg>` line appears on stderr (not JSON). Report the failed target in the final summary; continue with the next target (per-page failure does not abort compile).
+- **exit 3 (index only):** forward stderr; abort compile and ask the user to file an issue. (Backlinks cannot reach exit 3; only `index` can.)
 
 ### 4g. Stamp the raw frontmatter
 

@@ -102,7 +102,7 @@ After steps 4a–4e have run across all reconciled pages, for each page you **ed
 node "${CLAUDE_PLUGIN_ROOT}/tools/pwiki.mjs" backlinks <path> --format=json
 ```
 
-Handle exit codes exactly as `/p-wiki:compile` step 4f does (exit 0 accumulate `inserted`; exit 2 show candidates and ask insert-all / skip / raise threshold; exit 1 report and continue; exit 3 abort and ask to file an issue).
+Handle exit codes exactly as `/p-wiki:compile` step 4f does: exit 0 accumulate `inserted`; exit 2 show candidates and ask insert-all / skip / raise threshold; exit 1 (plain stderr `pwiki: <msg>`) report and continue. (Exit 3 cannot occur for backlinks; only `index` reaches it.)
 
 ## Step 5 — Regenerate `index.md`
 
