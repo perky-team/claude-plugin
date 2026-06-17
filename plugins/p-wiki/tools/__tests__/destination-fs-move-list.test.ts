@@ -65,3 +65,25 @@ describe('fs.listPages', () => {
     expect(all.some((p: { frontmatter: { id: string } }) => p.frontmatter.id === 'x')).toBe(true);
   });
 });
+
+describe('fs.listPagesWithErrors', () => {
+  it('returns pages and empty parseErrors when all files are valid', () => {
+    const dest = createFsDestination({ root: dir, destinationConfig: { kind: 'fs' } });
+    const { pages, parseErrors } = dest.listPagesWithErrors();
+    expect(pages).toHaveLength(2);
+    expect(parseErrors).toEqual([]);
+  });
+
+  it('reports unparseable files in parseErrors instead of silently dropping them', () => {
+    const abs = join(dir, 'docs', 'wiki', 'pages', 'concept', 'broken.md');
+    writeFileSync(abs, 'no frontmatter delimiters\n');
+    const dest = createFsDestination({ root: dir, destinationConfig: { kind: 'fs' } });
+    const { pages, parseErrors } = dest.listPagesWithErrors();
+    // The valid pages are still returned
+    expect(pages).toHaveLength(2);
+    // The broken file surfaces as a parse error, not silently dropped
+    expect(parseErrors).toHaveLength(1);
+    expect(parseErrors[0].path).toContain('broken');
+    expect(parseErrors[0].error).toBeTruthy();
+  });
+});

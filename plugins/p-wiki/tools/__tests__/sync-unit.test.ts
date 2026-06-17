@@ -1,13 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import { syncToMirror } from '../lib/sync.mjs';
 
-function makeMockDest(kind: 'fs' | 'confluence', pages: any[] = []) {
+function makeMockDest(kind: 'fs' | 'confluence', pages: any[] = [], parseErrors: any[] = []) {
   const calls: any = { ensureStructure: 0, writePage: [], mutatePage: [], deletePage: [], regenerateIndex: 0 };
   return {
     kind,
     calls,
     ensureStructure: () => { calls.ensureStructure++; },
     listPages: () => pages,
+    listPagesWithErrors: () => ({ pages, parseErrors }),
     readPage: (path: string) => {
       const p = pages.find((x: any) => x.path === path);
       return { frontmatter: p.frontmatter, body: p.body, path };
@@ -59,5 +60,35 @@ describe('syncToMirror', () => {
     const dst = makeMockDest('confluence', []);
     await syncToMirror(src, dst, { mirrorName: 'confluence' });
     expect(readSpy).toHaveBeenCalledTimes(3);
+  });
+
+  it('does NOT delete a mirror page when source has a parse failure for that page', async () => {
+    // Source: one valid page + one malformed-frontmatter page (parse error reported via listPagesWithErrors)
+    // Mirror: has BOTH pages already
+    // Expected: the malformed page's mirror copy must NOT be deleted; delete pass is skipped
+    const validPage = concept('keep');
+    const parseErrors = [{ path: 'docs/wiki/pages/concept/broken.md', error: 'YAML parse error: unexpected token' }];
+    const src = makeMockDest('fs', [validPage], parseErrors);
+
+    const mirrorKeep = concept('keep');
+    const mirrorBroken = concept('broken');
+    const dst = makeMockDest('confluence', [mirrorKeep, mirrorBroken]);
+
+    const r = await syncToMirror(src, dst, { mirrorName: 'confluence' });
+
+    // The mirror copy of 'broken' must NOT be deleted
+    expect(dst.calls.deletePage).not.toContain('confluence://concept/broken');
+    expect(dst.calls.deletePage.length).toBe(0);
+    // The result must surface the parse failure count
+    expect(r.srcParseErrors).toBe(1);
+    // The valid page was still written/replicated
+    expect(r.written).toBe(1);
+  });
+
+  it('reports srcParseErrors:0 when source has no parse failures', async () => {
+    const src = makeMockDest('fs', [concept('a'), concept('b')]);
+    const dst = makeMockDest('confluence', []);
+    const r = await syncToMirror(src, dst, { mirrorName: 'confluence' });
+    expect(r.srcParseErrors).toBe(0);
   });
 });

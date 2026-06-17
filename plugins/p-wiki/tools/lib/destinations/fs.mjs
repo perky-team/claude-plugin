@@ -143,7 +143,7 @@ export function createFsDestination({ rootPath, root }) {
     renameSync(fromAbs, toAbs);
   }
 
-  function walkDir(start, out) {
+  function walkDir(start, out, errors) {
     if (!existsSync(start)) return;
     const stack = [start];
     while (stack.length) {
@@ -156,7 +156,11 @@ export function createFsDestination({ rootPath, root }) {
             const text = readFileSync(p, 'utf-8');
             const { frontmatter } = parseFrontmatter(text);
             out.push({ path: repoRel(p), frontmatter });
-          } catch { /* skip unparseable */ }
+          } catch (err) {
+            if (errors) {
+              errors.push({ path: repoRel(p), error: err?.message ?? String(err) });
+            }
+          }
         }
       }
     }
@@ -167,13 +171,32 @@ export function createFsDestination({ rootPath, root }) {
     const subdirs = where === 'raw' ? ['raw'] : where === 'all' ? ['pages', 'raw'] : ['pages'];
     const out = [];
     for (const sub of subdirs) {
-      walkDir(join(rootPath, 'docs', 'wiki', sub), out);
+      walkDir(join(rootPath, 'docs', 'wiki', sub), out, null);
     }
     let filtered = out;
     if (opts?.types?.length) {
       filtered = filtered.filter(p => opts.types.includes(p.frontmatter.type));
     }
     return filtered;
+  }
+
+  // Like listPages but also returns parse failures in a side channel instead of silently
+  // dropping them. Callers that care about data-safety (e.g. sync delete pass) should
+  // use this variant so they can act on incomplete enumeration rather than treating it
+  // as "those pages don't exist."
+  function listPagesWithErrors(opts) {
+    const where = opts?.in ?? 'pages';
+    const subdirs = where === 'raw' ? ['raw'] : where === 'all' ? ['pages', 'raw'] : ['pages'];
+    const pages = [];
+    const parseErrors = [];
+    for (const sub of subdirs) {
+      walkDir(join(rootPath, 'docs', 'wiki', sub), pages, parseErrors);
+    }
+    let filtered = pages;
+    if (opts?.types?.length) {
+      filtered = filtered.filter(p => opts.types.includes(p.frontmatter.type));
+    }
+    return { pages: filtered, parseErrors };
   }
 
   function pageExists({ type, slug }) {
@@ -257,15 +280,25 @@ export function createFsDestination({ rootPath, root }) {
   }
 
   function lint(opts = {}) {
+    const { pages: listed, parseErrors } = listPagesWithErrors({ in: 'all' });
     const docs = [];
-    for (const { path } of listPages({ in: 'all' })) {
+    for (const { path } of listed) {
       try {
         const text = readFileSync(join(rootPath, path), 'utf-8');
         const { frontmatter, body } = parseFrontmatter(text);
         docs.push({ path, frontmatter, body });
-      } catch { /* skip unparseable */ }
+      } catch (err) {
+        // A file that passed walkDir's parse but fails re-read is still a parse error.
+        parseErrors.push({ path, error: err?.message ?? String(err) });
+      }
     }
-    return runChecks(docs, { repoRoot: rootPath, existsFn: existsSync, sourceDateFn: sourceDate });
+    const result = runChecks(docs, { repoRoot: rootPath, existsFn: existsSync, sourceDateFn: sourceDate });
+    // Surface unparseable files as frontmatter errors so they are never silently dropped.
+    for (const { path, error } of parseErrors) {
+      result.errors['frontmatter'].push({ file: path, error: `unparseable: ${error}` });
+    }
+    result.totals.errors = Object.values(result.errors).reduce((a, b) => a + b.length, 0);
+    return result;
   }
 
   function applyBacklinks({ targetPath, maxSuggestions = 20, force = false }) {
@@ -367,6 +400,7 @@ export function createFsDestination({ rootPath, root }) {
     movePage,
     deletePage,
     listPages,
+    listPagesWithErrors,
     search,
     lint,
     applyBacklinks,

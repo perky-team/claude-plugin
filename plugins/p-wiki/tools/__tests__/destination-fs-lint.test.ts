@@ -23,6 +23,19 @@ describe('fs.lint', () => {
     expect(r.totals.errors).toBeGreaterThanOrEqual(1);
   });
 
+  it('reports an unparseable file as a frontmatter error (not silently dropped)', () => {
+    // Write a malformed file — no YAML frontmatter delimiters, so parseFrontmatter will produce
+    // empty/undefined fields that fail schema validation, simulating a broken file.
+    writeFileSync(join(dir, 'docs', 'wiki', 'pages', 'concept', 'broken.md'),
+      'not valid frontmatter at all\njust raw text\n');
+    const dest = createFsDestination({ root: dir, destinationConfig: { kind: 'fs' } });
+    const r = dest.lint({});
+    // The broken page must appear as a frontmatter error (not silently skipped)
+    const brokenEntry = r.errors['frontmatter'].find(
+      (e: any) => (e.file ?? '').includes('broken'));
+    expect(brokenEntry).toBeDefined();
+  });
+
   it('flags source-changed when a tracked source was committed after the page', () => {
     // Fresh git repo so sourceDate() (git log -1 --format=%cs) resolves.
     const git = (...a: string[]) =>
