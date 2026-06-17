@@ -183,6 +183,23 @@ describe('lint.runChecks', () => {
     expect(r.warnings.conflicts).toEqual([]);
   });
 
+  it('detects dead link with anchor fragment (#section)', () => {
+    const doc = validConcept('mypage');
+    // ghost.md does not exist; link has an anchor
+    doc.body = `# mypage\n\n[Pods](pages/concept/ghost.md#overview)\n[real](./other.md)\n[more](./more.md)\n[yet](./yet.md)\n`;
+    const r = runChecks([doc], {
+      repoRoot: '/x',
+      existsFn: (p: string) => !p.includes('ghost.md'),
+    });
+    // The dead-link entry must reference the path without the anchor
+    expect(r.errors['dead-links'].some((e: any) => e.link === 'pages/concept/ghost.md')).toBe(true);
+    // A valid anchored link to an existing page must NOT be flagged
+    const doc2 = validConcept('mypage2');
+    doc2.body = `# mypage2\n\n[Home](./home.md#intro)\n[b](./b.md)\n[c](./c.md)\n`;
+    const r2 = runChecks([doc2], { repoRoot: '/x', existsFn: () => true });
+    expect(r2.errors['dead-links']).toEqual([]);
+  });
+
   it('flags a page whose source is newer than its updated date', () => {
     const c = validConcept('a', { updated: '2026-05-12', sources: ['docs/specs/s.md'] });
     const sourceDateFn = (p: string) => (p === 'docs/specs/s.md' ? '2026-06-05' : null);

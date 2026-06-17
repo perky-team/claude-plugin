@@ -8,7 +8,7 @@ const TYPE_FOR_DIR = {
   'pages/queries': 'query',
 };
 
-const linkRe = /\[[^\]]*\]\(([^)#\s]+)\)/g;
+const linkRe = /\[[^\]]*\]\(\s*([^)#\s]+)(?:#[^)\s]*)?(?:\s+"[^"]*")?\s*\)/g;
 
 // Code spans/blocks where a `[text](link)` is an illustration, not a real link.
 // Mirrors cross-links.mjs so a markdown example inside ``` … ``` isn't flagged
