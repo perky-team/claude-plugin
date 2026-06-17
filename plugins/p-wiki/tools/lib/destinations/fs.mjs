@@ -43,7 +43,19 @@ export function createFsDestination({ rootPath, root }) {
       if (conflict === 'date-suffix') {
         useSlug = withDateSuffix(slug, today());
         abs = absFor(type, useSlug);
-        // recurse-suffix on collision is out of scope: we trust today's slug to be unique
+        if (existsSync(abs)) {
+          let counter = 2;
+          const MAX_COUNTER = 100;
+          while (counter <= MAX_COUNTER) {
+            useSlug = `${withDateSuffix(slug, today())}-${counter}`;
+            abs = absFor(type, useSlug);
+            if (!existsSync(abs)) break;
+            counter++;
+          }
+          if (counter > MAX_COUNTER) {
+            throw new Error(`date-suffix collision: could not find a free slug for "${slug}" after ${MAX_COUNTER} attempts`);
+          }
+        }
       }
       // overwrite: fall through
     }
