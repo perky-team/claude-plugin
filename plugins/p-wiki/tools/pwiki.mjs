@@ -235,6 +235,40 @@ export async function getPage(args, _opts = {}) {
   process.exit(0);
 }
 
+export async function searchCommand(args, _opts = {}) {
+  const query = args._[0];
+  if (!query) die(`search: <query> required`, 1);
+  const res = resolveDestination({ cwd: process.cwd(), transport: _opts.transport ?? makeRealTransport() });
+  if (!res) die(`not inside a p-wiki repo`, 1);
+
+  const opts = {
+    type: typeof args.type === 'string' ? args.type.split(',').map(s => s.trim()).filter(Boolean) : [],
+    tags: typeof args.tags === 'string' ? args.tags.split(',').map(s => s.trim()).filter(Boolean) : [],
+    in: args.in ?? 'pages',
+    limit: args.limit ? Number(args.limit) : 10,
+    snippet: args.snippet === 'false' ? false : true,
+  };
+
+  const warnings = [];
+  const primary = await res.primary.search(query, opts);
+  let results = primary.results.map(r => ({ ...r, source: res.primaryName }));
+  let total = primary.total;
+
+  for (let i = 0; i < res.sourceNames.length; i++) {
+    const name = res.sourceNames[i];
+    try {
+      const dest = res.sources[i];                       // construction may throw → caught below
+      const sr = await dest.search(query, opts);
+      results = results.concat(sr.results.map(r => ({ ...r, source: name })));
+      total += sr.total;
+    } catch (e) {
+      warnings.push({ source: name, code: mapErrorToCode(e), message: e?.message ?? String(e) });
+    }
+  }
+
+  emitJson({ query, total, results, warnings }, 0);
+}
+
 const isMain = process.argv[1] && resolve(fileURLToPath(import.meta.url)) === resolve(process.argv[1]);
 
 if (isMain) {
@@ -411,22 +445,7 @@ try {
   }
 
   if (command === 'search') {
-    const query = args._[0];
-    if (!query) die(`search: <query> required`, 1);
-    const res = resolveDestination({ cwd: process.cwd(), transport: makeRealTransport() });
-    if (!res) die(`not inside a p-wiki repo`, 1);
-    const dest = res.primary;
-
-    const opts = {
-      type: typeof args.type === 'string' ? args.type.split(',').map(s => s.trim()).filter(Boolean) : [],
-      tags: typeof args.tags === 'string' ? args.tags.split(',').map(s => s.trim()).filter(Boolean) : [],
-      in: args.in ?? 'pages',
-      limit: args.limit ? Number(args.limit) : 10,
-      snippet: args.snippet === 'false' ? false : true,
-    };
-
-    const r = await dest.search(query, opts);
-    emitJson({ query, total: r.total, results: r.results }, 0);
+    await searchCommand(args);
   }
 
   if (command === 'get') {
