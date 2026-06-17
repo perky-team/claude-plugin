@@ -28,6 +28,7 @@ Today `search` and `get` resolve only `res.primary` (`pwiki.mjs:418`, `:214`); t
 - Writing to a source in any form.
 - `lint` / cross-link checking across the source boundary.
 - Per-source Confluence credentials. All `confluence` blocks share `PWIKI_CONFLUENCE_EMAIL` / `PWIKI_CONFLUENCE_TOKEN`; a source on a different Atlassian account with different creds is not supported. Documented as a limitation.
+- Read-only auto-discovery of a Confluence source's structural page IDs (`spaceId` / `rootPageId` / `subParents`). They must be supplied in config — see §2.2. Finding-or-creating them (`ensureStructure`) is a write and stays primary-only.
 - Clickable citations for Confluence-source pages. Citing `confluence://type/slug` is not a real URL — this is a pre-existing limitation of primary-Confluence citing and is not addressed here.
 
 ---
@@ -67,6 +68,14 @@ Add, after the existing `mirrors` checks:
 - for any `fs` block: if `path` is present it must be a non-empty string.
 
 No migration is needed: absence of `sources` means an empty list, so every existing config stays valid. `readConfig`'s v2→v3 migration is untouched (migrated configs simply have no `sources`).
+
+### 2.2 Configuring a Confluence source (structural IDs)
+
+A `confluence` source block needs the **same** structural identifiers any Confluence destination needs — `siteUrl`, `spaceKey`, `spaceId`, `rootPageId`, `subParents` (and `titlePrefix` if used). `validateConfig` already requires them, so a source missing them is rejected as `config-invalid`.
+
+Why they are mandatory, not optional, for a source: `query` runs `search` and `get` as **separate** CLI subprocesses. `search` populates the in-memory identity cache (numeric page id ↔ `type/slug`) for its hits, but that cache dies with the process. The follow-up `get` starts cold and must rebuild identity via `ensureIdentityIndex` (`confluence.mjs:43`), which enumerates the children of each `subParents` page (Confluence CQL cannot resolve a page by `pwiki-*` content property — it returns HTTP 400, hence the children scan). Without `subParents`, `get` cannot map `confluence://type/slug` to a numeric id and fails with `page-not-found`.
+
+How a consumer obtains them: copy the source wiki's own `.pwiki.json` destination block (it already lists `spaceId` / `rootPageId` / `subParents`), or read those page IDs from the foreign space directly. This is a one-time manual setup step — the feature does **not** auto-discover them (that would be a write via `ensureStructure`; see §1.3). Pointing at a space by URL alone is therefore not enough; this is the cost of reusing the existing reader unchanged.
 
 ---
 
@@ -135,13 +144,13 @@ No other skill is touched (they are primary-only by §1.2).
 - **resolveDestination** (`destination-resolve.test.ts`): returns `sources` / `sourceNames`; sources constructed lazily; an `fs` source uses its `path` as root; a `confluence` source is constructed via the factory.
 - **search union** (new test, FS primary + FS source fixture pointing at a second wiki dir): results tagged with the right `source`; `total` is the sum; `--limit` applied per source; a source that throws lands in `warnings` while primary results are still returned; a primary that throws is fatal.
 - **get routing** (extend `cli-get.test.ts`): `--source=<fs-source>` reads from that source; unknown `--source` → exit 1 `unknown-source`; no flag → primary.
-- **Confluence source**: covered with the existing `fake-confluence` fixture (search + get against a source block), mirroring `cli-get-confluence.test.ts`.
+- **Confluence source**: covered with the existing `fake-confluence` fixture (search + get against a source block), mirroring `cli-get-confluence.test.ts`. Note the cold-cache path (§2.2): a `get` against a source in a fresh process must rebuild identity, so the fixture must serve the `subParents` children scan (`ensureIdentityIndex`), not only the page GET — same fixture requirement called out in the `pwiki get` (universal-page-read) design.
 
 ---
 
 ## 9. Documentation
 
-- **README** "Multi-destination" section: document `sources` alongside `mirrors` (read-only inputs vs write-targets), and the FS `path` field. Note the shared-credentials limitation (§1.3).
+- **README** "Multi-destination" section: document `sources` alongside `mirrors` (read-only inputs vs write-targets), and the FS `path` field. Note the shared-credentials limitation (§1.3) and that a Confluence source needs the foreign space's structural IDs copied into config (§2.2).
 - **`skills/_shared/templates/wiki-claude-md.template.md`**, CLI section: add `pwiki get <path> --source=<name>`, the `sources` config field, and that `search` results carry `source` + a `warnings` array.
 
 ---
