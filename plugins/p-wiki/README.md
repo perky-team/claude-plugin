@@ -1,6 +1,6 @@
 # p-wiki
 
-A Claude Code plugin that turns any git repo into an indexed markdown knowledge wiki under `docs/wiki/`. Skills: `init`, `ingest`, `compile`, `query`, `lint`, `reconcile`.
+A Claude Code plugin that turns any git repo into an indexed markdown knowledge wiki under `docs/wiki/`. Skills: `init`, `ingest`, `compile`, `query`, `lint`, `reconcile`, `sync`.
 
 Distributed via the [`perky.team`](../../) marketplace (see the repo root for the marketplace catalog).
 
@@ -40,6 +40,7 @@ After edits, run `/reload-plugins` inside Claude Code to pick them up without re
 | `/p-wiki:query "<question>"` | Searches the wiki and writes a query-output page with citations. |
 | `/p-wiki:lint` | Audits links, orphan pages, frontmatter, staleness, unresolved conflicts, and source-divergence. Reports only — does not auto-fix. |
 | `/p-wiki:reconcile [path]` | Resolves conflict callouts and stale pages: re-merges a derived page with its current sources and removes the superseded callout. Genuine conflicts are left flagged for a human. |
+| `/p-wiki:sync` | Syncs the primary destination to every configured mirror (one-way primary → mirrors, idempotent). No-op when no mirrors are configured. |
 
 ## Storage backends
 
@@ -73,7 +74,7 @@ The reverse topology is equally supported — FS as `primary` with a Confluence 
 node "${CLAUDE_PLUGIN_ROOT}/tools/pwiki.mjs" sync
 ```
 
-`sync` walks the primary, writes every page into each mirror (translating cross-link targets to the mirror's format), deletes mirror-only pages (true-mirror semantics), and regenerates the Index on each mirror. Sync is **one-way** (primary → mirrors) with no conflict resolution — mirrors are overwritten. It's a CLI command, not a skill, so it isn't in the table above; invoke it directly or from cron.
+`sync` walks the primary, writes every page into each mirror (translating cross-link targets to the mirror's format), deletes mirror-only pages (true-mirror semantics), and regenerates the Index on each mirror. Sync is **one-way** (primary → mirrors) with no conflict resolution — mirrors are overwritten. Run it from chat with `/p-wiki:sync` (a thin wrapper over this CLI command, listed in the table above), directly via the CLI, or from cron.
 
 Full details (frontmatter schemas, identity format, reversing direction) live in the generated `docs/wiki/CLAUDE.md`, which Claude auto-loads when working under `docs/wiki/`.
 

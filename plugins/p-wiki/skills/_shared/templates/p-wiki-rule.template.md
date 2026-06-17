@@ -25,5 +25,6 @@ Caveat: derived pages can become stale if the source doc later diverges from the
 - `/p-wiki:compile [path]` — synthesize pages from any source file in the repo, or from unprocessed raw/ items if no argument is given
 - `/p-wiki:query "<question>"` — search the wiki and answer with citations
 - `/p-wiki:lint` — audit links, orphan pages, stale frontmatter
+- `/p-wiki:sync` — push the primary destination to every configured mirror (one-way; no-op without mirrors)
 
 Detailed frontmatter schemas, naming conventions, and link rules are in `docs/wiki/CLAUDE.md`, which auto-loads when Claude works with files under `docs/wiki/`.

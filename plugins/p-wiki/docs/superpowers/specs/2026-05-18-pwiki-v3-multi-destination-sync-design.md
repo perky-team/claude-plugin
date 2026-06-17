@@ -423,6 +423,8 @@ Documented as a manual JSON edit. The CLI does not automate it because the user'
 
 A new skill `p-wiki:sync` is **not** added in v3. Sync is a maintenance operation, invoked via the CLI directly or via cron. Wrapping it in a slash command is trivial later if invocation frequency is high.
 
+> **Revisited 2026-06-17.** This decision is reversed — the `p-wiki:sync` skill is now added as a thin wrapper over the `pwiki sync` CLI command. See `docs/superpowers/specs/2026-06-17-pwiki-sync-skill-design.md` and the accompanying plan. The skill adds pre-flight checks and a readable summary only; all sync logic stays in the CLI.
+
 ---
 
 ## 8. Testing
