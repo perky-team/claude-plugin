@@ -81,9 +81,15 @@ Finding #5 (✓ verified). `searchCommand` passes `limit` to each backend and co
 
 - [ ] **Step 5: Commit** — `git add tools/pwiki.mjs tools/__tests__/cli-search-sources.test.ts && git commit -m "fix(p-wiki): trim search union to --limit and report returned count as total"`
 
-## Task A2: `getPage` constructs the source destination inside the try/catch
+## Task A2: ~~`getPage` constructs the source destination inside the try/catch~~ — DROPPED
 
-Finding #6 (✓ verified). `dest = res.sources[idx]` (line 222) is outside the `try` (starts line 226). A Confluence source whose factory throws (missing env creds, no transport) escapes to the top-level catch → `internal`/exit 3 instead of a clean error.
+**Dropped after analysis (2026-06-17).** Finding #6 is not reachable in production: `getPage` always injects `makeRealTransport()` as the transport, and `createConfluenceDestination` only throws when `(!email || !token) && !transport` — so with a real transport always present, the source factory never throws on construction. Invalid/missing credentials surface later as `auth-failed`/`network-error` through the existing `try/catch` around `readPage`. Wrapping the construction would be dead defensive code, and the only way to make a test exercise it is to alter the production transport plumbing for the test's sake. Not worth it. (Note: `searchCommand`'s own source `try/catch` from the feature is legitimate — it is exercised by a real `search()` HTTP-failure path, not a construction throw.)
+
+The body below is retained for the record but is NOT to be implemented.
+
+<details><summary>Original (not implemented)</summary>
+
+Finding #6. `dest = res.sources[idx]` (line 222) is outside the `try` (starts line 226).
 
 **Files:**
 - Modify: `tools/pwiki.mjs` (`getPage`, lines 215-228)
@@ -131,11 +137,13 @@ Finding #6 (✓ verified). `dest = res.sources[idx]` (line 222) is outside the `
 
 - [ ] **Step 4: Run to verify pass** — `npx vitest run plugins/p-wiki/tools/__tests__/cli-get-sources.test.ts plugins/p-wiki/tools/__tests__/cli-get.test.ts plugins/p-wiki/tools/__tests__/cli-get-confluence.test.ts`. Expected: PASS.
 
-- [ ] **Step 5: Commit** — `git add tools/pwiki.mjs tools/__tests__/cli-get-sources.test.ts && git commit -m "fix(p-wiki): report source construction failure in get as source-unavailable, not exit 3"`
+- [ ] **Step 5: Commit** — (not implemented; task dropped)
+
+</details>
 
 ## Task A3: query skill documents the `--source` error codes
 
-Finding #7 (✓ verified). The query skill calls `get --source` but its error table omits `unknown-source` and (now) `source-unavailable` and `bad-path`, which `getPage` emits.
+Finding #7 (✓ verified). The query skill calls `get --source` but its error table omits `unknown-source` and `bad-path`, which `getPage` emits.
 
 **Files:**
 - Modify: `skills/query/SKILL.md` (error-handling table, ~lines 94-105)
@@ -144,11 +152,12 @@ Finding #7 (✓ verified). The query skill calls `get --source` but its error ta
 
 ```markdown
 | `unknown-source` | "Search result references source `<name>` not in `.pwiki.json`; the config may have changed." |
-| `source-unavailable` | "A read-only source could not be reached (check its credentials/config); answer from the remaining wikis." |
 | `bad-path` | "Malformed page path for this backend." |
 ```
 
-- [ ] **Step 2: Verify** — Grep `skills/query/SKILL.md` for `unknown-source`, `source-unavailable`, `bad-path`; all present.
+(Source auth/network failures during `get --source` already map to the existing `auth-failed` / `network-error` rows — no new row needed for those.)
+
+- [ ] **Step 2: Verify** — Grep `skills/query/SKILL.md` for `unknown-source`, `bad-path`; both present.
 
 - [ ] **Step 3: Commit** — `git add skills/query/SKILL.md && git commit -m "docs(p-wiki): document get --source error codes in query skill"`
 
