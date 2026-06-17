@@ -1,4 +1,4 @@
-import { validateFrontmatter } from './schema.mjs';
+import { validateFrontmatter, allowedFields } from './schema.mjs';
 import { dirname, join } from 'node:path';
 
 const TYPE_FOR_DIR = {
@@ -59,7 +59,7 @@ const REFERENCE_SOURCE = /^(?:\d+[-_. ])?(?:changelog|glossary|readme|contributi
 
 export function runChecks(docs, { repoRoot, existsFn, sourceDateFn }) {
   const errors = { 'dead-links': [], 'dead-sources': [], 'frontmatter': [] };
-  const warnings = { 'orphan-pages': [], 'underlinked': [], 'stale': [], 'conflicts': [], 'source-changed': [] };
+  const warnings = { 'orphan-pages': [], 'underlinked': [], 'stale': [], 'conflicts': [], 'source-changed': [], 'unknown-fields': [] };
 
   const suppressed = { 'source-changed': { count: 0, _sources: new Set() } };
 
@@ -102,6 +102,12 @@ export function runChecks(docs, { repoRoot, existsFn, sourceDateFn }) {
     // frontmatter validity
     const v = validateFrontmatter(d.frontmatter);
     if (!v.ok) errors.frontmatter.push({ file: d.path, error: v.error });
+    // unknown frontmatter fields (typos like tag: instead of tags:)
+    const allowed = allowedFields(d.frontmatter.type);
+    if (allowed.length > 0) {
+      const unknown = Object.keys(d.frontmatter).filter(k => !allowed.includes(k));
+      if (unknown.length > 0) warnings['unknown-fields'].push({ file: d.path, fields: unknown });
+    }
     // type-directory mismatch
     const dir = Object.keys(TYPE_FOR_DIR).find(k => d.path.includes(`docs/wiki/${k}/`));
     if (dir) {

@@ -86,6 +86,7 @@ function formatLintReport(r) {
     ['Conflicts (warnings)', r.warnings.conflicts ?? [], (e) => `  - ${e.file} — unresolved conflict${e.since ? ` since ${e.since} (${e.days} days)` : ' (date unknown)'}`],
     ['Source changed (warnings)', r.warnings['source-changed'] ?? [], (e) => `  - ${e.file} — source ${e.source} changed ${e.sourceDate}, page updated ${e.pageUpdated}`],
     ['Drift (warnings)', r.warnings.drift ?? [], (e) => `  - [${e.id}] ${e.title} (parent ${e.parentId})`],
+    ['Unknown fields (warnings)', r.warnings['unknown-fields'] ?? [], (e) => `  - ${e.file} — unknown field${e.fields.length === 1 ? '' : 's'}: ${e.fields.join(', ')}`],
   ];
   for (const [title, items, fmt] of sections) {
     out.push(`${title}: ${items.length}`);

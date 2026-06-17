@@ -251,4 +251,20 @@ describe('lint.runChecks', () => {
     expect(r.totals.warnings).toBe(
       Object.values(r.warnings).reduce((n: number, b: any) => n + b.length, 0));
   });
+
+  it('warns on unknown frontmatter fields (typo like tag: instead of tags:)', () => {
+    // has all required fields + one unknown field "tag" (typo for "tags")
+    const c = validConcept('a', { tag: ['x'] });
+    const r = runChecks([c], { repoRoot: '/x', existsFn: () => true });
+    expect(r.warnings['unknown-fields']).toHaveLength(1);
+    expect(r.warnings['unknown-fields'][0]).toMatchObject({ file: c.path, fields: ['tag'] });
+    // must also count toward totals.warnings
+    expect(r.totals.warnings).toBe(
+      Object.values(r.warnings).reduce((n: number, b: any) => n + b.length, 0));
+  });
+
+  it('does not warn on unknown-fields for a page with only known frontmatter', () => {
+    const r = runChecks([validConcept('a')], { repoRoot: '/x', existsFn: () => true });
+    expect(r.warnings['unknown-fields']).toEqual([]);
+  });
 });
