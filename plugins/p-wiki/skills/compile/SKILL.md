@@ -183,7 +183,5 @@ If `pwiki <command>` exits non-zero, parse the JSON `error.code` field:
 | `rate-limited` | "Confluence rate-limited; retry in a few minutes." |
 | `network-error` | "Confluence is unavailable; retry later." |
 | `version-conflict` | "Page was modified concurrently; re-run the command." |
-| `slug-taken` | Existing slug-conflict prompt (overwrite / date-suffix) — unchanged. |
-| `target-exists` | Existing callout — unchanged. |
-| `schema-violation` | Existing behavior — unchanged. |
+| exit 2 with `existing-path` / `date-suffix-slug` (no `error.code`) | A page with that slug exists. Offer to reuse `existing-path` or write to the suggested `date-suffix-slug`. |
 | `internal` | "Internal CLI error — file an issue against p-wiki." |
