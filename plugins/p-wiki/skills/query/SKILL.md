@@ -27,15 +27,17 @@ node "${CLAUDE_PLUGIN_ROOT}/tools/pwiki.mjs" search "$ARGUMENTS" \
 
 Parse the JSON. If `total === 0`, stop and tell the user: "Nothing in the wiki covers that. Try ingesting a source first." Do not write a query page.
 
+If the JSON `warnings` array is non-empty, prepend one short line to your reply naming the unavailable sources (e.g. "Note: source `team-confluence` was unreachable (network-error); answer is from the remaining wikis."), then continue with whatever results returned.
+
 ## Step 3 — Read top results
 
 For each `path` in `results`, load the full page content with:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/tools/pwiki.mjs" get "<path>"
+node "${CLAUDE_PLUGIN_ROOT}/tools/pwiki.mjs" get "<path>" --source="<source>"
 ```
 
-This works for both FS and Confluence wikis (do **not** use the `Read` tool for wiki pages — it only opens local files). Cite only pages you actually read.
+This works for both FS and Confluence wikis (do **not** use the `Read` tool for wiki pages — it only opens local files). Cite only pages you actually read. Each search result carries a `source` field; pass it verbatim to `get --source` so a page from a read-only source is read from that source. Results from your own wiki carry the primary's name, which routes to the primary.
 
 ## Step 5 — Synthesize the answer
 
