@@ -40,6 +40,13 @@ export function validateConfig(cfg) {
     if (typeof m !== 'string' || !m) return { ok: false, error: 'mirror name must be a non-empty string' };
     if (!(m in cfg.destinations)) return { ok: false, error: `mirror "${m}" not defined in destinations` };
   }
+  if (cfg.sources !== undefined && !Array.isArray(cfg.sources)) return { ok: false, error: 'sources must be an array of strings' };
+  const writeRoles = new Set([cfg.primary, ...(cfg.mirrors ?? [])]);
+  for (const s of cfg.sources ?? []) {
+    if (typeof s !== 'string' || !s) return { ok: false, error: 'source name must be a non-empty string' };
+    if (!(s in cfg.destinations)) return { ok: false, error: `source "${s}" not defined in destinations` };
+    if (writeRoles.has(s)) return { ok: false, error: `source "${s}" is also used as primary or a mirror (roles are mutually exclusive)` };
+  }
   for (const [name, block] of Object.entries(cfg.destinations)) {
     if (!block || typeof block !== 'object') return { ok: false, error: `destinations.${name} must be an object` };
     if (block.kind !== 'fs' && block.kind !== 'confluence') return { ok: false, error: `destinations.${name}.kind must be "fs" or "confluence"` };
@@ -52,6 +59,9 @@ export function validateConfig(cfg) {
       for (const t of TYPES) {
         if (typeof block.subParents[t] !== 'string' || !block.subParents[t]) return { ok: false, error: `destinations.${name}.subParents.${t} required` };
       }
+    }
+    if (block.kind === 'fs' && block.path !== undefined && (typeof block.path !== 'string' || !block.path)) {
+      return { ok: false, error: `destinations.${name}.path must be a non-empty string` };
     }
   }
   return { ok: true };

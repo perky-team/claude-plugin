@@ -103,6 +103,66 @@ describe('config v3', () => {
     expect(validateConfig(cfg).ok).toBe(true);
   });
 
+  it('validateConfig accepts a valid sources array', () => {
+    const cfg = {
+      primary: 'fs',
+      mirrors: [],
+      sources: ['other'],
+      destinations: { fs: { kind: 'fs' }, other: { kind: 'fs', path: '/some/abs/path' } },
+    };
+    expect(validateConfig(cfg).ok).toBe(true);
+  });
+
+  it('validateConfig rejects a source not present in destinations', () => {
+    const r = validateConfig({
+      primary: 'fs', mirrors: [], sources: ['ghost'],
+      destinations: { fs: { kind: 'fs' } },
+    });
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/source.*ghost/);
+  });
+
+  it('validateConfig rejects a source that is also the primary', () => {
+    const r = validateConfig({
+      primary: 'fs', mirrors: [], sources: ['fs'],
+      destinations: { fs: { kind: 'fs' } },
+    });
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/source.*fs/);
+  });
+
+  it('validateConfig rejects a source that is also a mirror', () => {
+    const r = validateConfig({
+      primary: 'fs', mirrors: ['other'], sources: ['other'],
+      destinations: { fs: { kind: 'fs' }, other: { kind: 'fs', path: '/p' } },
+    });
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/source.*other/);
+  });
+
+  it('validateConfig rejects a non-array sources', () => {
+    const r = validateConfig({
+      primary: 'fs', mirrors: [], sources: 'other',
+      destinations: { fs: { kind: 'fs' } },
+    });
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/sources/);
+  });
+
+  it('validateConfig rejects an fs block with an empty path', () => {
+    const r = validateConfig({
+      primary: 'fs', mirrors: [], sources: ['other'],
+      destinations: { fs: { kind: 'fs' }, other: { kind: 'fs', path: '' } },
+    });
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/path/);
+  });
+
+  it('validateConfig still accepts a config with no sources field', () => {
+    const cfg = { primary: 'fs', mirrors: [], destinations: { fs: { kind: 'fs' } } };
+    expect(validateConfig(cfg).ok).toBe(true);
+  });
+
   it('readConfig throws on invalid JSON', () => {
     writeFileSync(configPath(dir), '{not json', 'utf-8');
     expect(() => readConfig(dir)).toThrow();
