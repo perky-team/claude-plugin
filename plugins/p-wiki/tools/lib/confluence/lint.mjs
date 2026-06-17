@@ -8,9 +8,21 @@ export async function runConfluenceLint({ http, properties, config, repoRoot, ex
   function addWarn(check, item) { (warnings[check] ??= []).push(item); totals.warnings++; }
 
   // 1) Walk all pages under rootPageId via CQL: ancestor = rootPageId.
+  // Paginate following `_links.next` so large wikis aren't silently truncated.
   const cql = `ancestor = ${config.rootPageId}`;
-  const res = await http.get(`/wiki/rest/api/search?cql=${encodeURIComponent(cql)}&limit=250`);
-  const hits = res.body?.results ?? [];
+  const hits = [];
+  let searchPath = `/wiki/rest/api/search?cql=${encodeURIComponent(cql)}&limit=250`;
+  let searchGuard = 0;
+  while (searchPath && searchGuard++ < 1000) {
+    const res = await http.get(searchPath);
+    for (const h of res.body?.results ?? []) hits.push(h);
+    const next = res.body?._links?.next;
+    if (!next) break;
+    if (/^https?:\/\//.test(next)) { const u = new URL(next); searchPath = u.pathname + u.search; }
+    else if (next.startsWith('/wiki/')) { searchPath = next; }
+    else if (next.startsWith('/rest/') || next.startsWith('/api/')) { searchPath = `/wiki${next}`; }
+    else { searchPath = next; }
+  }
 
   // Build page info table
   const subParentIds = new Set(Object.values(config.subParents));

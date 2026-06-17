@@ -362,23 +362,39 @@ export function createConfluenceDestination({ root, config, destinationConfig, t
       query, rootPageId: c.rootPageId, tags: opts.tags,
     });
     const limit = opts.limit ?? 10;
-    const res = await http.get(`/wiki/rest/api/search?cql=${encodeURIComponent(cql)}&limit=${limit}&expand=excerpt`);
     const typeFilter = opts.type && opts.type.length ? new Set(opts.type) : null;
     const results = [];
-    for (const hit of res.body?.results ?? []) {
-      const m = mapSearchResult(hit);
-      const props = await properties.readAll(m.id);
-      const fm = reassembleFm(props);
-      if (!fm.type) continue;
-      if (typeFilter && !typeFilter.has(fm.type)) continue;
-      identity.set(fm.type, fm.id, m.id);
-      results.push({
-        path: formatPath(fm.type, fm.id),
-        title: fm.title, type: fm.type, tags: fm.tags ?? [],
-        score: m.score, snippet: m.excerpt,
-      });
+
+    // Paginate following `_links.next` until we have `limit` type-filtered
+    // results or the server has no more pages. Mirror the guard from children.mjs.
+    let path = `/wiki/rest/api/search?cql=${encodeURIComponent(cql)}&limit=${limit}&expand=excerpt`;
+    let guard = 0;
+    while (path && guard++ < 1000 && results.length < limit) {
+      const res = await http.get(path);
+      for (const hit of res.body?.results ?? []) {
+        const m = mapSearchResult(hit);
+        const props = await properties.readAll(m.id);
+        const fm = reassembleFm(props);
+        if (!fm.type) continue;
+        if (typeFilter && !typeFilter.has(fm.type)) continue;
+        identity.set(fm.type, fm.id, m.id);
+        results.push({
+          path: formatPath(fm.type, fm.id),
+          title: fm.title, type: fm.type, tags: fm.tags ?? [],
+          score: m.score, snippet: m.excerpt,
+        });
+        if (results.length >= limit) break;
+      }
+      const next = res.body?._links?.next;
+      if (!next) break;
+      // Normalise to an absolute path like nextChildrenPath() in children.mjs.
+      if (/^https?:\/\//.test(next)) { const u = new URL(next); path = u.pathname + u.search; }
+      else if (next.startsWith('/wiki/')) { path = next; }
+      else if (next.startsWith('/rest/') || next.startsWith('/api/')) { path = `/wiki${next}`; }
+      else { path = next; }
     }
-    const total = typeFilter ? results.length : (res.body?.totalSize ?? results.length);
+
+    const total = results.length;
     return { total, results };
   }
 

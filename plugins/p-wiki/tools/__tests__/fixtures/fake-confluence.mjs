@@ -179,20 +179,58 @@ export function createFakeConfluence({ spaces = [], initialPages = [] } = {}) {
       const cql = decodeURIComponent(m[1]);
       const reason = unsupportedCqlReason(cql);
       if (reason) return { status: 400, body: { message: reason } };
-      const results = [];
+      // Parse optional start and limit params for pagination support.
+      const startParam = Number(/[?&]start=(\d+)/.exec(path)?.[1] ?? 0);
+      const limitParam = /[?&]limit=(\d+)/.exec(path)?.[1];
+      const limit = limitParam != null ? Number(limitParam) : null;
+      const allMatches = [];
       for (const p of pageById.values()) {
-        if (cqlMatches(p, cql)) results.push({ content: { id: p.id, title: p.title }, excerpt: '', score: 1 });
+        if (cqlMatches(p, cql)) allMatches.push({ content: { id: p.id, title: p.title }, excerpt: '', score: 1 });
       }
-      return { status: 200, body: { results, totalSize: results.length } };
+      const sliceStart = startParam;
+      const sliceEnd = limit != null ? sliceStart + limit : allMatches.length;
+      const results = allMatches.slice(sliceStart, sliceEnd);
+      const hasMore = sliceEnd < allMatches.length;
+      const nextStart = sliceEnd;
+      // Re-encode the CQL to build the _links.next path (if more pages exist).
+      const cqlEncoded = encodeURIComponent(cql);
+      const limitSuffix = limit != null ? `&limit=${limit}` : '';
+      const _links = hasMore
+        ? { next: `/wiki/rest/api/search?cql=${cqlEncoded}&start=${nextStart}${limitSuffix}` }
+        : {};
+      return { status: 200, body: { results, totalSize: allMatches.length, _links } };
     }
 
     // ----- labels (v1) -----
-    if ((m = /^\/wiki\/rest\/api\/content\/(\d+)\/label(\?name=(.+))?$/.exec(path))) {
+    if ((m = /^\/wiki\/rest\/api\/content\/(\d+)\/label/.exec(path))) {
       const p = pageById.get(m[1]);
       if (!p) return { status: 404 };
-      if (method === 'GET') return { status: 200, body: { results: [...p.labels].map(name => ({ name })) } };
+      if (method === 'GET') {
+        // Support start/limit pagination so syncLabels can page through >200 labels.
+        const nameParam = /[?&]name=([^&]+)/.exec(path);
+        if (nameParam) {
+          // DELETE-specific name filter (or single-label lookup) — return all or match.
+          return { status: 200, body: { results: [...p.labels].map(name => ({ name })) } };
+        }
+        const allLabels = [...p.labels].map(name => ({ name }));
+        const startP = Number(/[?&]start=(\d+)/.exec(path)?.[1] ?? 0);
+        const limitPStr = /[?&]limit=(\d+)/.exec(path)?.[1];
+        const limitP = limitPStr != null ? Number(limitPStr) : null;
+        const sliceEnd = limitP != null ? startP + limitP : allLabels.length;
+        const results = allLabels.slice(startP, sliceEnd);
+        const hasMore = sliceEnd < allLabels.length;
+        const _links = hasMore
+          ? { next: `/wiki/rest/api/content/${m[1]}/label?start=${sliceEnd}${limitP != null ? `&limit=${limitP}` : ''}` }
+          : {};
+        return { status: 200, body: { results, _links } };
+      }
       if (method === 'POST') { for (const t of body ?? []) p.labels.add(t.name); return { status: 200, body: {} }; }
-      if (method === 'DELETE') { p.labels.delete(decodeURIComponent(m[3])); return { status: 204 }; }
+      // DELETE: ?name=<label>
+      if (method === 'DELETE') {
+        const delName = /[?&]name=([^&]+)/.exec(path);
+        if (delName) p.labels.delete(decodeURIComponent(delName[1]));
+        return { status: 204 };
+      }
     }
 
     return { status: 404, body: { message: `unhandled ${method} ${path}` } };
