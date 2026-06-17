@@ -39,11 +39,11 @@ node "${CLAUDE_PLUGIN_ROOT}/tools/pwiki.mjs" get "<path>" --source="<source>"
 
 This works for both FS and Confluence wikis (do **not** use the `Read` tool for wiki pages — it only opens local files). Cite only pages you actually read. Each search result carries a `source` field; pass it verbatim to `get --source` so a page from a read-only source is read from that source. Results from your own wiki carry the primary's name, which routes to the primary.
 
-## Step 5 — Synthesize the answer
+## Step 4 — Synthesize the answer
 
 Compose a 1–3 paragraph answer. Cite specific pages inline using markdown links: `[Title](pages/concept/foo.md)`. Never claim something the cited pages don't support; if the wiki is silent or contradictory on a point, say so.
 
-## Step 6 — Write the query-output page
+## Step 5 — Write the query-output page
 
 Use `pwiki new query`:
 
@@ -58,9 +58,9 @@ node "${CLAUDE_PLUGIN_ROOT}/tools/pwiki.mjs" new query \
 
 The CLI sets `id`, `created`, `status: filed`, and writes the file under `pages/queries/YYYY-MM-DD-<slug>.md` (date prefix for query slugs). It returns the new path in JSON.
 
-Then **Edit the body** of the new file to insert the synthesized answer from Step 5 (the CLI writes a stub body only — see the query template in `docs/wiki/CLAUDE.md`).
+Then **Edit the body** of the new file to insert the synthesized answer from Step 4 (the CLI writes a stub body only — see the query template in `docs/wiki/CLAUDE.md`).
 
-## Step 7 — Reply and invite promotion
+## Step 6 — Reply and invite promotion
 
 Return the answer to the user in chat. End your reply with one short line like:
 
@@ -68,11 +68,11 @@ Return the answer to the user in chat. End your reply with one short line like:
 
 Then stop. Do NOT pre-emptively promote.
 
-## Step 8 — Handle promotion (only on user agreement)
+## Step 7 — Handle promotion (only on user agreement)
 
 If the user agrees in the next turn (any affirmative reply — yes / sure / do it / promote — counts as agreement; anything else counts as decline):
 
-1. Use the repo-root-relative `path` returned by `pwiki new query` in Step 6 (e.g. `docs/wiki/pages/queries/<YYYY-MM-DD>-<slug>.md`) as `<query-path>`. The CLI derives the target concept slug by stripping the `YYYY-MM-DD-` prefix from the page's `id`. Run:
+1. Use the repo-root-relative `path` returned by `pwiki new query` in Step 5 (e.g. `docs/wiki/pages/queries/<YYYY-MM-DD>-<slug>.md`) as `<query-path>`. The CLI derives the target concept slug by stripping the `YYYY-MM-DD-` prefix from the page's `id`. Run:
    ```bash
    node "${CLAUDE_PLUGIN_ROOT}/tools/pwiki.mjs" promote <query-path> --to=concept --format=json
    ```
@@ -83,13 +83,13 @@ If the user agrees in the next turn (any affirmative reply — yes / sure / do i
 
 ## Edge cases
 
-- Empty grep results → no page written, conversational reply only.
+- Empty search results → no page written, conversational reply only.
 - Question is multi-part — split mentally, answer each, cite per part. Don't write multiple query pages.
 - User asks the same question twice — the second query gets its own dated file. That's OK; lint will surface near-duplicates if it becomes a problem.
 
 ## Error handling
 
-If `pwiki <command>` exits non-zero, parse the JSON `error.code` field:
+If `pwiki <command>` exits non-zero, parse the JSON `error.code` field. Note: `pwiki search` never returns a JSON `error.code` — per-source failures surface only via the `warnings[]` array (Step 2); the only non-zero exits are the "not inside a p-wiki repo" and missing-query guards (plain stderr).
 
 | error.code | What to say to the user |
 |---|---|

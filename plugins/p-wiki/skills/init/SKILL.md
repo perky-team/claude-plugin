@@ -3,7 +3,7 @@ name: init
 description: |
   Initialize a markdown knowledge wiki at `docs/wiki/` of the current git repo and a global rule at `.claude/rules/p-wiki.md`. Use when the user says "init wiki", "create wiki", "setup knowledge base", or asks to start a new p-wiki.
 argument-hint: (no arguments)
-allowed-tools: Bash(git rev-parse:*) Bash(mkdir:*) Bash(test:*) Bash(node:*) Read Write
+allowed-tools: Bash(git rev-parse:*) Bash(mkdir:*) Bash(node:*) Read Write
 ---
 
 # /p-wiki:init
