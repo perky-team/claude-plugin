@@ -40,6 +40,7 @@ export async function indexFull({ root, store, ignorePatterns, onError }) {
     }
   }
   store.resolvePending();
+  store.markSchemaCurrent?.(); // a full rebuild brings the DB to the current schema
   return { files: files.length - skipped, skipped };
 }
 
@@ -73,6 +74,11 @@ export function gitChangedFiles(root, indexedSha) {
 }
 
 export async function indexChanged({ root, store, ignorePatterns, changedFiles, onError }) {
+  // A schema bump changed the on-disk symbol format (e.g. qname qualification),
+  // so incrementally patching a stale DB would mix old and new shapes. Rebuild.
+  if (store.schemaStale?.()) {
+    return indexFull({ root, store, ignorePatterns, onError });
+  }
   // No explicit change list and no prior full index: there's no git-diff baseline,
   // so `git status --porcelain` alone sees only dirty working-tree files and would
   // silently skip the entire committed codebase. Bootstrap with a full index.

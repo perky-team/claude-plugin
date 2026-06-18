@@ -84,6 +84,14 @@ Refresh with `/p-graph:sync`. Prefer these commands over grep for structural que
 - **Symbols** — functions, methods, classes, structs, interfaces, type aliases, enums, and arrow-function variables/fields.
 - **Edges** — call references (including `new` and method calls), `import` statements, and C/C++ `#include` directives.
 
+### Name resolution
+
+Each symbol carries a bare `name` (used for search/UX) and a qualified `qname`. Call edges are resolved conservatively: an edge links to a target only when exactly one symbol matches — first by an exact qualified-name match, then falling back to a unique bare-name match. A genuinely ambiguous name (the same bare name in two places, with no qualifier to tell them apart) is left **unresolved** rather than linked to a guess — `pgraph` never invents a false edge, because a wrong edge would make `impact`/`callers`/`trace` lie. Calls into the standard library or external packages have no symbol in the repo and likewise stay unresolved.
+
+For **Go**, `qname` is package- and receiver-qualified — a package-level `New` in package `filesink` becomes `filesink.New`, and a method becomes `filesink.Writer.Write`. Call sites are qualified the same way: `filesink.New(...)` and same-package `New()` calls both resolve to `filesink.New`, so common names (`New`, `Write`, `Close`, `Run`) no longer collapse into one ambiguous bucket. Two limitations are by design: a method called through a variable (`w.Write()`) keeps the bare name because the receiver's type isn't inferred, and a same-package call in a file that uses a dot-import (`import . "x"`) is left bare to avoid mis-qualifying a name that may belong to the dot-imported package. Other languages (TypeScript/JavaScript, Python, C++) qualify `qname` by lexical nesting (`Class.method`) as before.
+
+> The Go `qname` format changed in schema version 2. An existing `.pgraph/graph.db` from an older version is detected as stale and fully rebuilt on the next `index`/`/p-graph:sync` rather than incrementally patched.
+
 Everything is stored in a local SQLite database at `.pgraph/graph.db` (gitignored, rebuildable at any time — it is never committed). The schema is append-friendly: a full index truncates and repopulates; an incremental index (`--changed`) diffs by commit SHA against the last indexed state, reparses only the changed files, and splices their symbols and edges back in.
 
 The graph is purely local — there is no remote service, no MCP server, and no data leaves the machine.

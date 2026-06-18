@@ -45,6 +45,32 @@ describe('incremental index', () => {
     store.close();
   }, 30000);
 
+  it('forces a full reindex when the stored schema version is stale', async () => {
+    writeFileSync(join(dir, 'a.ts'), 'export function alpha() {}');
+    const store = openStore(':memory:');
+    await indexFull({ root: dir, store, ignorePatterns: [] });
+    expect(store.schemaStale()).toBe(false);
+
+    // Simulate a DB written by an older version: stale schema + a symbol whose
+    // file no longer exists on disk. An incremental run would leave the ghost;
+    // a forced full reindex must drop it.
+    store.replaceFileSymbols('ghost.ts', [
+      { id: 'ghost', name: 'ghost', qname: 'ghost', kind: 'function', lang: 'ts', file: 'ghost.ts', start_line: 1, end_line: 1, signature: '', doc: '', container_id: null },
+    ], []);
+    store.setMeta('schema_version', 1);
+    store.setMeta('indexed_sha', 'deadbeef');
+    expect(store.schemaStale()).toBe(true);
+
+    await indexChanged({
+      root: dir, store, ignorePatterns: [],
+      changedFiles: () => ({ modified: [], deleted: [] }), // no changes -> only a full rebuild clears the ghost
+    });
+    expect(store.node('ghost')).toBeNull();
+    expect(store.node('alpha')).toBeTruthy();
+    expect(store.schemaStale()).toBe(false);
+    store.close();
+  }, 30000);
+
   it('reconnects a call edge when its target symbol moves to another file', async () => {
     writeFileSync(join(dir, 'a.ts'), 'export function f() { g(); }');
     writeFileSync(join(dir, 'b.ts'), 'export function g() {}');

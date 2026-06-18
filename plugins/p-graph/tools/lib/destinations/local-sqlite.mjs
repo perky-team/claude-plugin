@@ -5,7 +5,10 @@ function loadDatabaseSync() {
   catch { throw new Error('Node >= 22.5 required for p-graph (node:sqlite unavailable)'); }
 }
 
-export const SCHEMA_VERSION = 1;
+// 2: Go qnames became package/receiver-qualified (e.g. "filesink.New",
+// "filesink.Writer.Write"). The qname format changed, so a DB written by an
+// older version must be fully reindexed rather than incrementally patched.
+export const SCHEMA_VERSION = 2;
 
 const DDL = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
@@ -204,13 +207,28 @@ export function openStore(dbPath) {
     db.prepare(`
       UPDATE edges SET dst_id = NULL
       WHERE dst_id IS NOT NULL AND dst_id NOT IN (SELECT id FROM nodes)`).run();
+    // Pass A — prefer an exact qualified match. A qualified call target like
+    // "filesink.New" links straight to the node whose qname is "filesink.New".
     db.prepare(`
       UPDATE edges SET dst_id = (
-        SELECT n.id FROM nodes n WHERE (n.qname = dst_name OR n.name = dst_name) LIMIT 1
+        SELECT n.id FROM nodes n WHERE n.qname = dst_name LIMIT 1
       )
       WHERE dst_id IS NULL AND dst_name IS NOT NULL
-        AND (SELECT count(DISTINCT n.id) FROM nodes n WHERE n.qname = dst_name OR n.name = dst_name) = 1`).run();
+        AND (SELECT count(*) FROM nodes n WHERE n.qname = dst_name) = 1`).run();
+    // Pass B — fall back to a unique bare-name match only when no qualified
+    // candidate exists (e.g. a method call left bare, or a non-Go language).
+    // The "exactly one" guard is preserved: a genuinely ambiguous bare name
+    // stays NULL rather than linking to a guessed target (no false edges).
+    db.prepare(`
+      UPDATE edges SET dst_id = (
+        SELECT n.id FROM nodes n WHERE n.name = dst_name LIMIT 1
+      )
+      WHERE dst_id IS NULL AND dst_name IS NOT NULL
+        AND (SELECT count(*) FROM nodes n WHERE n.qname = dst_name) = 0
+        AND (SELECT count(*) FROM nodes n WHERE n.name = dst_name) = 1`).run();
   };
+  store.schemaStale = () => Number(store.getMeta('schema_version')) !== SCHEMA_VERSION;
+  store.markSchemaCurrent = () => store.setMeta('schema_version', SCHEMA_VERSION);
 
   if (store.getMeta('schema_version') === null) {
     store.setMeta('schema_version', SCHEMA_VERSION);
