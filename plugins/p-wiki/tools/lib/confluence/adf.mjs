@@ -68,10 +68,10 @@ function parseList(lines, start) {
     if (isItem) {
       const text = line.replace(/^\s*(?:\d+\.|[-*]) /, '');
       const content = [{ type: 'paragraph', content: parseInline(text) }];
-      // nested list (lookahead)
+      // nested list (lookahead) — accepts both bullet (`- ` / `* `) and ordered (`1. `) sublists
       let j = i + 1;
       const nestedStart = j;
-      while (j < lines.length && /^\s*[-*] /.test(lines[j]) && lines[j].match(/^(\s*)/)[1].length > firstIndent) j++;
+      while (j < lines.length && /^\s*(?:[-*]|\d+\.)\s/.test(lines[j]) && lines[j].match(/^(\s*)/)[1].length > firstIndent) j++;
       if (j > nestedStart) {
         const { node } = parseList(lines, nestedStart);
         content.push(node);
@@ -139,10 +139,14 @@ function renderBlock(node, depth = 0) {
 
 function renderList(node, marker, depth) {
   const lines = [];
+  const isOrdered = node.type === 'orderedList';
+  let counter = 1;
   for (const item of node.content ?? []) {
     const para = (item.content ?? []).find(c => c.type === 'paragraph');
     const indent = '  '.repeat(depth);
-    lines.push(indent + marker + ' ' + renderInline(para?.content ?? []));
+    const itemMarker = isOrdered ? `${counter}.` : marker;
+    lines.push(indent + itemMarker + ' ' + renderInline(para?.content ?? []));
+    counter++;
     for (const c of item.content ?? []) {
       if (c.type === 'bulletList' || c.type === 'orderedList') {
         lines.push(renderList(c, c.type === 'bulletList' ? '-' : '1.', depth + 1));

@@ -83,4 +83,31 @@ describe('adfToMarkdown', () => {
     const md = 'See [docs](https://x).';
     expect(adfToMarkdown(markdownToAdf(md))).toBe(md);
   });
+
+  it('nested ordered list under bullet item round-trips', () => {
+    const md = '- a\n  1. b\n  2. c';
+    const adf = markdownToAdf(md);
+    // The bullet list item must contain a nested orderedList
+    const bulletList = adf.content[0];
+    expect(bulletList.type).toBe('bulletList');
+    const item = bulletList.content[0];
+    expect(item.type).toBe('listItem');
+    const nested = item.content.find((c: { type: string }) => c.type === 'orderedList');
+    expect(nested).toBeDefined();
+    expect(nested.content).toHaveLength(2);
+    // Round-trip preserves nesting
+    expect(adfToMarkdown(adf)).toBe(md);
+  });
+
+  it('nested bullet list under bullet item still works', () => {
+    const md = '- a\n  - b\n  - c';
+    const adf = markdownToAdf(md);
+    const bulletList = adf.content[0];
+    expect(bulletList.type).toBe('bulletList');
+    const item = bulletList.content[0];
+    const nested = item.content.find((c: { type: string }) => c.type === 'bulletList');
+    expect(nested).toBeDefined();
+    expect(nested.content).toHaveLength(2);
+    expect(adfToMarkdown(adf)).toBe(md);
+  });
 });
