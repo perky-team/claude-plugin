@@ -1,4 +1,5 @@
 import { posix as pathPosix } from 'node:path';
+import { inlineCodeRanges } from './md.mjs';
 
 export function escapeRegex(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -11,9 +12,9 @@ export function findSkippedRanges(body) {
   for (const m of body.matchAll(/```[\s\S]*?```/g)) {
     raw.push([m.index, m.index + m[0].length]);
   }
-  // Inline code `...` (no newline inside, no nested backticks)
-  for (const m of body.matchAll(/`[^`\n]+`/g)) {
-    raw.push([m.index, m.index + m[0].length]);
+  // Inline code spans (variable-length fence, handles ``double-backtick`` spans)
+  for (const r of inlineCodeRanges(body)) {
+    raw.push(r);
   }
   // Any [..] bracket form. Covers [text](url), [text][id], and bare [text]
   // shortcut references. We intentionally over-skip rather than

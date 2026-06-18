@@ -1,5 +1,6 @@
 import { validateFrontmatter, allowedFields } from './schema.mjs';
 import { dirname, join } from 'node:path';
+import { inlineCodeRanges } from './md.mjs';
 
 const TYPE_FOR_DIR = {
   'pages/concept': 'concept',
@@ -16,7 +17,7 @@ const linkRe = /\[[^\]]*\]\(\s*([^)#\s]+)(?:#[^)\s]*)?(?:\s+"[^"]*")?\s*\)/g;
 function findCodeRanges(body) {
   const raw = [];
   for (const m of body.matchAll(/```[\s\S]*?```/g)) raw.push([m.index, m.index + m[0].length]);
-  for (const m of body.matchAll(/`[^`\n]+`/g)) raw.push([m.index, m.index + m[0].length]);
+  for (const r of inlineCodeRanges(body)) raw.push(r);
   raw.sort((a, b) => a[0] - b[0]);
   const merged = [];
   for (const [s, e] of raw) {

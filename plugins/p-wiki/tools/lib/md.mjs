@@ -6,6 +6,35 @@
 
 const TOKEN_RE = /<[a-zA-Z][a-zA-Z0-9_-]*>/g;
 
+// Matches CommonMark-style inline code spans with variable-length backtick
+// fences: a run of N backticks opens the span, and the same run of N backticks
+// closes it. This correctly handles double-backtick spans that contain interior
+// single backticks (e.g. ``a ` b``), unlike the naive /`[^`\n]+`/g regex.
+//
+// The `s` flag makes `.` match newlines so multi-line inline spans (permitted
+// by CommonMark for single-backtick fences) are also captured correctly.
+const INLINE_CODE_RE = /(`+)(?:(?!\1).)*?\1/gs;
+
+/**
+ * Returns an array of [start, end) offset pairs covering every inline-code
+ * span in `text`. Uses variable-length backtick-fence matching so spans
+ * delimited by `` `` `` or longer fences are handled correctly.
+ *
+ * Exported so cross-links.mjs, backlinks.mjs, lint.mjs, and md.mjs itself
+ * share a single canonical implementation.
+ *
+ * @param {string} text
+ * @returns {Array<[number, number]>}
+ */
+export function inlineCodeRanges(text) {
+  const ranges = [];
+  const re = new RegExp(INLINE_CODE_RE.source, INLINE_CODE_RE.flags);
+  for (const m of text.matchAll(re)) {
+    ranges.push([m.index, m.index + m[0].length]);
+  }
+  return ranges;
+}
+
 function findProtectedRanges(text) {
   const ranges = [];
   // Fenced code blocks ``` ... ```
@@ -13,10 +42,9 @@ function findProtectedRanges(text) {
   for (const m of text.matchAll(fenceRe)) {
     ranges.push([m.index, m.index + m[0].length]);
   }
-  // Inline code `...` (no newline, no nested backtick)
-  const inlineRe = /`[^`\n]+`/g;
-  for (const m of text.matchAll(inlineRe)) {
-    ranges.push([m.index, m.index + m[0].length]);
+  // Inline code spans (variable-length fence, handles ``double-backtick`` spans)
+  for (const r of inlineCodeRanges(text)) {
+    ranges.push(r);
   }
   return ranges;
 }

@@ -1,4 +1,5 @@
 // plugins/p-wiki/tools/lib/cross-links.mjs
+import { inlineCodeRanges } from './md.mjs';
 
 // Standard markdown inline-link: [text](href). The text portion may include
 // escaped characters but no unescaped ']' or '\n'; the href may not contain
@@ -10,8 +11,8 @@ function findSkippedRanges(body) {
   const raw = [];
   // Fenced code blocks
   for (const m of body.matchAll(/```[\s\S]*?```/g)) raw.push([m.index, m.index + m[0].length]);
-  // Inline code
-  for (const m of body.matchAll(/`[^`\n]+`/g)) raw.push([m.index, m.index + m[0].length]);
+  // Inline code spans (variable-length fence, handles ``double-backtick`` spans)
+  for (const r of inlineCodeRanges(body)) raw.push(r);
   raw.sort((a, b) => a[0] - b[0]);
   const merged = [];
   for (const [s, e] of raw) {
