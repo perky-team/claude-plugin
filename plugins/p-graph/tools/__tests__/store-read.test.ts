@@ -28,6 +28,25 @@ describe('store read', () => {
   it('files lists per-file symbol counts', () => {
     expect(s.files('a.ts')[0]).toMatchObject({ path: 'a.ts', symbols: 2 });
   });
+  it('files normalizes ".", "./", "" and no-arg to list every file', () => {
+    s.upsertFile('internal/app.ts', 'h', 'ts');
+    s.replaceFileSymbols('internal/app.ts', [
+      { id: 'baz', name: 'baz', qname: 'baz', kind: 'function', lang: 'ts', file: 'internal/app.ts', start_line: 1, end_line: 2, signature: 'function baz()', doc: '', container_id: null },
+    ], []);
+    const all = s.files().map((r) => r.path).sort();
+    expect(all).toEqual(['a.ts', 'internal/app.ts']);
+    expect(s.files('.').map((r) => r.path).sort()).toEqual(all);
+    expect(s.files('./').map((r) => r.path).sort()).toEqual(all);
+    expect(s.files('').map((r) => r.path).sort()).toEqual(all);
+  });
+  it('files strips a leading "./" so "./internal/" matches "internal/"', () => {
+    s.upsertFile('internal/app.ts', 'h', 'ts');
+    s.replaceFileSymbols('internal/app.ts', [
+      { id: 'baz', name: 'baz', qname: 'baz', kind: 'function', lang: 'ts', file: 'internal/app.ts', start_line: 1, end_line: 2, signature: 'function baz()', doc: '', container_id: null },
+    ], []);
+    expect(s.files('./internal/')).toEqual(s.files('internal/'));
+    expect(s.files('./internal/').map((r) => r.path)).toEqual(['internal/app.ts']);
+  });
   it('status returns counts', () => {
     expect(s.status()).toMatchObject({ nodes: 2, edges: 1, files: 1 });
   });

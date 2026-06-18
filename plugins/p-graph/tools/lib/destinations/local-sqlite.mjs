@@ -141,9 +141,18 @@ export function openStore(dbPath) {
   store.callees = (name) => db.prepare(`
     SELECT DISTINCT d.* FROM edges e JOIN nodes s ON s.id = e.src_id
     JOIN nodes d ON d.id = e.dst_id WHERE s.name = ? OR s.qname = ?`).all(name, name);
-  store.files = (prefix) => db.prepare(`
-    SELECT file AS path, count(*) AS symbols FROM nodes
-    WHERE file = ? OR file LIKE ? GROUP BY file ORDER BY file`).all(prefix, `${prefix}%`);
+  store.files = (prefix) => {
+    // Normalize the prefix so the repo root can be typed the way users expect.
+    // File paths are stored repo-relative with NO leading "./", so ".", "./" and
+    // "" all mean "match everything", and a leading "./" on any prefix is stripped
+    // ("./internal/" behaves like "internal/").
+    let p = prefix == null ? '' : String(prefix);
+    if (p === '.' || p === './') p = '';
+    else if (p.startsWith('./')) p = p.slice(2);
+    return db.prepare(`
+      SELECT file AS path, count(*) AS symbols FROM nodes
+      WHERE file = ? OR file LIKE ? GROUP BY file ORDER BY file`).all(p, `${p}%`);
+  };
   store.status = () => ({
     nodes: db.prepare('SELECT count(*) c FROM nodes').get().c,
     edges: db.prepare('SELECT count(*) c FROM edges').get().c,
