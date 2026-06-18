@@ -13,6 +13,10 @@ const TOKEN_RE = /<[a-zA-Z][a-zA-Z0-9_-]*>/g;
 //
 // The `s` flag makes `.` match newlines so multi-line inline spans (permitted
 // by CommonMark for single-backtick fences) are also captured correctly.
+// Cross-newline pairing (backtick fence opened on one line, closed on another)
+// is intentional: CommonMark allows it for any fence length, not just single
+// backticks, and dotall is the correct way to honour that without a lookahead
+// that would reject valid spans.
 const INLINE_CODE_RE = /(`+)(?:(?!\1).)*?\1/gs;
 
 /**

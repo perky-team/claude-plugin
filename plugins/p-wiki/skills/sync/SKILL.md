@@ -71,6 +71,16 @@ Parse the JSON `{ ok, mirrors: [...] }`. For each entry in `mirrors`, report:
   will surface the broken links on the mirror)
 - **elapsed** time (`elapsedMs` → seconds)
 
+After reporting each mirror's counts, check its `srcParseErrors` field. If `srcParseErrors > 0`,
+emit a warning block immediately after that mirror's line:
+
+> **Warning:** `srcParseErrors` primary page(s) could not be parsed this run. The **delete
+> pass was skipped** for this mirror — stale pages may remain. Run `/p-wiki:lint` to locate
+> and fix the malformed file(s), then re-run `/p-wiki:sync`.
+
+(This warning applies even when `ok: true` — the sync still exits 0 when only the delete
+pass was suppressed.)
+
 If a mirror entry has an `error` object, report its `code` and `message` for that mirror
 and note the other mirrors' outcomes still apply. Finish with a one-line total
 (e.g. "2 mirrors synced, 47 pages written, 2 deleted").
