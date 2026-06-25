@@ -45,6 +45,7 @@ p-flow ships a disciplined task development flow for Claude Code: brainstorm →
 - **Reviews are read-only.** `requesting-*-review` skills dispatch reviewers that NEVER edit files; their output lands in `plan.md` as follow-ups.
 - **plan.md sections are canonical.** `## Steps`, `## Review follow-ups — <date>`, `## Review decisions (audit)`, `## Open questions`, `## Risks` — don't rename, don't reorder.
 - **Slug resolution.** Branches follow `<type>/<slug>` for `<type> ∈ {feature, bugfix, hotfix, chore, docs}`. Skills resolve `<slug>` from the branch name; if branch doesn't match, ask the user.
+- **p-tasks is optional.** If (and only if) p-tasks is initialised in the repo (`docs/tasks/.ptasks.json` exists), `writing-plan` and `task-end` offer to mirror/close a task there. Never automatic, never silent, and absent entirely when p-tasks isn't installed.
 
 ## Where to look for more
 

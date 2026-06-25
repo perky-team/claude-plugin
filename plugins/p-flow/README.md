@@ -42,6 +42,17 @@ The `requesting-code-review` and `requesting-task-review` skills dispatch the **
 
 This pattern (inline templates rather than registered subagents) means the review skills work in any Claude Code session — no plugin install required at the target.
 
+## Integration with p-tasks (optional)
+
+If the [`p-tasks`](../p-tasks/) tracker is initialised in the same repo (detected by `docs/tasks/.ptasks.json`), p-flow offers two opt-in mirror points:
+
+| Skill | Offer |
+|---|---|
+| `writing-plan` | After the plan is approved — create a p-tasks `task` named `<slug>` plus one `sub-task` per `## Steps` item. |
+| `task-end` | After the MR recommendation — mark the `<slug>` task **and its sub-tasks** `done` (p-tasks has no status cascade, so both are closed explicitly). |
+
+This is a **soft, one-way** integration: p-flow knows about p-tasks, not the reverse, and there is **no plugin-manifest dependency** — each plugin installs and runs standalone. When p-tasks is absent, these offers never appear. The bridge dispatches through the Skill tool (`p-tasks:add` / `p-tasks:set` / `p-tasks:next`), never p-tasks' CLI, so it respects per-plugin isolation. Every action is an explicit offer (and warns before creating real Jira issues). Contract: `skills/_shared/ptasks-bridge.md`.
+
 ## What `/p-flow:init` writes
 
 In the current git repo (or current working directory if not a git repo):

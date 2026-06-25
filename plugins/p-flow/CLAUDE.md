@@ -15,6 +15,7 @@ For authoring or editing **skills**, see also `skills/writing-skills/SKILL.md` �
 | Two plan template variants in `_shared/templates/` (TDD-aligned + generic); `writing-plan` heuristically suggests + asks user to confirm. Templates stay skill-internal (not copied into user repo by `/p-flow:init`). | C | `docs/plans/2026-05-27-wave-c-tdd-receiving-review.md` |
 | `task-end` stays narrow — push + MR-recommend only, no merge/PR/cleanup menu. See `skills/task-end/SKILL.md` `## Design note`. | D | `docs/plans/2026-05-27-wave-d-cleanup.md` |
 | `/p-flow:init` extended with Phase 2 — a repo-level feature brainstorm that materialises stub `specs/<slug>/specification.md` files. No new skill (kept inside `init`); no `specs/roadmap.md` or `specs/repo.md` feature index — folders are canonical, `task-brainstorming` refine-mode handles deeper work. State-machine guard on re-run: refuse iff any `specs/<slug>/` folder exists. | E | `docs/plans/2026-05-27-init-brainstorm-phase.md` |
+| Optional soft bridge to `p-tasks`: gated on `docs/tasks/.ptasks.json`, dispatched via the Skill tool (`p-tasks:add`/`p-tasks:set`/`p-tasks:next`) NOT its CLI, join-key = task title == `<slug>`, offers never silent. NO `plugin.json#dependencies` (platform deps are hard/required; would break standalone p-flow). p-tasks untouched. | F | `docs/plans/2026-06-25-ptasks-bridge.md` |
 
 If you're tempted to revisit any of these — read the linked plan and spec first. The decisions are documented because they were made deliberately and shouldn't be re-litigated on a per-PR basis.
 
@@ -124,6 +125,7 @@ plugins/p-flow/
 │   └── run-hook.cmd             ← polyglot wrapper for Windows + Unix
 ├── skills/
 │   ├── _shared/templates/       ← templates (4 init-copied + 2 plan-internal)
+│   ├── _shared/ptasks-bridge.md  ← shared p-tasks integration contract (gate + dispatch + join-key)
 │   ├── init/                    ← /p-flow:init slash command
 │   ├── task-start/              ← /p-flow:task-start slash command (Phase A + Phase B)
 │   ├── task-end/                ← /p-flow:task-end slash command
