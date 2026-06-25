@@ -110,7 +110,7 @@ task-end deliberately offers no options menu (no "merge / open PR / cleanup / ca
 
     *"After this branch is merged, clean up with: `git worktree remove <worktree-path>`"*
 
-    Do NOT remove the worktree.
+    Substitute `<worktree-path>` with the actual path for `<branch>` read from the `git worktree list` output — do NOT print the literal placeholder. Do NOT remove the worktree.
 
 11. **(optional) Offer to close the p-tasks task.** Run the gate in `${CLAUDE_SKILL_DIR}/../_shared/ptasks-bridge.md`. If p-tasks is **not** active, skip silently. If active **and** a `<slug>` was resolved in pre-check 3, offer:
 
@@ -120,9 +120,18 @@ task-end deliberately offers no options menu (no "merge / open PR / cleanup / ca
 
     On **no**, or if no `<slug>` was resolved: skip. This step never blocks the push or the MR recommendation — those have already happened.
 
+12. **(optional) Offer to capture decisions into p-wiki.** Run the gate in `${CLAUDE_SKILL_DIR}/../_shared/pwiki-bridge.md` (write side). If p-wiki is **not** active, skip silently. If active **and** a `<slug>` was resolved in pre-check 3, offer to compile the task's durable decisions into the wiki:
+
+    *"Capture this task's decisions into the wiki? I'll compile the task's ADR/spec (`specs/<slug>/adr.md` if present, else `specification.md`) into wiki pages."* (Add the Confluence warning from the bridge doc if the destination is `confluence`.)
+
+    On an explicit **yes**: via the Skill tool, invoke `p-wiki:compile` once per chosen source file (prefer `specs/<slug>/adr.md`; fall back to `specs/<slug>/specification.md`; **never** `plan.md`). Use `compile`, **not** `ingest` — the spec files are in-repo, and `ingest` refuses in-repo paths. `compile` is idempotent, so re-running updates the derived pages rather than duplicating them. Report how many pages were created/updated.
+
+    On **no**, or if no `<slug>` was resolved: skip. Like step 11, this never blocks the push or the MR recommendation. When both step 11 and step 12 fire, offer p-tasks first, then p-wiki — they are independent.
+
 ## What this skill does NOT do
 
 - Does not run `gh` or `glab` itself. The user picks the host.
 - Does not merge, tag, or delete branches.
 - Does not bump the plugin version (per the user's `no-proactive-releases` rule).
 - Does not create or mutate p-tasks items silently — only offers (gated on p-tasks being present), and only with an explicit user yes. See `${CLAUDE_SKILL_DIR}/../_shared/ptasks-bridge.md`.
+- Does not write to p-wiki silently — only offers (gated on p-wiki being present), and only with an explicit user yes. See `${CLAUDE_SKILL_DIR}/../_shared/pwiki-bridge.md`.

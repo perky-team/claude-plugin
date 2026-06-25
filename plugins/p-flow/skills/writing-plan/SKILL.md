@@ -28,6 +28,8 @@ Turn the brainstorm artifact into a concrete, ordered plan. One file: `specs/<sl
 
    Wait for explicit answer before proceeding.
 3. **Decompose into 5–15 steps.** If you find yourself with more than 15, stop and tell the user the work is too large for one plan — suggest splitting into sub-tasks, each via its own `/p-flow:task-start`.
+
+   **(optional) Consult p-graph for impact.** Run the gate in `${CLAUDE_SKILL_DIR}/../_shared/pgraph-bridge.md`. If a code graph is **not** active, decompose normally — say nothing. If it **is** active and the spec touches existing code, use the graph (per the repo's `.claude/rules/p-graph.md`) to find the impact set: let downstream callers inform step granularity, and record notable affected modules under `## Risks`. Best-effort only — never a precondition.
 4. **Every step must have an acceptance criterion.** Concrete and checkable: "tests `X.py::test_foo` and `X.py::test_bar` pass", "endpoint `GET /foo` returns 200 with body matching schema Y", "file `bar.ts` exports the function `baz`". Refuse to write a step without one — ask the user for a criterion instead. For TDD plans, each step also requires `Test first` / `Implement` / `Verify` sub-bullets.
 5. **Self-review:** scan the produced file for placeholders (`TBD`, `TODO`, leftover `<...>` markers from the template, steps without AC, internal contradictions). Fix inline.
 6. **Show to user.** Ask: "Plan written to `specs/<slug>/plan.md`. Review and tell me what to amend before we move to execution."
@@ -41,6 +43,8 @@ Turn the brainstorm artifact into a concrete, ordered plan. One file: `specs/<sl
    - Confirm to the user how many sub-tasks were created.
 
    On **no** (or decline): continue — the plan is already written and complete. Mirroring is never a precondition for finishing `writing-plan`.
+
+8. **Hand off to execution.** Once the user has approved the plan, offer: *"Ready to implement? I'll invoke `executing-plan` to work through the steps — TDD per code step, verify after each."* On **yes** → invoke `executing-plan` via the Skill tool. On **no** → stop here; the user can resume later (`executing-plan` picks up at the first unchecked step). Do not start writing code from this skill.
 
 ## Plan templates
 
@@ -64,3 +68,4 @@ The skill reads the chosen template, substitutes `{{SLUG}}`, and writes the resu
 - No follow-up step generation — that's `requesting-code-review` / `requesting-task-review`.
 - Does not enforce TDD discipline during execution — that's the `test-driven-development` skill, invoked by Claude when actually writing code for a Step.
 - p-tasks mirroring is opt-in and gated — see `${CLAUDE_SKILL_DIR}/../_shared/ptasks-bridge.md`. Never created without an explicit user yes.
+- p-graph consultation is opt-in and gated — see `${CLAUDE_SKILL_DIR}/../_shared/pgraph-bridge.md`. Read-only advisory; absent graph → silent no-op; never a precondition for the plan.

@@ -79,7 +79,8 @@ This plugin provides a task development flow. From any non-trivial idea to a pus
 | Entry | `/p-flow:task-start <slug>` | Branch `<type>/<slug>` created (+ optional worktree), `specs/<slug>/` opened, brainstorming invoked. |
 | Design | `task-brainstorming` skill | `specs/<slug>/specification.md` (always), optionally `feature.feature`, optionally `adr.md`. |
 | Plan | `writing-plan` skill | `specs/<slug>/plan.md`. |
-| Verify | `verification-before-completion` skill | Concrete test/lint output is quoted before any "done" claim. Writes `.claude/.p-flow-state/<branch>/last-verification`. |
+| Execute | `executing-plan` skill | Walks `plan.md` `## Steps` in order — TDD per code step, verify after each, check off `- [x]` on green; a red step routes to `systematic-debugging`. |
+| Verify | `verification-before-completion` skill | Concrete test/lint output is quoted before any "done" claim. Writes `.claude/.p-flow-state/<branch-safe>/last-verification` (`<branch-safe>` = branch name with `/` → `__`). |
 | Review (code) | `requesting-code-review` skill + `code-reviewer` agent | Code-quality findings, triaged into `plan.md` follow-ups. |
 | Review (spec) | `requesting-task-review` skill + `task-reviewer` agent | Spec-alignment findings, triaged into `plan.md` follow-ups. |
 | Exit | `/p-flow:task-end` | `git push -u origin <branch>` + MR title/body recommendation with both `gh` and `glab` commands ready to copy. |
@@ -90,4 +91,4 @@ The rule in §3.1 — "if a section doesn't apply, write `N/A` and a one-line re
 
 ### State directory
 
-`task-end` reads a marker at `.claude/.p-flow-state/<branch>/last-verification` to detect whether verification ran. This directory is added to `.gitignore` on first write by `verification-before-completion`.
+`task-end` reads a marker at `.claude/.p-flow-state/<branch-safe>/last-verification` (where `<branch-safe>` is the branch name with `/` replaced by `__`) to detect whether verification ran. This directory is added to `.gitignore` on first write by `verification-before-completion`.

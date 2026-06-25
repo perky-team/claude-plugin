@@ -1,7 +1,7 @@
 ---
 name: requesting-code-review
 description: Use after `verification-before-completion` passes and there is a diff worth reviewing. Dispatches a code-review subagent (via Task tool with `general-purpose` + inline template) on the branch diff, then leads the user through severity-aware triage and writes accepted findings into `plan.md` as follow-up steps with audit-tracked decisions.
-allowed-tools: Bash(git diff:*) Bash(git status:*) Bash(git log:*) Bash(git rev-parse:*) Bash(git merge-base:*) Read Write Edit Glob Task
+allowed-tools: Bash(git diff:*) Bash(git status:*) Bash(git log:*) Bash(git rev-parse:*) Bash(git merge-base:*) Bash(git remote:*) Bash(grep:*) Read Write Edit Glob Task
 ---
 
 # requesting-code-review
@@ -67,7 +67,7 @@ For each `defer` / `reject` → append a bullet to `## Review decisions (audit)`
 
 ### 6. Close the loop
 
-Tell the user: *"Plan updated. New steps: N1, N2, … When ready to fix, say 'continue' and pick them up (you can implement manually, or wait for `executing-plan` in Wave 2)."*
+Tell the user: *"Plan updated. New steps: N1, N2, … When ready to fix, say 'continue' and pick them up via `receiving-code-review` (it verifies each finding before implementing or rejecting)."*
 
 ## What this skill does NOT do
 

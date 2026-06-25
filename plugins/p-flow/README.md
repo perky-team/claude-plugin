@@ -23,8 +23,10 @@ To disable: remove the `SessionStart` entry from `hooks/hooks.json`, or globally
 | `using-p-flow` | Auto-emitted by the SessionStart hook on every fresh session / `/clear` / auto-compact. Establishes the p-flow surface for the model — lists commands, skills, hard rules. |
 | `task-brainstorming` | Right after `/p-flow:task-start`. Produces `specs/<slug>/{specification.md, feature.feature?, adr.md?}`. |
 | `writing-plan` | After spec is approved. Produces `specs/<slug>/plan.md` (5–15 steps, each with acceptance criteria). Offers a TDD-aligned template (default for code tasks) and a generic template (docs/research). |
+| `executing-plan` | After `plan.md` is approved. Walks `## Steps` in order — invokes `test-driven-development` for code steps and `verification-before-completion` after each, checking off `- [x]` only on green. The execution loop between `writing-plan` and `task-end`. |
 | `test-driven-development` | Before writing production code. Enforces RED-GREEN-REFACTOR (failing test first, minimal code, verify). Pairs with `verification-before-completion` ("before code" gate vs "before claiming done" gate). |
 | `verification-before-completion` | Before any "done" claim or commit. Quotes test/lint output. Writes a state marker so `task-end` knows verification ran. |
+| `systematic-debugging` | When verification fails or behaviour is unexpected, before proposing a fix. Reproduce → one falsifiable hypothesis → test it → narrow (bisect) → fix the root cause → re-verify. `executing-plan` routes here on a red step. |
 | `requesting-code-review` | After verification passes. Dispatches `general-purpose` with the colocated `code-reviewer.md` template; triages findings into `plan.md` follow-ups. |
 | `requesting-task-review` | Same trigger as code review, orthogonal lens. Dispatches `general-purpose` with the colocated `task-reviewer.md` template; checks spec/plan alignment. |
 | `receiving-code-review` | Before processing review feedback (plan.md follow-ups, PR comments, reviewer replies). Verify the finding first; reject false positives with evidence. |
@@ -52,6 +54,27 @@ If the [`p-tasks`](../p-tasks/) tracker is initialised in the same repo (detecte
 | `task-end` | After the MR recommendation — mark the `<slug>` task **and its sub-tasks** `done` (p-tasks has no status cascade, so both are closed explicitly). |
 
 This is a **soft, one-way** integration: p-flow knows about p-tasks, not the reverse, and there is **no plugin-manifest dependency** — each plugin installs and runs standalone. When p-tasks is absent, these offers never appear. The bridge dispatches through the Skill tool (`p-tasks:add` / `p-tasks:set` / `p-tasks:next`), never p-tasks' CLI, so it respects per-plugin isolation. Every action is an explicit offer (and warns before creating real Jira issues). Contract: `skills/_shared/ptasks-bridge.md`.
+
+## Integration with p-wiki (optional)
+
+If the [`p-wiki`](../p-wiki/) knowledge base is initialised in the same repo (detected by `docs/wiki/.pwiki.json`), p-flow offers two opt-in points — read knowledge in, write knowledge out:
+
+| Skill | Offer |
+|---|---|
+| `task-brainstorming` | Before designing — query the wiki for prior decisions/patterns about the task area, and flag any conflict with accumulated knowledge. |
+| `task-end` | After the MR recommendation — compile the task's durable decisions (`specs/<slug>/adr.md`, else `specification.md`) into wiki pages. |
+
+Same **soft, one-way** contract as the p-tasks bridge: no plugin-manifest dependency, dispatch through the Skill tool (`p-wiki:query` / `p-wiki:compile`) rather than p-wiki's CLI, offers never silent, absent entirely when p-wiki isn't installed. Capture uses `compile` (not `ingest`, which refuses in-repo paths) and warns before publishing to Confluence Cloud. Contract: `skills/_shared/pwiki-bridge.md`.
+
+## Integration with p-graph (optional)
+
+If the [`p-graph`](../p-graph/) code knowledge graph is initialised in the same repo (detected by `.pgraph/config.json`), `writing-plan` consults it during decomposition:
+
+| Skill | Use |
+|---|---|
+| `writing-plan` | When the spec touches existing code — find the change's impact set (downstream callers/callees), let it inform step granularity, and record notable affected modules under the plan's `## Risks` section. |
+
+This bridge is **advisory and read-only** — unlike the p-tasks/p-wiki bridges it makes no offer and writes nothing. p-graph exposes no query skill (its structural queries are CLI commands), and `/p-graph:init` already installs a repo rule (`.claude/rules/p-graph.md`) that tells the model how to query the graph. So p-flow only **points** the model at the graph at the right moment and defers the actual commands to that installed rule — keeping p-flow uncoupled from p-graph's pre-1.0 CLI. The one stateful action, refreshing a stale graph, goes through the Skill tool (`p-graph:sync`). Contract: `skills/_shared/pgraph-bridge.md`.
 
 ## What `/p-flow:init` writes
 

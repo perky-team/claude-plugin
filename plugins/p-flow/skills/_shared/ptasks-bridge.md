@@ -23,8 +23,8 @@ p-tasks; p-tasks knows nothing about p-flow.
   resolve the task by exact title match (`p-tasks:set` does title→id resolution).
 - **No status cascade in p-tasks.** Parent and sub-task statuses are independent. When
   closing a task, close its still-open sub-tasks too — otherwise they dangle open in
-  `summary`/`next`. Enumerate the still-open ones with `p-tasks:next --all` filtered to this
-  parent (NOT `p-tasks:summary` — `summary` returns only **done** items, so it would list
+  `summary`/`next`. Enumerate the still-open ones with `p-tasks:next --all`, then filter the returned
+  list (there is no `--parent` flag) to this parent's sub-tasks (NOT `p-tasks:summary` — `summary` returns only **done** items, so it would list
   nothing to close). Then `p-tasks:set <st-id> --status done` for each.
 
 ## Confirmation rules

@@ -16,6 +16,9 @@ For authoring or editing **skills**, see also `skills/writing-skills/SKILL.md` �
 | `task-end` stays narrow — push + MR-recommend only, no merge/PR/cleanup menu. See `skills/task-end/SKILL.md` `## Design note`. | D | `docs/plans/2026-05-27-wave-d-cleanup.md` |
 | `/p-flow:init` extended with Phase 2 — a repo-level feature brainstorm that materialises stub `specs/<slug>/specification.md` files. No new skill (kept inside `init`); no `specs/roadmap.md` or `specs/repo.md` feature index — folders are canonical, `task-brainstorming` refine-mode handles deeper work. State-machine guard on re-run: refuse iff any `specs/<slug>/` folder exists. | E | `docs/plans/2026-05-27-init-brainstorm-phase.md` |
 | Optional soft bridge to `p-tasks`: gated on `docs/tasks/.ptasks.json`, dispatched via the Skill tool (`p-tasks:add`/`p-tasks:set`/`p-tasks:next`) NOT its CLI, join-key = task title == `<slug>`, offers never silent. NO `plugin.json#dependencies` (platform deps are hard/required; would break standalone p-flow). p-tasks untouched. | F | `docs/plans/2026-06-25-ptasks-bridge.md` |
+| Execution loop owned by p-flow (parity approach): `executing-plan` drives `## Steps` (TDD per code step, verify after each, check off only on green); `systematic-debugging` is the red-verification route. Replaces the "Wave 2" placeholders. `executing-plan` owns `## Steps`; `## Review follow-ups` stay with `receiving-code-review`. | G | `skills/executing-plan/SKILL.md`, `skills/systematic-debugging/SKILL.md` |
+| Optional soft bridge to `p-wiki`: gated on `docs/wiki/.pwiki.json`, dispatched via the Skill tool (`p-wiki:query` read at `task-brainstorming`, `p-wiki:compile` write at `task-end`) NOT its CLI. Capture is `compile` NOT `ingest` (ingest refuses in-repo paths). Offers never silent; Confluence warning on confluence destinations. NO `plugin.json#dependencies`. | G | `skills/_shared/pwiki-bridge.md` |
+| Optional soft bridge to `p-graph`: gated on `.pgraph/config.json`, used by `writing-plan` during decomposition. **Advisory + read-only** (no offer) — p-graph has no query skill, so the bridge defers structural queries to the installed repo rule `.claude/rules/p-graph.md` and uses the Skill tool only for `p-graph:sync`. Does NOT duplicate p-graph's pre-1.0 command table. NO `plugin.json#dependencies`. | G | `skills/_shared/pgraph-bridge.md` |
 
 If you're tempted to revisit any of these — read the linked plan and spec first. The decisions are documented because they were made deliberately and shouldn't be re-litigated on a per-PR basis.
 
@@ -86,6 +89,8 @@ Each test file defends one invariant; if you change behaviour that affects an in
 | `tests/p-flow-init-phase2.test.ts` | `init/SKILL.md` Step 2 state-machine has 4 rows + uses `grep -q .` (not the broken `head -1`); README Idempotency table matches the SKILL state-machine cell-for-cell; Step 9 placeholder names exist in `specification.template.md` |
 | `tests/p-flow-ptasks-bridge.test.ts` | p-tasks bridge stays decoupled (no `plugin.json#dependencies`, no `ptasks.mjs` in any skill) and gated (host skills reference `_shared/ptasks-bridge.md`; bridge doc keeps the "absent → silent no-op" rule) |
 | `tests/p-flow-ptasks-recipe.test.ts` | executable spec: the bridge recipe (create task=`<slug>` + sub-tasks per step → close all) yields a correct p-tasks store; pins the no-status-cascade assumption `task-end` relies on (re-implementation via the real p-tasks CLI — update if the bridge recipe changes) |
+| `tests/p-flow-pwiki-bridge.test.ts` | p-wiki bridge stays decoupled (no `plugin.json#dependencies`, no `pwiki.mjs` in any skill) and gated (host skills `task-brainstorming` + `task-end` reference `_shared/pwiki-bridge.md`; bridge doc keeps "absent → silent no-op" AND the compile-not-ingest rule) |
+| `tests/p-flow-pgraph-bridge.test.ts` | p-graph bridge stays decoupled (no `plugin.json#dependencies`, no `pgraph.mjs` in any skill) and gated (`writing-plan` references `_shared/pgraph-bridge.md`; bridge doc keeps "absent → say nothing", uses only `p-graph:sync` via Skill tool, and defers queries to `.claude/rules/p-graph.md`) |
 
 ## How to add a new skill
 
@@ -128,14 +133,18 @@ plugins/p-flow/
 ├── skills/
 │   ├── _shared/templates/       ← templates (4 init-copied + 2 plan-internal)
 │   ├── _shared/ptasks-bridge.md  ← shared p-tasks integration contract (gate + dispatch + join-key)
+│   ├── _shared/pwiki-bridge.md   ← shared p-wiki integration contract (query in / compile out)
+│   ├── _shared/pgraph-bridge.md  ← shared p-graph integration contract (advisory impact analysis)
 │   ├── init/                    ← /p-flow:init slash command
 │   ├── task-start/              ← /p-flow:task-start slash command (Phase A + Phase B)
 │   ├── task-end/                ← /p-flow:task-end slash command
 │   ├── using-p-flow/            ← discovery skill (auto-emitted by hook)
 │   ├── task-brainstorming/      ← spec authoring
 │   ├── writing-plan/            ← plan authoring (TDD or generic)
+│   ├── executing-plan/          ← drives plan.md ## Steps (TDD per step, verify, check off)
 │   ├── verification-before-completion/  ← test/lint gate before "done"
 │   ├── test-driven-development/ ← RED-GREEN-REFACTOR enforcement before code
+│   ├── systematic-debugging/    ← root-cause method when verification fails
 │   ├── requesting-code-review/  ← dispatches code-reviewer.md template
 │   │   └── code-reviewer.md     ← inline reviewer template (Wave A)
 │   ├── requesting-task-review/  ← dispatches task-reviewer.md template

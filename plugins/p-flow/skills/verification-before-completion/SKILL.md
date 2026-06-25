@@ -14,7 +14,7 @@ Before any claim of completion ("done", "fixed", "ready", "implemented", "should
 
 - Any assertion of completion in chat.
 - Before any `git commit`.
-- After each step when `executing-plan` ships (Wave 2).
+- After each step driven by `executing-plan`.
 
 ## Procedure
 
@@ -44,7 +44,7 @@ Before any claim of completion ("done", "fixed", "ready", "implemented", "should
 
 5. **Special cases:**
    - No tests found → say literally: "This repo has no test suite I can detect. I cannot verify by running tests." **Do NOT write the success marker** — there is nothing to verify; skip steps 6 and 7. Stop.
-   - Tests fail → say literally: "Verification failed." Do NOT claim done. List the failing tests. Suggest re-entering implementation or `systematic-debugging` (Wave 2). **Do NOT write the success marker.** Stop.
+   - Tests fail → say literally: "Verification failed." Do NOT claim done. List the failing tests. Suggest re-entering implementation or `systematic-debugging`. **Do NOT write the success marker.** Stop.
    - Tests pass + lint passes → proceed to step 6.
    - User-facing feature changed (UI, CLI, endpoint) → also actually exercise the feature once. Quote the result.
 

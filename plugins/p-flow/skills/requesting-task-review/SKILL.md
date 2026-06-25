@@ -1,7 +1,7 @@
 ---
 name: requesting-task-review
 description: Use after `verification-before-completion` passes and the implementation should be checked against the spec. Dispatches a task-review subagent (via Task tool with `general-purpose` + inline template) with paths to spec, feature.feature, adr.md, plan.md, and the branch diff. Triages findings into `plan.md` follow-ups with audit-tracked decisions. Orthogonal to `requesting-code-review` (code quality vs spec alignment).
-allowed-tools: Bash(git diff:*) Bash(git status:*) Bash(git log:*) Bash(git rev-parse:*) Bash(git merge-base:*) Read Write Edit Glob Task
+allowed-tools: Bash(git diff:*) Bash(git status:*) Bash(git log:*) Bash(git rev-parse:*) Bash(git merge-base:*) Bash(git remote:*) Bash(grep:*) Read Write Edit Glob Task
 ---
 
 # requesting-task-review

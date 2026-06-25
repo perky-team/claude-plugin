@@ -31,8 +31,10 @@ p-flow ships a disciplined task development flow for Claude Code: brainstorm →
 |---|---|
 | `task-brainstorming` | User starts a new non-trivial task — auto-invoked by `task-start`, can also be called directly. |
 | `writing-plan` | After a spec exists at `specs/<slug>/specification.md`. Offers a TDD-aligned template (default for code tasks) and a generic template (docs/research). |
+| `executing-plan` | After `plan.md` is approved and you're about to implement. Drives `## Steps` in order — TDD for code steps, verify after each, check off `- [x]` only on green. The loop between `writing-plan` and `task-end`. |
 | `test-driven-development` | Before writing any production code (functions / endpoints / classes / handlers / bugfix code). Enforces RED-GREEN-REFACTOR — failing test first, then minimal code, then verify. |
 | `verification-before-completion` | Before ANY claim of "done", "fixed", "ready", or before any `git commit`. Non-negotiable. |
+| `systematic-debugging` | When verification fails, a test goes red, or behaviour is unexpected — before proposing a fix. Reproduce → hypothesise → test → narrow → root-cause fix → re-verify. |
 | `requesting-code-review` | After verification passes and there's a diff worth reviewing. Dispatches code-review via `Task` tool with `general-purpose` + inline template. |
 | `requesting-task-review` | Same trigger; orthogonal lens — checks spec/plan alignment instead of code quality. Same dispatch pattern. |
 | `receiving-code-review` | Before processing a review finding (a `## Review follow-ups` item in plan.md, a PR comment, a reviewer reply). Enforces verify-the-finding-first; reject false positives explicitly. |
@@ -46,6 +48,8 @@ p-flow ships a disciplined task development flow for Claude Code: brainstorm →
 - **plan.md sections are canonical.** `## Steps`, `## Review follow-ups — <date>`, `## Review decisions (audit)`, `## Open questions`, `## Risks` — don't rename, don't reorder.
 - **Slug resolution.** Branches follow `<type>/<slug>` for `<type> ∈ {feature, bugfix, hotfix, chore, docs}`. Skills resolve `<slug>` from the branch name; if branch doesn't match, ask the user.
 - **p-tasks is optional.** If (and only if) p-tasks is initialised in the repo (`docs/tasks/.ptasks.json` exists), `writing-plan` and `task-end` offer to mirror/close a task there. Never automatic, never silent, and absent entirely when p-tasks isn't installed.
+- **p-wiki is optional.** If (and only if) p-wiki is initialised in the repo (`docs/wiki/.pwiki.json` exists), `task-brainstorming` offers to query prior knowledge before designing, and `task-end` offers to compile the task's decisions into the wiki. Never automatic, never silent, and absent entirely when p-wiki isn't installed.
+- **p-graph is optional.** If (and only if) a code graph is initialised in the repo (`.pgraph/config.json` exists), `writing-plan` consults it during decomposition to find the change's impact set and fold downstream callers into `## Risks`. Read-only advisory (no offer prompt), deferring to the repo's `.claude/rules/p-graph.md` for the queries; absent entirely when p-graph isn't installed.
 
 ## Where to look for more
 

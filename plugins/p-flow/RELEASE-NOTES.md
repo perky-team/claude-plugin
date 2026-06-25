@@ -3,6 +3,33 @@
 > Marketplace tag → p-flow plugin version → date → headline.
 > Authored 2026-05-27; backfilled from `v4.6.0` onward (the first p-flow release on the marketplace was `v3.1.0` with `plugins/p-flow 0.1.0` — a minimal `init` skill; see `git log v4.5.0..v4.6.0 -- plugins/p-flow/`).
 
+## v5.6.0 — `plugins/p-flow 1.2.0` — 2026-06-25 — execution loop + p-wiki & p-graph bridges
+
+- **Closed the execution-loop gap.** Two new skills replace the "Wave 2" placeholders that
+  `verification-before-completion` and `requesting-code-review` referenced:
+  - `executing-plan` — drives `specs/<slug>/plan.md` `## Steps` in order, one at a time:
+    `test-driven-development` for code steps, `verification-before-completion` after each,
+    `- [x]` checked off only on green. The loop between `writing-plan` and `task-end`.
+  - `systematic-debugging` — where a red verification routes: reproduce → one falsifiable
+    hypothesis → test it → narrow (bisect) → root-cause fix → re-verify.
+  The stale "Wave 2" / "wait for `executing-plan`" wording is gone; review follow-ups now
+  point to `receiving-code-review` (verify-the-finding-first).
+- **Optional p-wiki bridge** (active only when `docs/wiki/.pwiki.json` exists):
+  `task-brainstorming` offers to query prior wiki knowledge before designing; `task-end`
+  offers to compile the task's decisions (`adr.md`, else `specification.md`) into the wiki.
+  Capture uses `compile` (not `ingest`, which refuses in-repo paths); warns before publishing
+  to Confluence Cloud. Contract: `skills/_shared/pwiki-bridge.md`.
+- **Optional p-graph bridge** (active only when `.pgraph/config.json` exists): `writing-plan`
+  consults the code graph during decomposition for the change's impact set, folding downstream
+  callers into `## Risks`. **Advisory and read-only** — p-graph exposes no query skill, so the
+  bridge defers the actual commands to the repo rule `/p-graph:init` installs
+  (`.claude/rules/p-graph.md`) and uses the Skill tool only for `p-graph:sync`. Keeps p-flow
+  uncoupled from p-graph's pre-1.0 CLI. Contract: `skills/_shared/pgraph-bridge.md`.
+- **No coupling, same as the p-tasks bridge.** No `plugin.json#dependencies`; no sibling-CLI
+  calls (`pwiki.mjs` / `pgraph.mjs` absent from every skill); both bridges gate on a marker
+  file and are silent no-ops when the sibling isn't installed. Two new decoupling tests:
+  `tests/p-flow-pwiki-bridge.test.ts` and `tests/p-flow-pgraph-bridge.test.ts`.
+
 ## v5.5.0 — `plugins/p-flow 1.1.0` — 2026-06-25 — optional p-tasks bridge
 
 - p-flow now offers a **soft, opt-in** bridge to the `p-tasks` tracker, active **only** when p-tasks is initialised in the same repo (detected by `docs/tasks/.ptasks.json`).
