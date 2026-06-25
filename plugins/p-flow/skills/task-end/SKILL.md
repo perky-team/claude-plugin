@@ -112,8 +112,17 @@ task-end deliberately offers no options menu (no "merge / open PR / cleanup / ca
 
     Do NOT remove the worktree.
 
+11. **(optional) Offer to close the p-tasks task.** Run the gate in `${CLAUDE_SKILL_DIR}/../_shared/ptasks-bridge.md`. If p-tasks is **not** active, skip silently. If active **and** a `<slug>` was resolved in pre-check 3, offer:
+
+    *"Mark the `<slug>` task and its sub-tasks done in p-tasks?"* (Add the Jira warning from the bridge doc if the destination is `jira`.)
+
+    On an explicit **yes**: via the Skill tool, mark the task whose title is exactly `<slug>` `--status done`, **and** mark each of its still-open sub-tasks `--status done` too. p-tasks has **no status cascade** (parent and sub-task statuses are independent), so closing only the parent would leave its sub-tasks dangling `todo`/`in_progress` in `summary`/`next`. Enumerate the still-open sub-tasks with `p-tasks:next --all` filtered to this parent — **not** `p-tasks:summary`, which returns only **done** items and would list nothing to close — then `p-tasks:set <st-id> --status done` for each. (`next --all` excludes a sub-task only if it is itself blocked by an unfinished item; at task-end, with work complete, that is normally moot.)
+
+    On **no**, or if no `<slug>` was resolved: skip. This step never blocks the push or the MR recommendation — those have already happened.
+
 ## What this skill does NOT do
 
 - Does not run `gh` or `glab` itself. The user picks the host.
 - Does not merge, tag, or delete branches.
 - Does not bump the plugin version (per the user's `no-proactive-releases` rule).
+- Does not create or mutate p-tasks items silently — only offers (gated on p-tasks being present), and only with an explicit user yes. See `${CLAUDE_SKILL_DIR}/../_shared/ptasks-bridge.md`.
