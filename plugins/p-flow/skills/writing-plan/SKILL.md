@@ -1,7 +1,7 @@
 ---
 name: writing-plan
 description: Use after a spec exists at `specs/<slug>/specification.md` to produce a step-by-step implementation plan at `specs/<slug>/plan.md`. Refuses to write a step without an acceptance criterion. Decomposes work into 5–15 steps; flags larger work for sub-task split.
-allowed-tools: Read Write Edit
+allowed-tools: Read Write Edit Bash(git rev-parse:*) Bash(test:*)
 ---
 
 # writing-plan
@@ -31,6 +31,16 @@ Turn the brainstorm artifact into a concrete, ordered plan. One file: `specs/<sl
 4. **Every step must have an acceptance criterion.** Concrete and checkable: "tests `X.py::test_foo` and `X.py::test_bar` pass", "endpoint `GET /foo` returns 200 with body matching schema Y", "file `bar.ts` exports the function `baz`". Refuse to write a step without one — ask the user for a criterion instead. For TDD plans, each step also requires `Test first` / `Implement` / `Verify` sub-bullets.
 5. **Self-review:** scan the produced file for placeholders (`TBD`, `TODO`, leftover `<...>` markers from the template, steps without AC, internal contradictions). Fix inline.
 6. **Show to user.** Ask: "Plan written to `specs/<slug>/plan.md`. Review and tell me what to amend before we move to execution."
+7. **(optional) Offer to mirror into p-tasks.** Run the gate in `${CLAUDE_SKILL_DIR}/../_shared/ptasks-bridge.md`. If p-tasks is **not** active, skip this step silently. If it **is** active, after the user has approved the plan, offer:
+
+   *"p-tasks is set up in this repo. Want me to create a `<slug>` task there with one sub-task per plan step?"* (If the `.ptasks.json` destination is `jira`, add the real-Jira-issues warning from the bridge doc.)
+
+   On an explicit **yes**:
+   - Via the Skill tool, invoke `p-tasks:add` to create `task` with `--title "<slug>"` and an optional `--description` = the first sentence of the spec `## Overview` / `## Problem Statement`. Capture the returned parent id (`t-N`).
+   - For each item under `## Steps` in `specs/<slug>/plan.md`, via the Skill tool invoke `p-tasks:add` to create `sub-task <parent-id>` with `--title "<the step's title>"`.
+   - Confirm to the user how many sub-tasks were created.
+
+   On **no** (or decline): continue — the plan is already written and complete. Mirroring is never a precondition for finishing `writing-plan`.
 
 ## Plan templates
 
@@ -53,3 +63,4 @@ The skill reads the chosen template, substitutes `{{SLUG}}`, and writes the resu
 - No git operations.
 - No follow-up step generation — that's `requesting-code-review` / `requesting-task-review`.
 - Does not enforce TDD discipline during execution — that's the `test-driven-development` skill, invoked by Claude when actually writing code for a Step.
+- p-tasks mirroring is opt-in and gated — see `${CLAUDE_SKILL_DIR}/../_shared/ptasks-bridge.md`. Never created without an explicit user yes.
