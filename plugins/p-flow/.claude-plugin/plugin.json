@@ -1,7 +1,7 @@
 {
   "name": "p-flow",
-  "version": "1.0.0",
-  "description": "Disciplined task development flow for Claude Code: secrets deny-list, Conventional Commits + <type>/<slug> branches, spec templates, and a skill stack for brainstorm → plan → TDD → verify → review → push (review skills dispatch general-purpose subagents with inline reviewer templates). Commands: init (Phase 1 scaffolding + Phase 2 feature brainstorm), task-start, task-end. Skills: using-p-flow, init, task-brainstorming, writing-plan (TDD-aligned or generic plan templates), test-driven-development, verification-before-completion, requesting-code-review, requesting-task-review, receiving-code-review, using-git-worktrees, writing-skills. Discoverable via SessionStart hook. See plugins/p-flow/CLAUDE.md for contributor docs.",
+  "version": "1.1.0",
+  "description": "Disciplined task development flow for Claude Code: secrets deny-list, Conventional Commits + <type>/<slug> branches, spec templates, and a skill stack for brainstorm → plan → TDD → verify → review → push (review skills dispatch general-purpose subagents with inline reviewer templates). Commands: init (Phase 1 scaffolding + Phase 2 feature brainstorm), task-start, task-end. Skills: using-p-flow, init, task-brainstorming, writing-plan (TDD-aligned or generic plan templates), test-driven-development, verification-before-completion, requesting-code-review, requesting-task-review, receiving-code-review, using-git-worktrees, writing-skills. Optional one-way bridge to p-tasks when present (writing-plan + task-end offer to mirror/close a task). Discoverable via SessionStart hook. See plugins/p-flow/CLAUDE.md for contributor docs.",
   "author": {
     "name": "Andrey Sukharev",
     "email": "andrey.sukharev@exinity.com"

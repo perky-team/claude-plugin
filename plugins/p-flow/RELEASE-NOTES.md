@@ -3,6 +3,15 @@
 > Marketplace tag → p-flow plugin version → date → headline.
 > Authored 2026-05-27; backfilled from `v4.6.0` onward (the first p-flow release on the marketplace was `v3.1.0` with `plugins/p-flow 0.1.0` — a minimal `init` skill; see `git log v4.5.0..v4.6.0 -- plugins/p-flow/`).
 
+## v5.5.0 — `plugins/p-flow 1.1.0` — 2026-06-25 — optional p-tasks bridge
+
+- p-flow now offers a **soft, opt-in** bridge to the `p-tasks` tracker, active **only** when p-tasks is initialised in the same repo (detected by `docs/tasks/.ptasks.json`).
+  - `writing-plan` — after the plan is approved, offers to create a p-tasks `task` named `<slug>` plus one `sub-task` per `## Steps` item.
+  - `task-end` — after the MR recommendation, offers to mark the `<slug>` task **and its sub-tasks** `done` (p-tasks has no status cascade, so both are closed explicitly).
+- **No coupling.** No `plugin.json#dependencies` (the platform's dependency field is hard/required and would break standalone p-flow); the bridge dispatches through the Skill tool (`p-tasks:add` / `p-tasks:set` / `p-tasks:next`), never p-tasks' CLI, so per-plugin isolation holds. `p-tasks` is untouched and unaware of p-flow. Both plugins still install/run standalone.
+- Every mirror action is an explicit offer — never silent — and warns before creating real Jira issues when the p-tasks destination is `jira`.
+- Contract centralised in `skills/_shared/ptasks-bridge.md`. Two new tests: `tests/p-flow-ptasks-bridge.test.ts` guards independence (no `plugin.json#dependencies`), decoupling (no `ptasks.mjs` in any skill), and the gate; `tests/p-flow-ptasks-recipe.test.ts` is an executable spec that drives the real p-tasks CLI through the bridge recipe and pins the no-status-cascade assumption. Behaviour (does the model fire/gate/confirm correctly) is covered by a manual smoke-test checklist in `docs/plans/2026-06-25-ptasks-bridge.md`.
+
 ## v5.0.0 — `plugins/p-flow 1.0.0` — 2026-06-16 — first stable release
 
 - Promotes p-flow to its first stable major. **No functional changes** since `0.7.1` — this is a stability declaration: the command set (`init`, `task-start`, `task-end`), the 13-skill stack, the plan.md section contract, the verification marker path, and the reviewer-template dispatch pattern are considered settled after five design waves (A–E).
