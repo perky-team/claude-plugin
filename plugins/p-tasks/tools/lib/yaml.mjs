@@ -1,4 +1,7 @@
-import yaml from 'js-yaml';
+// Vendored, not a bare `import 'js-yaml'`: plugins ship as a plain file copy
+// with no install step, so the dependency must live inside the artifact.
+// Regenerate with scripts/vendor-deps.mjs. See README "Dependency shipping".
+import yaml from './vendor/js-yaml.mjs';
 
 const ITEM_KEY_ORDER = ['id', 'title', 'description', 'status', 'acceptance', 'files', 'kind', 'origin', 'resolution', 'blockedBy', 'jiraKeys', 'subTasks'];
 

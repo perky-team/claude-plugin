@@ -17,7 +17,7 @@ import { summarize } from './lib/summary.mjs';
 import { listAll } from './lib/list.mjs';
 import { syncAll } from './lib/sync.mjs';
 
-export const VERSION = '1.1.0';
+export const VERSION = '1.1.1';
 
 export function parseArgs(argv) {
   const opts = { _: [] };

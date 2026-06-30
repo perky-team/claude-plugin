@@ -19,6 +19,17 @@ claude --plugin-dir C:/path/to/claude-plugin/plugins/p-tasks
 
 After edits, `/reload-plugins` inside Claude Code picks them up without restart.
 
+## Dependency shipping
+
+Plugins are distributed by **copying files into a cache** — there is no `npm install` at install time, so the CLI must run with nothing but the files in this directory. A bare `import 'js-yaml'` only resolves while a `node_modules` tree happens to sit above `tools/` in the dev checkout; once the plugin is copied into the cache alone it dies with `ERR_MODULE_NOT_FOUND` (this is exactly what regressed in 1.1.0).
+
+So the **single runtime dependency (`js-yaml`) is vendored**, not declared: its self-contained ESM build is committed at [`tools/lib/vendor/js-yaml.mjs`](./tools/lib/vendor/js-yaml.mjs) and imported by relative path from `tools/lib/yaml.mjs`. The root `.gitignore` excludes `node_modules/` but **not** `tools/lib/vendor/`, so the file ships. (Same approach as p-graph's `tools/vendor/`.)
+
+Rules for future changes:
+- **Never add a bare runtime `import`** to anything under `tools/` (test/dev-only deps like `vitest` are fine — they never ship). Vendor it instead.
+- To add or update a vendored dependency, bump it in the **root** `package.json`, run `node plugins/p-tasks/scripts/vendor-deps.mjs`, and commit the refreshed `tools/lib/vendor/` file.
+- `tests/p-tasks-packaging.test.ts` (in the root suite, run by `npm test` / the `/release` audit) enforces this: it fails on any bare runtime import and runs the CLI from an isolated copy with no `node_modules` above it.
+
 ## Commands
 
 | Command | What it does |
