@@ -1,6 +1,6 @@
 {
   "name": "p-tasks",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Two-level task tracker (task → sub-task) with FS and Jira destinations, one-way primary→mirrors sync. Items carry optional work-item fields (acceptance, files, kind, origin, resolution). Skills: init, add, set, next, summary, list, sync.",
   "author": {
     "name": "Andrey Sukharev",
