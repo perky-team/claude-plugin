@@ -11,12 +11,13 @@ import { createJiraDestination } from './lib/destinations/jira.mjs';
 import { readConfig } from './lib/config.mjs';
 import { resolveDestination, makeTransport } from './lib/destination.mjs';
 import { findCycle } from './lib/cycles.mjs';
-import { STATUSES } from './lib/schema.mjs';
+import { STATUSES, KINDS } from './lib/schema.mjs';
 import { pickNext } from './lib/next.mjs';
 import { summarize } from './lib/summary.mjs';
+import { listAll } from './lib/list.mjs';
 import { syncAll } from './lib/sync.mjs';
 
-export const VERSION = '1.0.0';
+export const VERSION = '1.1.0';
 
 export function parseArgs(argv) {
   const opts = { _: [] };
@@ -109,6 +110,9 @@ export async function addCommand({ root, args, transport }) {
   if (args.status !== undefined && !STATUSES.includes(args.status)) {
     return emitJson({ error: { code: 'invalid-status', message: `status must be one of ${STATUSES.join('/')}` } }, 1);
   }
+  if (args.kind !== undefined && !KINDS.includes(args.kind)) {
+    return emitJson({ error: { code: 'invalid-kind', message: `kind must be one of ${KINDS.join('/')}` } }, 1);
+  }
 
   const { primary } = loadResolved({ root, transport });
   await primary.ensureStructure();
@@ -145,6 +149,12 @@ export async function addCommand({ root, args, transport }) {
       description: args.description ?? '',
       status: args.status ?? 'todo',
       blockedBy,
+      // Optional work-item fields — passed through only when the flag is present.
+      ...(args.acceptance !== undefined ? { acceptance: args.acceptance } : {}),
+      ...(args.files !== undefined ? { files: arrayify(args.files) } : {}),
+      ...(args.kind !== undefined ? { kind: args.kind } : {}),
+      ...(args.origin !== undefined ? { origin: args.origin } : {}),
+      ...(args.resolution !== undefined ? { resolution: args.resolution } : {}),
     });
   } catch (e) {
     return emitJson({ error: { code: e?.code ?? 'internal', message: e?.message ?? String(e) } }, 1);
@@ -176,6 +186,14 @@ export async function setCommand({ root, args, transport }) {
     if (!STATUSES.includes(args.status)) return emitJson({ error: { code: 'invalid-status', message: `status must be one of ${STATUSES.join('/')}` } }, 1);
     patch.status = args.status;
   }
+  if (args.acceptance !== undefined) patch.acceptance = args.acceptance;
+  if (args.files !== undefined) patch.files = arrayify(args.files);
+  if (args.kind !== undefined) {
+    if (!KINDS.includes(args.kind)) return emitJson({ error: { code: 'invalid-kind', message: `kind must be one of ${KINDS.join('/')}` } }, 1);
+    patch.kind = args.kind;
+  }
+  if (args.origin !== undefined) patch.origin = args.origin;
+  if (args.resolution !== undefined) patch.resolution = args.resolution;
 
   let newBlockedBy = current.blockedBy.slice();
   let touchedBlockers = false;
@@ -235,6 +253,19 @@ export async function summaryCommand({ root, args, transport }) {
   const parentId = args._[0];
   try {
     const list = summarize(items, parentId ? { parentId } : {});
+    return emitJson({ items: list }, 0);
+  } catch (e) {
+    return emitJson({ error: { code: 'item-not-found', message: e.message } }, 1);
+  }
+}
+
+export async function listCommand({ root, args, transport }) {
+  const { primary } = loadResolved({ root, transport });
+  await primary.ensureStructure();
+  const items = await primary.listItems();
+  const parentId = args._[0];
+  try {
+    const list = listAll(items, parentId ? { parentId } : {});
     return emitJson({ items: list }, 0);
   } catch (e) {
     return emitJson({ error: { code: 'item-not-found', message: e.message } }, 1);
@@ -316,7 +347,7 @@ if (isMain) {
     }
     const command = process.argv[2];
     const args = parseArgs(process.argv.slice(3));
-    const KNOWN = ['init', 'add', 'set', 'next', 'summary', 'sync'];
+    const KNOWN = ['init', 'add', 'set', 'next', 'summary', 'list', 'sync'];
     if (!KNOWN.includes(command)) die(`unknown command: ${command}`, 1);
     if (command === 'init') {
       const root = findRoot(process.cwd());
@@ -341,6 +372,11 @@ if (isMain) {
     if (command === 'summary') {
       const root = findRoot(process.cwd());
       await summaryCommand({ root, args });
+      return;
+    }
+    if (command === 'list') {
+      const root = findRoot(process.cwd());
+      await listCommand({ root, args });
       return;
     }
     if (command === 'sync') {

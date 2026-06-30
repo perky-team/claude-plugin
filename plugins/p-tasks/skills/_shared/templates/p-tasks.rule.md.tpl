@@ -7,6 +7,7 @@ Slash commands:
 - `/p-tasks:set <id>` — change status, title, description, or blockers
 - `/p-tasks:next` — return the next unblocked item
 - `/p-tasks:summary [<id>]` — list done items
+- `/p-tasks:list [<id>]` — list ALL items in document order with status and fields
 - `/p-tasks:sync` — push primary state to all mirrors
 
 `/p-tasks:init` is one-shot — do not re-run it.

@@ -27,7 +27,11 @@ task-end deliberately offers no options menu (no "merge / open PR / cleanup / ca
    - If the current branch matches `<type>/<slug>` for `<type>` ∈ {`feature`, `bugfix`, `hotfix`, `chore`, `docs`} → strip the prefix; the rest is `<slug>`.
    - Otherwise → ask the user for `<slug>` (with the current branch quoted as context). If the user can't supply one, **skip pre-checks 3 and 4** with a one-line warning (*"No `<slug>` resolved — skipping plan and verification-marker pre-checks."*) and proceed to Push.
 
-   Then read `specs/<slug>/plan.md`. If the file doesn't exist, warn (*"No plan at `specs/<slug>/plan.md` — skipping completeness check."*) and continue to pre-check 4. If it exists, count unchecked items (`- [ ]`) under sections `## Steps` and `## Review follow-ups — *`. **Do NOT count** items under `## Open questions`, `## Risks`, or `## Review decisions (audit)`. If any unchecked items remain — warn the user with the count and the section names, but allow them to continue.
+   Then check completeness. Run the p-tasks gate in `${CLAUDE_SKILL_DIR}/../_shared/ptasks-bridge.md`:
+   - **Legacy mode (p-tasks absent):** read `specs/<slug>/plan.md`. If the file doesn't exist, warn (*"No plan at `specs/<slug>/plan.md` — skipping completeness check."*) and continue to pre-check 4. If it exists, count unchecked items (`- [ ]`) under sections `## Steps` and `## Review follow-ups — *`. **Do NOT count** items under `## Open questions`, `## Risks`, or `## Review decisions (audit)`.
+   - **Canonical mode (p-tasks present):** via the Skill tool, `p-tasks:list <parent>` for the task titled `<slug>`, and count the sub-tasks whose `status` ≠ `done` (these are the open plan steps **and** open review-origin follow-ups — both live as sub-tasks). plan.md holds no `## Steps`, so it is not counted.
+
+   If any incomplete items remain (unchecked lines, or not-done sub-tasks) — warn the user with the count, but allow them to continue.
 
 4. **Verification marker freshness (soft warning).** Compute `<branch-safe>` (current branch with `/` → `__`). Check `.claude/.p-flow-state/<branch-safe>/last-verification`:
    - File missing → warn: *"No verification marker found. Have you run `verification-before-completion`?"*
@@ -67,7 +71,7 @@ task-end deliberately offers no options menu (no "merge / open PR / cleanup / ca
 
    ## What changed
 
-   - <bullet per checked plan step's title>
+   - <bullet per completed step title — legacy: each checked `## Steps` item; canonical: each done sub-task of `<slug>` via the Skill tool `p-tasks:summary <parent>`, which returns done items only>
 
    ## Test plan
 
@@ -116,7 +120,7 @@ task-end deliberately offers no options menu (no "merge / open PR / cleanup / ca
 
     *"Mark the `<slug>` task and its sub-tasks done in p-tasks?"* (Add the Jira warning from the bridge doc if the destination is `jira`.)
 
-    On an explicit **yes**: via the Skill tool, mark the task whose title is exactly `<slug>` `--status done`, **and** mark each of its still-open sub-tasks `--status done` too. p-tasks has **no status cascade** (parent and sub-task statuses are independent), so closing only the parent would leave its sub-tasks dangling `todo`/`in_progress` in `summary`/`next`. Enumerate the still-open sub-tasks with `p-tasks:next --all` filtered to this parent — **not** `p-tasks:summary`, which returns only **done** items and would list nothing to close — then `p-tasks:set <st-id> --status done` for each. (`next --all` excludes a sub-task only if it is itself blocked by an unfinished item; at task-end, with work complete, that is normally moot.)
+    On an explicit **yes**: via the Skill tool, mark the task whose title is exactly `<slug>` `--status done`, **and** mark each of its still-open sub-tasks `--status done` too. p-tasks has **no status cascade** (parent and sub-task statuses are independent), so closing only the parent would leave its sub-tasks dangling `todo`/`in_progress`. Enumerate every sub-task with `p-tasks:list <parent>` (it returns all of them, in order, with status — unlike `p-tasks:summary`, which returns only **done** items), then `p-tasks:set <st-id> --status done` for each one whose `status` ≠ `done`.
 
     On **no**, or if no `<slug>` was resolved: skip. This step never blocks the push or the MR recommendation — those have already happened.
 

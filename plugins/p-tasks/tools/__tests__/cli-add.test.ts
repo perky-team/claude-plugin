@@ -50,6 +50,23 @@ describe('addCommand', () => {
     const doc = readFileSync(join(dir, 'docs', 'tasks', 'tasks.yml'), 'utf-8');
     expect(doc).not.toContain('frobnicate');
   });
+  it('threads --acceptance / --files / --kind / --origin into the created item', async () => {
+    try {
+      await addCommand({ root: dir, args: {
+        _: ['task'], title: 'F', acceptance: 'tests pass',
+        files: 'a.ts,b.ts', kind: 'code', origin: 'plan', json: true,
+      } });
+    } catch (e: any) { expect(e.message).toBe('exit:0'); }
+    const out = JSON.parse(stdoutSpy.mock.calls[0][0]);
+    expect(out).toMatchObject({ acceptance: 'tests pass', files: ['a.ts', 'b.ts'], kind: 'code', origin: 'plan' });
+  });
+  it('rejects an invalid --kind and writes nothing', async () => {
+    try { await addCommand({ root: dir, args: { _: ['task'], title: 'X', kind: 'prose', json: true } }); }
+    catch (e: any) { expect(e.message).toBe('exit:1'); }
+    const out = JSON.parse(stdoutSpy.mock.calls[0][0]);
+    expect(out.error.code).toBe('invalid-kind');
+    expect(readFileSync(join(dir, 'docs', 'tasks', 'tasks.yml'), 'utf-8')).not.toContain('prose');
+  });
   it('happy path: chain blocked-by', async () => {
     try { await addCommand({ root: dir, args: { _: ['task'], title: '1', json: true } }); } catch {}
     try { await addCommand({ root: dir, args: { _: ['task'], title: '2', 'blocked-by': 't-1', json: true } }); } catch {}

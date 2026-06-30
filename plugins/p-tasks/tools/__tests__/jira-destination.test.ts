@@ -93,6 +93,67 @@ describe('jira destination', () => {
     expect(body.outwardIssue.key).toBe('PROJ-2'); // …by PROJ-2
   });
 
+  it('createItem appends the work-item metadata block to the description', async () => {
+    const fake = fakeJira([{ status: 201, body: { id: '7', key: 'PROJ-7' } }]);
+    const dst = createJiraDestination({
+      block: { kind: 'jira', siteUrl: 'https://x', projectKey: 'PROJ', issueTypes: { task: 'Task', subTask: 'Sub-task' }, statusMap: { todo:'To Do',in_progress:'In Progress',done:'Done' }, jql: '' },
+      email: 'a@b.c', token: 't',
+      transport: fake.transport,
+    });
+    const out = await dst.createItem({
+      type: 'task', title: 'New', description: 'human prose', status: 'todo', blockedBy: [],
+      acceptance: 'tests pass', files: ['a.ts', 'b.ts'], origin: 'plan',
+    });
+    expect(out).toMatchObject({ acceptance: 'tests pass', files: ['a.ts', 'b.ts'], origin: 'plan' });
+    // the description sent to Jira contains both the human prose and a delimited block
+    const adfText = JSON.parse(fake.calls[0].body).fields.description.content
+      .flatMap((p: any) => (p.content ?? []).map((n: any) => n.text)).join('');
+    expect(adfText).toContain('human prose');
+    expect(adfText).toContain('p-tasks metadata');
+    expect(adfText).toContain('acceptance: tests pass');
+    expect(adfText).toContain('files: a.ts, b.ts');
+    expect(adfText).toContain('origin: plan');
+  });
+
+  it('listItems parses the metadata block back and recovers clean human description', async () => {
+    const desc = 'human prose\n\n----- p-tasks metadata (managed; edit via /p-tasks:set) -----\nacceptance: tests pass\nfiles: a.ts, b.ts\norigin: plan\n----- end p-tasks metadata -----';
+    const fake = fakeJira([{
+      status: 200, body: { issues: [
+        { id: '1', key: 'PROJ-1', fields: { summary: 'T', description: { content: [{ type: 'paragraph', content: [{ text: desc }] }] }, status: { name: 'To Do' }, issuetype: { name: 'Task' }, issuelinks: [] } },
+      ] },
+    }]);
+    const dst = createJiraDestination({
+      block: { kind: 'jira', siteUrl: 'https://x', projectKey: 'PROJ', issueTypes: { task: 'Task', subTask: 'Sub-task' }, statusMap: { todo:'To Do',in_progress:'In Progress',done:'Done' }, jql: 'project = PROJ' },
+      email: 'a@b.c', token: 't',
+      transport: fake.transport,
+    });
+    const items = await dst.listItems();
+    expect(items[0].description).toBe('human prose');
+    expect(items[0]).toMatchObject({ acceptance: 'tests pass', files: ['a.ts', 'b.ts'], origin: 'plan' });
+  });
+
+  it('updateItem reads-merges-writes the metadata block when setting a meta field', async () => {
+    const existing = 'prose\n\n----- p-tasks metadata (managed; edit via /p-tasks:set) -----\nacceptance: old AC\norigin: plan\n----- end p-tasks metadata -----';
+    const fake = fakeJira([
+      { status: 200, body: { fields: { description: { content: [{ type: 'paragraph', content: [{ text: existing }] }] } } } }, // GET description
+      { status: 204 }, // PUT
+    ]);
+    const dst = createJiraDestination({
+      block: { kind: 'jira', siteUrl: 'https://x', projectKey: 'PROJ', issueTypes: { task: 'Task', subTask: 'Sub-task' }, statusMap: { todo:'To Do',in_progress:'In Progress',done:'Done' }, jql: '' },
+      email: 'a@b.c', token: 't',
+      transport: fake.transport,
+    });
+    await dst.updateItem('PROJ-1', { resolution: 'rejected: dup' });
+    expect(fake.calls.map((c: any) => c.method)).toEqual(['GET', 'PUT']);
+    const adfText = JSON.parse(fake.calls[1].body).fields.description.content
+      .flatMap((p: any) => (p.content ?? []).map((n: any) => n.text)).join('');
+    // preserved prose + existing meta, plus the newly-set field
+    expect(adfText).toContain('prose');
+    expect(adfText).toContain('acceptance: old AC');
+    expect(adfText).toContain('origin: plan');
+    expect(adfText).toContain('resolution: rejected: dup');
+  });
+
   it('createItem returns the new Jira key as id', async () => {
     const fake = fakeJira([{ status: 201, body: { id: '99', key: 'PROJ-9' } }]);
     const dst = createJiraDestination({

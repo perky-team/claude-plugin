@@ -23,7 +23,9 @@ Run a code-quality review on the current branch's diff, triage the findings, and
 Capture:
 
 - **Goal**: one paragraph distilled from `specification.md` "Overview / Problem Statement / Proposed Solution".
-- **What was done**: the list of checked items under `## Steps` in `plan.md` (do not include follow-ups or audit entries).
+- **What was done**: the list of completed steps.
+  - **Legacy mode** (p-tasks absent — run the gate in `${CLAUDE_SKILL_DIR}/../_shared/ptasks-bridge.md`): the checked items under `## Steps` in `plan.md` (do not include follow-ups or audit entries).
+  - **Canonical mode** (p-tasks present): the done sub-tasks of the `<slug>` task — via the Skill tool, `p-tasks:summary <parent>` (which returns done items only). plan.md has no `## Steps`.
 - **Focus areas**: by default — correctness, security, dead code, style consistency. If the user requested specific focus, prepend it.
 - **Diff command**: `git diff $(git merge-base <base> HEAD)...HEAD` where `<base>` is the branch resolved in precondition 1. Use `git rev-parse --abbrev-ref HEAD` to know the current branch.
 
@@ -50,16 +52,20 @@ For each severity, follow exactly this protocol:
 
 - **Nits**: present as a numbered list. Ask once: *"Reply with comma-separated indices to opt-in for fixing, or `none`. Default action is `reject all` with reason 'nit declined'."*
 
-### 5. Update `plan.md`
+### 5. Record the triage outcomes
 
-For each `fix` → append a new `[ ]` step in the `## Review follow-ups — <YYYY-MM-DD>` section. Continue the existing step numbering (never restart). If the section for today's date does not exist — create it just after `## Steps`. Each follow-up:
+**Accepted findings (`fix`):**
 
-```markdown
-N. [ ] Fix: <short summary> (code-review, <severity>)
-   - **Acceptance**: <derived from the agent's suggested fix>
-```
+- **Legacy mode:** append a new `[ ]` step in the `## Review follow-ups — <YYYY-MM-DD>` section of `plan.md`. Continue the existing step numbering (never restart). If the section for today's date does not exist — create it just after `## Steps`. Each follow-up:
 
-For each `defer` / `reject` → append a bullet to `## Review decisions (audit)` (create the section just before `## Open questions` if missing):
+  ```markdown
+  N. [ ] Fix: <short summary> (code-review, <severity>)
+     - **Acceptance**: <derived from the agent's suggested fix>
+  ```
+
+- **Canonical mode:** via the Skill tool, `p-tasks:add sub-task <parent>` with `--title "Fix: <short summary>"`, `--origin code-review:<severity>`, `--acceptance "<derived from the agent's suggested fix>"`, and `--files "<comma list>"` when known. The follow-up is now a sub-task alongside the plan steps — no `## Review follow-ups` section is written to plan.md. (If the destination is `jira`, warn per the bridge doc before creating issues.)
+
+**Deferred / rejected findings** (both modes) → append a bullet to `## Review decisions (audit)` in `plan.md` (create the section just before `## Open questions` if missing). This narrative audit log stays in plan.md regardless of mode:
 
 ```markdown
 - code-review <severity> "<short summary>" — **<deferred|rejected>**: <reason>
@@ -67,7 +73,7 @@ For each `defer` / `reject` → append a bullet to `## Review decisions (audit)`
 
 ### 6. Close the loop
 
-Tell the user: *"Plan updated. New steps: N1, N2, … When ready to fix, say 'continue' and pick them up via `receiving-code-review` (it verifies each finding before implementing or rejecting)."*
+Tell the user the new follow-ups (legacy: the new `## Review follow-ups` step numbers; canonical: the new `code-review:*` sub-task ids/titles) and: *"When ready to fix, say 'continue' and pick them up via `receiving-code-review` (it verifies each finding before implementing or rejecting)."*
 
 ## What this skill does NOT do
 

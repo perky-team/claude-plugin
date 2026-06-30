@@ -19,6 +19,54 @@ function jiraStatusToInternal(name, statusMap) {
   return 'todo'; // unmapped → conservative default
 }
 
+// Jira has no guaranteed custom fields for our work-item metadata, so the
+// optional fields are round-tripped as a clearly-delimited block appended to
+// the issue description. On read this block is best-effort/opaque: it is split
+// off the human description and parsed back when well-formed, but a hand-edited
+// or malformed block is simply ignored (the human text is still recovered).
+const META_FIELDS = ['acceptance', 'files', 'kind', 'origin', 'resolution'];
+const META_START = '----- p-tasks metadata (managed; edit via /p-tasks:set) -----';
+const META_END = '----- end p-tasks metadata -----';
+
+function serializeMeta(item) {
+  const lines = [];
+  for (const k of META_FIELDS) {
+    const v = item[k];
+    if (v === undefined || v === null) continue;
+    if (k === 'files') {
+      if (!Array.isArray(v) || v.length === 0) continue;
+      lines.push(`${k}: ${v.join(', ')}`);
+    } else {
+      if (v === '') continue;
+      lines.push(`${k}: ${String(v).replace(/\r?\n/g, ' ')}`);
+    }
+  }
+  return lines.length === 0 ? '' : `${META_START}\n${lines.join('\n')}\n${META_END}`;
+}
+
+function composeDescription(human, meta) {
+  const block = serializeMeta(meta);
+  const base = (human ?? '').trim();
+  if (!block) return base;
+  return base ? `${base}\n\n${block}` : block;
+}
+
+function splitDescription(text) {
+  const t = text ?? '';
+  const startIdx = t.indexOf(META_START);
+  if (startIdx === -1) return { human: t.trim(), meta: {} };
+  const endIdx = t.indexOf(META_END, startIdx);
+  const block = endIdx === -1 ? t.slice(startIdx + META_START.length) : t.slice(startIdx + META_START.length, endIdx);
+  const meta = {};
+  for (const line of block.split('\n')) {
+    const m = /^\s*([a-zA-Z]+):\s*(.*)$/.exec(line);
+    if (!m || !META_FIELDS.includes(m[1])) continue;
+    if (m[1] === 'files') meta.files = m[2].split(',').map(s => s.trim()).filter(Boolean);
+    else meta[m[1]] = m[2].trim();
+  }
+  return { human: t.slice(0, startIdx).trim(), meta };
+}
+
 export function createJiraDestination({ block, email, token, transport, name = 'jira' }) {
   const http = createHttpClient({ baseUrl: block.siteUrl, email, token, transport });
   const { projectKey, issueTypes, statusMap, jql } = block;
@@ -26,11 +74,13 @@ export function createJiraDestination({ block, email, token, transport, name = '
   function toItem(issue) {
     const it = issue.fields.issuetype?.name;
     const type = it === issueTypes.task ? 'task' : 'sub-task';
+    const { human, meta } = splitDescription(extractAdfText(issue.fields.description));
     const base = {
       id: issue.key,
       type,
       title: issue.fields.summary ?? '',
-      description: extractAdfText(issue.fields.description),
+      description: human,
+      ...meta,
       status: jiraStatusToInternal(issue.fields.status?.name, statusMap),
       // Jira returns only the opposite end of each link; when this issue is
       // blocked it is the inward side, so its blocker is the link's outwardIssue.
@@ -68,7 +118,9 @@ export function createJiraDestination({ block, email, token, transport, name = '
       const out = await createIssue(http, {
         projectKey, issueType,
         summary: input.title,
-        description: input.description ?? '',
+        // Fold the optional work-item fields into the description as a delimited
+        // metadata block (no custom fields assumed).
+        description: composeDescription(input.description ?? '', input),
         parentKey: input.type === 'sub-task' ? input.parentId : undefined,
       });
       // Apply non-default status if requested (single-hop only). A workflow
@@ -90,7 +142,7 @@ export function createJiraDestination({ block, email, token, transport, name = '
       for (const blockerKey of input.blockedBy ?? []) {
         await createBlocksLink(http, { sourceKey: out.key, targetKey: blockerKey });
       }
-      return {
+      const result = {
         id: out.key,
         type: input.type,
         parentId: input.parentId,
@@ -99,13 +151,28 @@ export function createJiraDestination({ block, email, token, transport, name = '
         status,
         blockedBy: input.blockedBy ?? [],
       };
+      for (const k of META_FIELDS) if (input[k] !== undefined) result[k] = input[k];
+      return result;
     },
 
     async updateItem(id, patch) {
-      if ('title' in patch || 'description' in patch) {
+      const metaInPatch = META_FIELDS.some(k => k in patch);
+      const descInPatch = 'description' in patch;
+      if ('title' in patch || descInPatch || metaInPatch) {
         const fpatch = {};
         if (patch.title !== undefined) fpatch.title = patch.title;
-        if (patch.description !== undefined) fpatch.description = patch.description;
+        if (metaInPatch) {
+          // Read the current description so we can preserve the human prose and
+          // any metadata fields this patch does not touch, then re-emit the block.
+          const res = await http.get(`/rest/api/3/issue/${encodeURIComponent(id)}?fields=description`);
+          const cur = res.status === 200 ? splitDescription(extractAdfText(res.body?.fields?.description)) : { human: '', meta: {} };
+          const human = descInPatch ? patch.description : cur.human;
+          const mergedMeta = { ...cur.meta };
+          for (const k of META_FIELDS) if (k in patch) mergedMeta[k] = patch[k];
+          fpatch.description = composeDescription(human, mergedMeta);
+        } else if (descInPatch) {
+          fpatch.description = patch.description;
+        }
         await updateIssueFields(http, id, fpatch);
       }
       if ('status' in patch) {

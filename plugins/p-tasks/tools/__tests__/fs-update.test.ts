@@ -44,4 +44,17 @@ describe('fs destination — updateItem', () => {
     const dst = createFsDestination({ root: dir });
     await expect(dst.updateItem('t-99', { title: 'x' })).rejects.toMatchObject({ code: 'item-not-found' });
   });
+
+  it('patches the optional work-item fields on a sub-task', async () => {
+    const dst = createFsDestination({ root: dir });
+    await dst.updateItem('st-1', {
+      acceptance: 'AC met', files: ['x.ts'], kind: 'non-code',
+      origin: 'code-review:suggestion', resolution: 'rejected: out of scope',
+    });
+    const after = await dst.readItem('st-1');
+    expect(after).toMatchObject({
+      acceptance: 'AC met', files: ['x.ts'], kind: 'non-code',
+      origin: 'code-review:suggestion', resolution: 'rejected: out of scope',
+    });
+  });
 });

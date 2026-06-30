@@ -55,4 +55,22 @@ describe('setCommand', () => {
     const out = JSON.parse(stdoutSpy.mock.calls[0][0]);
     expect(out.blockedBy.sort()).toEqual(['t-1', 't-2']);
   });
+  it('sets the optional work-item fields including --resolution', async () => {
+    try {
+      await setCommand({ root: dir, args: {
+        _: ['t-1'], acceptance: 'AC', files: 'x.ts,y.ts', kind: 'non-code',
+        origin: 'task-review:nit', resolution: 'rejected: cosmetic', json: true,
+      } });
+    } catch (e: any) { expect(e.message).toBe('exit:0'); }
+    const out = JSON.parse(stdoutSpy.mock.calls[0][0]);
+    expect(out).toMatchObject({
+      acceptance: 'AC', files: ['x.ts', 'y.ts'], kind: 'non-code',
+      origin: 'task-review:nit', resolution: 'rejected: cosmetic',
+    });
+  });
+  it('rejects an invalid --kind', async () => {
+    try { await setCommand({ root: dir, args: { _: ['t-1'], kind: 'prose', json: true } }); } catch (e: any) { expect(e.message).toBe('exit:1'); }
+    const out = JSON.parse(stdoutSpy.mock.calls[0][0]);
+    expect(out.error.code).toBe('invalid-kind');
+  });
 });

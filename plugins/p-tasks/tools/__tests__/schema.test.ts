@@ -52,4 +52,39 @@ describe('validateItem', () => {
   it('accepts opaque Jira-key as id when type is provided externally', () => {
     expect(validateItem({ ...valid, id: 'PROJ-15' }).ok).toBe(true);
   });
+
+  describe('optional work-item fields', () => {
+    it('accepts a well-formed full set of optional fields', () => {
+      expect(validateItem({
+        ...valid,
+        acceptance: 'tests pass',
+        files: ['a.ts', 'b.ts'],
+        kind: 'non-code',
+        origin: 'code-review:blocker',
+        resolution: 'rejected: false positive',
+      })).toEqual({ ok: true });
+    });
+    it('accepts items that omit every optional field (backward compatible)', () => {
+      expect(validateItem(valid)).toEqual({ ok: true });
+    });
+    it('rejects a non-string acceptance', () => {
+      expect(validateItem({ ...valid, acceptance: 42 }).ok).toBe(false);
+    });
+    it('rejects files that is not an array', () => {
+      expect(validateItem({ ...valid, files: 'a.ts' }).ok).toBe(false);
+    });
+    it('rejects files with a non-string element', () => {
+      expect(validateItem({ ...valid, files: ['a.ts', 7] }).ok).toBe(false);
+    });
+    it('rejects an unknown kind', () => {
+      expect(validateItem({ ...valid, kind: 'prose' })).toEqual({
+        ok: false,
+        error: expect.stringContaining('kind'),
+      });
+    });
+    it('rejects a non-string origin / resolution', () => {
+      expect(validateItem({ ...valid, origin: {} }).ok).toBe(false);
+      expect(validateItem({ ...valid, resolution: [] }).ok).toBe(false);
+    });
+  });
 });

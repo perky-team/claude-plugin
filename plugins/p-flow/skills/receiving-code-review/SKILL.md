@@ -12,7 +12,9 @@ Treat every review finding as a hypothesis, not a directive. For each one — ve
 
 ## When to use
 
-- Working through a `## Review follow-ups — <date>` item in `specs/<slug>/plan.md` (the primary path — these were written by `requesting-*-review`).
+- Working through a review follow-up created by `requesting-*-review` (the primary path). Run the p-tasks gate in `${CLAUDE_SKILL_DIR}/../_shared/ptasks-bridge.md` to know where it lives:
+  - **Legacy mode** (p-tasks absent) → a `## Review follow-ups — <date>` item in `specs/<slug>/plan.md`.
+  - **Canonical mode** (p-tasks present) → a sub-task of the `<slug>` task with `origin` = `code-review:*` / `task-review:*` (enumerate with `p-tasks:list <parent>` via the Skill tool and filter by `origin`).
 - A PR comment / inline review message lands and you're about to respond or implement.
 - A subagent (or a human reviewer) returns findings and you need to action them.
 
@@ -45,10 +47,12 @@ For each finding, ask:
 - Apply the fix.
 - Run the relevant test (or write one if missing) to confirm the fix works AND nothing regresses.
 - Quote the test pass in your response.
+- **Mark it done.** Legacy mode → check the `## Review follow-ups` item `[x]` in plan.md. Canonical mode → via the Skill tool, `p-tasks:set <st-id> --status done` for the follow-up sub-task.
 
 **Rejecting** a finding:
-- If it's a `## Review follow-ups` item in plan.md → mark the parent step `[x]` AND append a one-line `> Rejected — <evidence-based reason>` immediately below the step. Do NOT add a separate entry to `## Review decisions (audit)` — that section already records the original triage decision from `requesting-code-review`; rejecting on second look is a re-decision, annotated inline at the follow-up.
-- If it's a PR comment / external review → reply with the evidence-based reason. Don't touch plan.md.
+- **Legacy mode** — a `## Review follow-ups` item in plan.md → mark the parent step `[x]` AND append a one-line `> Rejected — <evidence-based reason>` immediately below the step. Do NOT add a separate entry to `## Review decisions (audit)` — that section already records the original triage decision from `requesting-code-review`; rejecting on second look is a re-decision, annotated inline at the follow-up.
+- **Canonical mode** — the follow-up is a sub-task → via the Skill tool, `p-tasks:set <st-id> --status done --resolution "<evidence-based reason>"`. The `resolution` field records the re-decision (it replaces the inline `> Rejected —` annotation); don't write to plan.md.
+- If it's a PR comment / external review → reply with the evidence-based reason. Don't touch plan.md or p-tasks.
 
 **Deferring** a finding (rare — usually means we can't decide yet):
 - Add a `## Review decisions (audit)` bullet using the same format `requesting-code-review` uses — but prefixed `receiving:` so the source is traceable.

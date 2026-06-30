@@ -73,6 +73,14 @@ export function createFsDestination({ root, name = 'fs' }) {
         status: input.status ?? 'todo',
         blockedBy: input.blockedBy ?? [],
       };
+      // Optional work-item fields — persisted only when provided, so items the
+      // caller never sets them on stay byte-identical to the pre-field format.
+      // `files` is normalised to an array when present.
+      if (input.acceptance !== undefined) base.acceptance = input.acceptance;
+      if (input.files !== undefined) base.files = Array.isArray(input.files) ? input.files : [];
+      if (input.kind !== undefined) base.kind = input.kind;
+      if (input.origin !== undefined) base.origin = input.origin;
+      if (input.resolution !== undefined) base.resolution = input.resolution;
 
       if (input.type === 'task') {
         doc.tasks.push({ ...base, subTasks: [] });
@@ -101,8 +109,8 @@ export function createFsDestination({ root, name = 'fs' }) {
       }
       if (!found) throw Object.assign(new Error(`item-not-found: ${id}`), { code: 'item-not-found' });
 
-      for (const k of ['title', 'description', 'status']) {
-        if (k in patch) found[k] = patch[k];
+      for (const k of ['title', 'description', 'status', 'acceptance', 'files', 'kind', 'origin', 'resolution']) {
+        if (k in patch) found[k] = k === 'files' ? (Array.isArray(patch.files) ? patch.files : []) : patch[k];
       }
       if ('blockedBy' in patch) found.blockedBy = patch.blockedBy;
       if ('jiraKeys' in patch) {

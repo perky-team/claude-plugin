@@ -50,4 +50,26 @@ describe('fs destination — createItem', () => {
     await dst.createItem({ type: 'task', title: 'Persist', description: '', status: 'todo', blockedBy: [] });
     expect(readFileSync(join(dir, 'docs', 'tasks', 'tasks.yml'), 'utf-8')).toMatch(/Persist/);
   });
+
+  it('round-trips the optional work-item fields through tasks.yml', async () => {
+    const dst = createFsDestination({ root: dir });
+    await dst.createItem({
+      type: 'task', title: 'P', description: '', status: 'todo', blockedBy: [],
+      acceptance: 'tests X pass', files: ['a.ts', 'b.ts'], kind: 'code', origin: 'plan',
+    });
+    const reread = createFsDestination({ root: dir });
+    const got = await reread.readItem('t-1');
+    expect(got).toMatchObject({
+      acceptance: 'tests X pass', files: ['a.ts', 'b.ts'], kind: 'code', origin: 'plan',
+    });
+  });
+
+  it('omits optional fields entirely when not provided (no empty keys written)', async () => {
+    const dst = createFsDestination({ root: dir });
+    await dst.createItem({ type: 'task', title: 'Bare', description: '', status: 'todo', blockedBy: [] });
+    const yml = readFileSync(join(dir, 'docs', 'tasks', 'tasks.yml'), 'utf-8');
+    expect(yml).not.toMatch(/acceptance:/);
+    expect(yml).not.toMatch(/\bkind:/);
+    expect(yml).not.toMatch(/origin:/);
+  });
 });

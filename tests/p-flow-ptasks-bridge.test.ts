@@ -42,9 +42,11 @@ describe('p-flow ↔ p-tasks bridge', () => {
     expect(doc).toContain('Skill tool');
     expect(doc).toContain('p-tasks:add');
     expect(doc).toContain('p-tasks:set');
-    // `next --all` is the enumeration command — guards against a revert to the
-    // wrong `summary`-based enumeration (summary returns only done items).
     expect(doc).toContain('p-tasks:next');
+    // `list` is the canonical whole-plan walk/enumeration command — guards
+    // against a revert to `summary` (done only) or `next` (open only) when the
+    // full step list with statuses is needed.
+    expect(doc).toContain('p-tasks:list');
     // "Absent → silent no-op" — p-flow stays inert when p-tasks isn't present.
     expect(doc).toContain('Absent');
     expect(doc).toContain('silent');
@@ -54,6 +56,27 @@ describe('p-flow ↔ p-tasks bridge', () => {
     for (const rel of HOST_SKILLS) {
       expect(read(rel)).toContain('_shared/ptasks-bridge.md');
     }
+  });
+
+  it('canonical store: the bridge pins the "p-tasks owns the step list, plan.md keeps only narrative" rule', () => {
+    const doc = read(BRIDGE_DOC);
+    // p-tasks is the single source of truth for steps when present…
+    expect(doc).toMatch(/single canonical store|canonical work-item store|owns WORK ITEMS/i);
+    // …and plan.md no longer carries a Steps checklist.
+    expect(doc).toContain('no `## Steps`');
+    // the narrative-only sections that remain in plan.md
+    expect(doc).toContain('## Risks');
+    expect(doc).toContain('## Open questions');
+    expect(doc).toContain('## Review decisions (audit)');
+  });
+
+  it('canonical store: the slim plan template carries no `## Steps` (it lives in p-tasks)', () => {
+    const slim = read('plugins/p-flow/skills/_shared/templates/plan-tasks.template.md');
+    expect(slim).not.toContain('## Steps');
+    expect(slim).toContain('## Risks');
+    expect(slim).toContain('## Open questions');
+    // writing-plan must reference the slim template so it is actually used.
+    expect(read('plugins/p-flow/skills/writing-plan/SKILL.md')).toContain('plan-tasks.template.md');
   });
 
   it('4. decoupling: no p-flow skill calls p-tasks’ CLI directly', () => {

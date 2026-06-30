@@ -46,14 +46,17 @@ This pattern (inline templates rather than registered subagents) means the revie
 
 ## Integration with p-tasks (optional)
 
-If the [`p-tasks`](../p-tasks/) tracker is initialised in the same repo (detected by `docs/tasks/.ptasks.json`), p-flow offers two opt-in mirror points:
+If the [`p-tasks`](../p-tasks/) tracker is initialised in the same repo (detected by `docs/tasks/.ptasks.json`), it becomes the **single canonical store** for the task/step list and statuses — eliminating the old duplication where the step list lived both in `plan.md` and in p-tasks. plan.md then keeps only the narrative that was never a work item (`## Risks`, `## Open questions`, `## Review decisions (audit)`); the `## Steps` checklist is gone.
 
-| Skill | Offer |
+| Skill | Behaviour when p-tasks is present |
 |---|---|
-| `writing-plan` | After the plan is approved — create a p-tasks `task` named `<slug>` plus one `sub-task` per `## Steps` item. |
-| `task-end` | After the MR recommendation — mark the `<slug>` task **and its sub-tasks** `done` (p-tasks has no status cascade, so both are closed explicitly). |
+| `writing-plan` | Creates a p-tasks `task` named `<slug>` plus one `sub-task` per plan step (with `acceptance` / `files` / `kind` / `origin plan`), and writes a slim plan.md with **no `## Steps`**. |
+| `executing-plan` | Walks `p-tasks:list <parent>` in document order, classifies each by `kind`, verifies, and marks each done — no plan.md checkbox edits. |
+| `requesting-code-review` / `requesting-task-review` | Each accepted finding becomes a `sub-task` with `origin code-review:<severity>` / `task-review:<severity>`; defer/reject still log to plan.md `## Review decisions (audit)`. |
+| `receiving-code-review` | Fix → implement then mark the sub-task done; reject → `set --status done --resolution "<reason>"`. |
+| `task-end` | Completeness count = not-done sub-tasks; "What changed" = done sub-task titles; on finalize, close the parent and every remaining sub-task explicitly. |
 
-This is a **soft, one-way** integration: p-flow knows about p-tasks, not the reverse, and there is **no plugin-manifest dependency** — each plugin installs and runs standalone. When p-tasks is absent, these offers never appear. The bridge dispatches through the Skill tool (`p-tasks:add` / `p-tasks:set` / `p-tasks:next`), never p-tasks' CLI, so it respects per-plugin isolation. Every action is an explicit offer (and warns before creating real Jira issues). Contract: `skills/_shared/ptasks-bridge.md`.
+This is a **soft, one-way** integration: p-flow knows about p-tasks, not the reverse, and there is **no plugin-manifest dependency** — each plugin installs and runs standalone. When p-tasks is **absent**, behaviour is byte-for-byte the legacy plan.md-only flow (the `## Steps` checklist). The bridge dispatches through the Skill tool (`p-tasks:add` / `p-tasks:set` / `p-tasks:list` / `p-tasks:summary` / `p-tasks:next`), never p-tasks' CLI, so it respects per-plugin isolation. Driving an `fs` store is part of the normal flow; creating or updating real Jira issues warns first and proceeds only on an explicit yes. Contract: `skills/_shared/ptasks-bridge.md`.
 
 ## Integration with p-wiki (optional)
 

@@ -1,6 +1,6 @@
 ---
 name: executing-plan
-description: Use after `specs/<slug>/plan.md` is approved and you are about to implement it. Drives the `## Steps` in order — one step at a time — invoking test-driven-development for code steps and verification-before-completion after each, checking off `- [x]` only when that step's acceptance criterion is met. The execution loop between writing-plan and task-end.
+description: Use after the plan is approved and you are about to implement it. Drives the steps in order — one at a time — invoking test-driven-development for code steps and verification-before-completion after each, marking a step done only when its acceptance criterion is met. Steps live in plan.md `## Steps` (legacy) or, when p-tasks is present, as its sub-tasks. The execution loop between writing-plan and task-end.
 allowed-tools: Read Edit Bash Glob Grep
 ---
 
@@ -12,8 +12,8 @@ Walk the approved plan one step at a time. Implement → verify → check off. N
 
 ## When to use
 
-- `specs/<slug>/plan.md` exists, its `## Steps` are approved, and you're about to write code (or do the work, for a generic plan).
-- Resuming a partially-done plan — pick up at the first unchecked `## Steps` item.
+- The plan is approved and you're about to write code (or do the work, for a generic plan). The steps are either the `## Steps` checklist in `specs/<slug>/plan.md` (legacy) or the `<slug>` task's sub-tasks in p-tasks (canonical — see "Mode" below).
+- Resuming a partially-done plan — pick up at the first step that isn't done (first unchecked `## Steps` item, or first not-`done` sub-task).
 
 **Don't use when:**
 
@@ -25,15 +25,25 @@ Walk the approved plan one step at a time. Implement → verify → check off. N
 - `specs/<slug>/plan.md` — required. Resolve `<slug>` from the branch (`<type>/<slug>`); if the branch doesn't match, ask the user. If the file is missing, stop and point to `writing-plan`.
 - `specs/<slug>/specification.md` and `feature.feature` — read for acceptance context if present.
 
+## Mode — where the step list lives
+
+Run the p-tasks gate in `${CLAUDE_SKILL_DIR}/../_shared/ptasks-bridge.md`:
+
+- **p-tasks absent (legacy mode)** → the step list is the `## Steps` checklist in `plan.md`. Walk it as described below, checking off `- [x]` in plan.md. Behaviour is unchanged from before the bridge existed.
+- **p-tasks present (canonical mode)** → the step list lives in p-tasks. Resolve the parent task by title == `<slug>` and enumerate its sub-tasks **in document order** via the Skill tool: `p-tasks:list <parent>`. Each sub-task is a step, carrying `status`, `acceptance`, `files`, `kind`, and `origin`. Work only the **`origin: plan`** sub-tasks here; sub-tasks with `origin: code-review:*` / `task-review:*` are review follow-ups owned by `receiving-code-review`. There is **no `## Steps`** in plan.md — do not look for one and do not write checkboxes there.
+
+The per-step loop below is identical in both modes except for two things: how you read the next step (a `- [ ]` line vs. the next not-`done` sub-task from `p-tasks:list`), how you classify it (sub-bullets/AC vs. the sub-task's `kind`), and how you record completion (check `- [x]` in plan.md vs. `p-tasks:set <st-id> --status done`).
+
 ## Procedure
 
-Process `## Steps` items **in order**, top to bottom. For each unchecked `- [ ]` step:
+Process the steps **in order**, top to bottom. For each step that is not yet done (a `- [ ]` item in legacy mode; the next sub-task whose `status` ≠ `done` in canonical mode):
 
 1. **Announce the step.** State its number and title so the user can follow along.
 
 2. **Classify the step.**
-   - **Code step** — the step has `Test first` / `Implement` / `Verify` sub-bullets (TDD plan), or its acceptance criterion describes function / endpoint / class / handler / script behaviour → go through `test-driven-development` (invoke it via the Skill tool) BEFORE writing any production code.
-   - **Non-code step** — docs / config / research (generic plan) → do the work directly; no TDD.
+   - **Legacy mode:** the step is a **code step** if it has `Test first` / `Implement` / `Verify` sub-bullets (TDD plan) or its acceptance criterion describes function / endpoint / class / handler / script behaviour; otherwise it's a **non-code step** (docs / config / research).
+   - **Canonical mode:** read the sub-task's `kind` — `code` → code step, `non-code` → non-code step. An absent `kind` defaults to `code`. (Its `acceptance` is the criterion; `files` lists the expected files.)
+   - **Code step** → go through `test-driven-development` (invoke it via the Skill tool) BEFORE writing any production code. **Non-code step** → do the work directly; no TDD.
 
 3. **Implement to the step's acceptance criterion.** Do only what this step asks. Don't pull work forward from later steps.
 
@@ -44,21 +54,23 @@ Process `## Steps` items **in order**, top to bottom. For each unchecked `- [ ]`
      - **No test suite detected** → there's nothing to run; fall back to confirming the step's own acceptance criterion directly (as for a non-code step) and say so explicitly.
    - **Non-code step** (docs / config / research) → confirm the step's acceptance criterion is met directly — the file/section exists, the command's output matches, etc. Quote the evidence. No test-suite run.
 
-5. **Check off the step.** Edit `plan.md` to change this item's `- [ ]` to `- [x]`. Touch ONLY this step's checkbox — don't reword the step, don't reorder, don't rename canonical sections.
+5. **Record completion.**
+   - **Legacy mode:** edit `plan.md` to change this item's `- [ ]` to `- [x]`. Touch ONLY this step's checkbox — don't reword the step, don't reorder, don't rename canonical sections.
+   - **Canonical mode:** via the Skill tool, `p-tasks:set <st-id> --status done` for the sub-task you just completed. Make **no** checkbox edits to plan.md (there are none).
 
 6. **Pause at natural checkpoints.** After a step that completes a coherent unit of behaviour, briefly tell the user what's done and what's next. Don't silently churn through all 15 steps without a word.
 
-When every `## Steps` item is `- [x]`:
+When every step is done (every `## Steps` item is `- [x]` in legacy mode; every sub-task's `status` is `done` per `p-tasks:list <parent>` in canonical mode):
 
 7. **Hand off.** Tell the user the plan is fully implemented and verified. Suggest the next moves: `requesting-code-review` / `requesting-task-review` for a review pass, then `/p-flow:task-end` to push and recommend an MR. Do not invoke those yourself — they're user-triggered.
 
 ## Hard rules
 
 - **In order, one at a time.** No skipping ahead, no batching several steps before verifying.
-- **Check off only on green.** A `- [x]` means the step's acceptance criterion was met — for a code step, that includes a passing `verification-before-completion` (full suite green, no regressions). Never check off on intuition.
+- **Mark done only on green.** A `- [x]` (legacy) or a `--status done` (canonical) means the step's acceptance criterion was met — for a code step, that includes a passing `verification-before-completion` (full suite green, no regressions). Never mark done on intuition.
 - **Failure routes to `systematic-debugging`.** Never paper over a failing verification to keep moving.
-- **Only `## Steps` is this skill's domain.** `## Review follow-ups` items belong to `receiving-code-review` (they need verify-the-finding-first). Don't execute them here.
-- **Canonical plan.md sections are sacred.** Edit checkboxes only; never rename or reorder `## Steps`, `## Review follow-ups — <date>`, `## Review decisions (audit)`, `## Open questions`, `## Risks`.
+- **Only the plan steps are this skill's domain.** Review follow-ups belong to `receiving-code-review` (they need verify-the-finding-first): in legacy mode that's `## Review follow-ups` items; in canonical mode it's sub-tasks with `origin` = `code-review:*` / `task-review:*`. Don't execute those here — work only the `origin: plan` steps.
+- **Canonical plan.md sections are sacred.** In legacy mode edit checkboxes only; never rename or reorder `## Steps`, `## Review follow-ups — <date>`, `## Review decisions (audit)`, `## Open questions`, `## Risks`. In canonical mode plan.md has no `## Steps` — never add one; the step list lives in p-tasks.
 
 ## Red flags — STOP
 

@@ -49,16 +49,19 @@ Same severity-aware protocol as `requesting-code-review` (§4). The three severi
 - "partial AC" / "partial scenario" / "unchecked low-priority step" → severity **suggestion**, batch with indices.
 - "scope creep" → severity **suggestion** as well (so it lands in the audit log on `defer`/`reject` and can be converted to a follow-up on `fix`). Default action: `defer` with reason "acknowledged" if the user replies with `none`.
 
-For each triage outcome:
+For each triage outcome (mode resolved by the p-tasks gate in `${CLAUDE_SKILL_DIR}/../_shared/ptasks-bridge.md`, exactly as in `requesting-code-review` §5):
 
-- `fix` → append `[ ]` step in `## Review follow-ups — <YYYY-MM-DD>` with continuing numbering. Format:
+- `fix`:
+  - **Legacy mode** → append `[ ]` step in `## Review follow-ups — <YYYY-MM-DD>` with continuing numbering. Format:
 
-```markdown
-N. [ ] Fix: <short summary> (task-review, <severity>)
-   - **Acceptance**: <derived from the missing AC / scenario / step>
-```
+    ```markdown
+    N. [ ] Fix: <short summary> (task-review, <severity>)
+       - **Acceptance**: <derived from the missing AC / scenario / step>
+    ```
 
-- `defer` / `reject` → audit bullet:
+  - **Canonical mode** (p-tasks present) → via the Skill tool, `p-tasks:add sub-task <parent>` with `--title "Fix: <short summary>"`, `--origin task-review:<severity>`, and `--acceptance "<derived from the missing AC / scenario / step>"`. No `## Review follow-ups` section is written. (Warn per the bridge doc before creating Jira issues.)
+
+- `defer` / `reject` (both modes) → audit bullet in `## Review decisions (audit)`:
 
 ```markdown
 - task-review <severity> "<short summary>" — **<deferred|rejected>**: <reason>

@@ -38,56 +38,68 @@ beforeEach(() => {
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 describe('p-flow → p-tasks bridge recipe (real CLI)', () => {
-  it('create → no-cascade → enumerate-open → close all, end-to-end', () => {
+  it('create-with-fields → walk via list → no-cascade → close all, end-to-end', () => {
     const SLUG = 'demo-feature';
 
     // --- Setup: the marker the bridge gate keys on is real + CLI-produced ---
     expect(ptasks(dir, ['init']).status).toBe(0);
     expect(existsSync(join(dir, 'docs', 'tasks', '.ptasks.json'))).toBe(true);
 
-    // --- writing-plan recipe: task titled exactly <slug> + one sub-task per step ---
+    // --- writing-plan recipe: task titled exactly <slug> + one sub-task per step,
+    //     each carrying acceptance / files / kind / origin (the canonical fields) ---
     const task = ptasks(dir, ['add', 'task', '--title', SLUG]);
     expect(task.status).toBe(0);
     expect(task.out).toMatchObject({ id: 't-1', type: 'task', status: 'todo' });
     expect(task.out.title).toBe(SLUG); // join key: byte-for-byte == slug
 
-    for (const title of ['Step 1: scaffold', 'Step 2: implement', 'Step 3: verify']) {
-      expect(ptasks(dir, ['add', 'sub-task', 't-1', '--title', title]).status).toBe(0);
+    const steps = [
+      { title: 'Step 1: scaffold', kind: 'code', acceptance: 'module exists' },
+      { title: 'Step 2: implement', kind: 'code', acceptance: 'tests pass' },
+      { title: 'Step 3: document', kind: 'non-code', acceptance: 'README updated' },
+    ];
+    for (const s of steps) {
+      const r = ptasks(dir, ['add', 'sub-task', 't-1', '--title', s.title, '--kind', s.kind, '--acceptance', s.acceptance, '--origin', 'plan']);
+      expect(r.status).toBe(0);
+      expect(r.out).toMatchObject({ kind: s.kind, acceptance: s.acceptance, origin: 'plan' });
     }
-    // title lands in the store verbatim
     expect(readFileSync(join(dir, 'docs', 'tasks', 'tasks.yml'), 'utf-8')).toContain(`title: ${SLUG}`);
 
-    // all four items open
-    let open = ptasks(dir, ['next', '--all']).out.items;
-    expect(open.map((i: any) => i.id).sort()).toEqual(['st-1', 'st-2', 'st-3', 't-1']);
-    expect(open.every((i: any) => i.status !== 'done')).toBe(true);
+    // --- executing-plan recipe: walk `list <parent>` in document order, classify by kind ---
+    const walk = ptasks(dir, ['list', 't-1']).out.items;
+    expect(walk.map((i: any) => i.id)).toEqual(['st-1', 'st-2', 'st-3']); // document order
+    expect(walk.map((i: any) => i.kind)).toEqual(['code', 'code', 'non-code']);
+    expect(walk.every((i: any) => i.status === 'todo')).toBe(true);
 
-    // --- No-cascade guard (load-bearing) ---
+    // --- review recipe: an accepted finding is a sub-task with origin code-review:* ---
+    const finding = ptasks(dir, ['add', 'sub-task', 't-1', '--title', 'Fix: null check', '--origin', 'code-review:blocker', '--acceptance', 'guards null']);
+    expect(finding.out).toMatchObject({ id: 'st-4', origin: 'code-review:blocker' });
+    // receiving-code-review reject path: close with a resolution instead of an inline note
+    expect(ptasks(dir, ['set', 'st-4', '--status', 'done', '--resolution', 'rejected: false positive']).status).toBe(0);
+    expect(ptasks(dir, ['list', 't-1']).out.items.find((i: any) => i.id === 'st-4'))
+      .toMatchObject({ status: 'done', resolution: 'rejected: false positive' });
+
+    // --- No-cascade guard (load-bearing for task-end) ---
     expect(ptasks(dir, ['set', 't-1', '--status', 'done']).status).toBe(0);
-    open = ptasks(dir, ['next', '--all']).out.items;
-    const subtasks = open.filter((i: any) => i.parentId === 't-1');
-    // parent done, but its three sub-tasks are STILL todo — closing a parent
-    // does NOT cascade. If p-tasks ever adds cascade, this fails on purpose.
-    expect(subtasks.map((i: any) => i.id).sort()).toEqual(['st-1', 'st-2', 'st-3']);
-    expect(subtasks.every((i: any) => i.status === 'todo')).toBe(true);
+    const afterParentClose = ptasks(dir, ['list', 't-1']).out.items.filter((i: any) => ['st-1', 'st-2', 'st-3'].includes(i.id));
+    // parent done, but its plan sub-tasks are STILL todo — closing a parent does
+    // NOT cascade. If p-tasks ever adds cascade, this fails on purpose.
+    expect(afterParentClose.every((i: any) => i.status === 'todo')).toBe(true);
 
-    // --- Enumeration-command guard (defends the corrected bridge prose) ---
-    // `summary` is the WRONG command to find open sub-tasks — it lists only done.
-    expect(ptasks(dir, ['summary', 't-1']).out.items).toEqual([]);
-    // `next --all` is the RIGHT one — it surfaces the open sub-tasks to close.
-    expect(subtasks.length).toBe(3);
+    // --- Enumeration-command guard (defends the bridge prose) ---
+    // `summary` returns ONLY done items — wrong for finding what's left to close.
+    expect(ptasks(dir, ['summary', 't-1']).out.items.map((i: any) => i.id)).toEqual(['st-4']);
+    // `list` returns ALL of them with status — the right tool to drive the close loop.
+    const toClose = ptasks(dir, ['list', 't-1']).out.items.filter((i: any) => i.status !== 'done');
+    expect(toClose.map((i: any) => i.id).sort()).toEqual(['st-1', 'st-2', 'st-3']);
 
-    // --- task-end recipe: close each open sub-task surfaced by next --all ---
-    for (const id of ['st-1', 'st-2', 'st-3']) {
-      expect(ptasks(dir, ['set', id, '--status', 'done']).status).toBe(0);
+    // --- task-end recipe: close each remaining sub-task surfaced by list ---
+    for (const i of toClose) {
+      expect(ptasks(dir, ['set', i.id, '--status', 'done']).status).toBe(0);
     }
-    // fully-closed end state: nothing open, all sub-tasks done
-    expect(ptasks(dir, ['next', '--all']).out.items).toEqual([]);
-    expect(ptasks(dir, ['summary', 't-1']).out.items.map((i: any) => i.id).sort())
-      .toEqual(['st-1', 'st-2', 'st-3']);
+    // fully-closed end state: every sub-task done
+    expect(ptasks(dir, ['list', 't-1']).out.items.every((i: any) => i.status === 'done')).toBe(true);
 
     // --- Title-resolution sanity: the closed task resolves by slug, unambiguously ---
-    const summary = ptasks(dir, ['summary']).out.items;
-    expect(summary).toEqual([{ id: 't-1', title: SLUG }]);
+    expect(ptasks(dir, ['summary']).out.items).toEqual([{ id: 't-1', title: SLUG }]);
   });
 });

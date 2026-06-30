@@ -1,6 +1,6 @@
 import yaml from 'js-yaml';
 
-const ITEM_KEY_ORDER = ['id', 'title', 'description', 'status', 'blockedBy', 'jiraKeys', 'subTasks'];
+const ITEM_KEY_ORDER = ['id', 'title', 'description', 'status', 'acceptance', 'files', 'kind', 'origin', 'resolution', 'blockedBy', 'jiraKeys', 'subTasks'];
 
 function orderItem(item) {
   const out = {};
