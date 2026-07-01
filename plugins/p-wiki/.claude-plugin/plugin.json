@@ -1,6 +1,6 @@
 {
   "name": "p-wiki",
-  "version": "4.12.1",
+  "version": "4.12.2",
   "description": "Persistent markdown knowledge wiki under docs/wiki/, with bundled pwiki CLI. Skills: init, ingest, compile, query, lint, reconcile, sync.",
   "author": {
     "name": "Andrey Sukharev",
