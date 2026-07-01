@@ -17,7 +17,7 @@ describe('buildBundle + round-trip', () => {
     writeFileSync(join(root, 'docs', 'wiki', 'raw', 'articles', 'skip.md'), PAGE('skip'));
 
     const fs = createFsDestination({ root });
-    const bundle = buildBundle(fs);
+    const bundle = await buildBundle(fs);
     expect(bundle.schema).toBe(1);
     expect(bundle.pages.map(p => p.id).sort()).toEqual(['a']); // raw/ excluded
 

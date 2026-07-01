@@ -536,7 +536,7 @@ try {
     }
     const r = await dest.regenerateIndex();
     const root = findWikiRoot(process.cwd());
-    const bundle = buildBundle(dest);
+    const bundle = await buildBundle(dest);
     writeFileSync(join(root, 'docs', 'wiki', 'index.json'), JSON.stringify(bundle, null, 2) + '\n', 'utf-8');
     emitJson(r, 0);
   }
@@ -544,9 +544,9 @@ try {
   if (command === 'reindex') {
     const res = resolveDestination({ cwd: process.cwd(), transport: makeRealTransport() });
     if (!res) die('not inside a p-wiki repo', 1);
-    const idx = res.primary.regenerateIndex();                       // writes index.md
+    const idx = await res.primary.regenerateIndex();                       // writes index.md
     const root = findWikiRoot(process.cwd());
-    const bundle = buildBundle(res.primary);
+    const bundle = await buildBundle(res.primary);
     writeFileSync(join(root, 'docs', 'wiki', 'index.json'), JSON.stringify(bundle, null, 2) + '\n', 'utf-8');
     emitJson({ index: idx, bundle: { pages: bundle.pages.length, path: 'docs/wiki/index.json' } });
   }

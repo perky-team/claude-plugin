@@ -7,12 +7,12 @@ const enc = encodeURIComponent;
 const PROFILES = {
   gitlab: {
     url: (c) => `${stripSlash(c.baseUrl ?? 'https://gitlab.com')}/api/v4/projects/${enc(c.project)}/repository/files/${enc(c.indexPath ?? 'docs/wiki/index.json')}?ref=${enc(c.ref ?? 'main')}`,
-    header: (c, env) => { const t = env[c.tokenEnv ?? 'PWIKI_GITLAB_TOKEN']; return t ? { 'PRIVATE-TOKEN': t } : {}; },
+    header: (c, env) => { const t = env['PWIKI_GITLAB_TOKEN']; return t ? { 'PRIVATE-TOKEN': t } : {}; },
     base64: true,
   },
   github: {
     url: (c) => `${stripSlash(c.apiBaseUrl ?? 'https://api.github.com')}/repos/${c.owner}/${c.repo}/contents/${c.indexPath ?? 'docs/wiki/index.json'}${c.ref ? `?ref=${enc(c.ref)}` : ''}`,
-    header: (c, env) => { const t = env[c.tokenEnv ?? 'PWIKI_GITHUB_TOKEN']; return t ? { Authorization: `Bearer ${t}` } : {}; },
+    header: (c, env) => { const t = env['PWIKI_GITHUB_TOKEN']; return t ? { Authorization: `Bearer ${t}` } : {}; },
     base64: true,
   },
   http: {
