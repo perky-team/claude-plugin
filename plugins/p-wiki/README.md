@@ -42,6 +42,8 @@ After edits, run `/reload-plugins` inside Claude Code to pick them up without re
 | `/p-wiki:reconcile [path]` | Resolves conflict callouts and stale pages: re-merges a derived page with its current sources and removes the superseded callout. Genuine conflicts are left flagged for a human. |
 | `/p-wiki:sync` | Syncs the primary destination to every configured mirror (one-way primary → mirrors, idempotent). No-op when no mirrors are configured. |
 
+**CLI-only command** (no `/p-wiki:` slash wrapper): `pwiki reindex` — regenerates `docs/wiki/index.md` and writes the `docs/wiki/index.json` bundle that git/HTTP read-only sources consume. Run it as `node "${CLAUDE_PLUGIN_ROOT}/tools/pwiki.mjs" reindex` (or wire it to a pre-push hook) before publishing. See [Publishing a bundle for consumption](#publishing-a-bundle-for-consumption).
+
 ## Storage backends
 
 A wiki can be stored on the **filesystem** (default — `docs/wiki/`) or in **Confluence Cloud**. The choice is made at `/p-wiki:init` time and recorded in `docs/wiki/.pwiki.json`. Skills don't branch on the backend; the bundled CLI dispatches transparently, so `compile`, `query`, `lint`, etc. work the same either way.
