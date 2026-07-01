@@ -1,6 +1,6 @@
 {
   "name": "p-flow",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "Disciplined task development flow for Claude Code: secrets deny-list, Conventional Commits + <type>/<slug> branches, spec templates, and a skill stack for brainstorm → plan → execute → TDD → verify → debug → review → push. Commands: init, task-start, task-end. Skills: using-p-flow, init, task-brainstorming, writing-plan, executing-plan, subagent-driven-development, test-driven-development, verification-before-completion, systematic-debugging, requesting-code-review, requesting-task-review, receiving-code-review, using-git-worktrees, writing-skills. Optional one-way bridges when present: p-tasks (canonical step store — sub-tasks replace plan.md's ## Steps; legacy flow when absent), p-wiki (query/compile knowledge), p-graph (impact analysis). task-brainstorming can consult external prior art (context7/deep-research/web) when a design choice warrants it. Discoverable via SessionStart hook. See plugins/p-flow/CLAUDE.md for contributor docs.",
   "author": {
     "name": "Andrey Sukharev",
