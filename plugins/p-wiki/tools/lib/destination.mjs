@@ -2,6 +2,7 @@ import { resolve } from 'node:path';
 import { findWikiRoot } from './paths.mjs';
 import { createFsDestination } from './destinations/fs.mjs';
 import { createConfluenceDestination } from './destinations/confluence.mjs';
+import { createHttpBundleSource } from './destinations/http-bundle.mjs';
 import { readConfig, validateConfig } from './config.mjs';
 
 /**
@@ -31,6 +32,9 @@ function makeDestination(name, block, root, env) {
   if (block.kind === 'confluence') {
     if (env._spyConfluenceFactory) env._spyConfluenceFactory(name);
     return createConfluenceDestination({ root, destinationConfig: block, transport: env.transport });
+  }
+  if (block.kind === 'gitlab' || block.kind === 'github' || block.kind === 'http') {
+    return createHttpBundleSource({ kind: block.kind, destinationConfig: block, transport: env.transport, env: process.env });
   }
   throw new Error(`unknown destination kind: ${block.kind}`);
 }

@@ -20,4 +20,7 @@ describe('CLI error mapping', () => {
   it('unknown → internal', () => {
     expect(mapErrorToCode({})).toBe('internal');
   });
+  it('maps err.code=bundle-invalid', () => {
+    expect(mapErrorToCode({ code: 'bundle-invalid' })).toBe('bundle-invalid');
+  });
 });

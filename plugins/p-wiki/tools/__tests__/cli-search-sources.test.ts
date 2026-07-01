@@ -55,6 +55,51 @@ describe('pwiki search — union over sources (FS primary + FS source)', () => {
   });
 });
 
+describe('pwiki search — gitlab bundle source unions with fs primary (in-process)', () => {
+  let dir: string;
+  let cwd: string;
+  let exitSpy: any;
+  let stdoutSpy: any;
+  let out: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'pwiki-search-gitlab-'));
+    mkdirSync(join(dir, 'docs', 'wiki', 'pages', 'concept'), { recursive: true });
+    writeFileSync(join(dir, 'docs', 'wiki', 'CLAUDE.md'), '# rules');
+    writeFileSync(join(dir, 'docs', 'wiki', 'pages', 'concept', 'kafka.md'), PAGE('kafka', 'Kafka'));
+    writeFileSync(join(dir, 'docs', 'wiki', '.pwiki.json'), JSON.stringify({
+      primary: 'fs', mirrors: [], sources: ['git'],
+      destinations: {
+        fs: { kind: 'fs' },
+        git: { kind: 'gitlab', project: 'g/p' },
+      },
+    }), 'utf-8');
+    cwd = process.cwd();
+    process.chdir(dir);
+    out = '';
+    exitSpy = vi.spyOn(process, 'exit').mockImplementation(((code?: number) => { throw new Error(`exit:${code ?? 0}`); }) as any);
+    stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation(((s: string) => { out += s; return true; }) as any);
+  });
+  afterEach(() => {
+    process.chdir(cwd);
+    rmSync(dir, { recursive: true, force: true });
+    exitSpy.mockRestore();
+    stdoutSpy.mockRestore();
+  });
+
+  it('unions a gitlab bundle source with the fs primary', async () => {
+    const BUNDLE = { schema: 1, generated: '2026-07-01', wikiRoot: 'docs/wiki', pages: [
+      { type: 'concept', id: 'shared', path: 'docs/wiki/pages/concept/shared.md',
+        frontmatter: { id: 'shared', type: 'concept', title: 'Shared Kafka', tags: [] }, body: '# Shared Kafka' } ] };
+    const b64 = Buffer.from(JSON.stringify(BUNDLE), 'utf-8').toString('base64');
+    const transport = async () => ({ status: 200, headers: {}, body: { content: b64, encoding: 'base64' } });
+    try { await searchCommand({ _: ['kafka'], format: 'json' }, { transport }); }
+    catch (e: any) { expect(e.message).toBe('exit:0'); }
+    const json = JSON.parse(out);
+    expect(json.results.some((x: any) => x.source === 'git')).toBe(true);
+    expect(json.warnings).toEqual([]);
+  });
+});
+
 describe('pwiki search — a failing source becomes a warning (in-process)', () => {
   let dir: string;
   let cwd: string;

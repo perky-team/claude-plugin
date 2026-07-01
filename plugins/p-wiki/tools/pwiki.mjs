@@ -17,6 +17,7 @@ import { syncToMirror } from './lib/sync.mjs';
 const VERSION = '3.3.0';
 
 export function mapErrorToCode(err) {
+  if (err?.code === 'bundle-invalid') return 'bundle-invalid';
   if (err?.message && /invalid \.pwiki\.json/.test(err.message)) return 'config-invalid';
   const s = err?.status;
   if (s === 401 || s === 403) return 'auth-failed';
