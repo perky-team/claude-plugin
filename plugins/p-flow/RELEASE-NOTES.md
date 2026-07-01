@@ -3,6 +3,13 @@
 > Marketplace tag → p-flow plugin version → date → headline.
 > Authored 2026-05-27; backfilled from `v4.6.0` onward (the first p-flow release on the marketplace was `v3.1.0` with `plugins/p-flow 0.1.0` — a minimal `init` skill; see `git log v4.5.0..v4.6.0 -- plugins/p-flow/`).
 
+## v5.8.1 — `plugins/p-flow 1.4.1` — 2026-07-01 — hook comment cleanup
+
+- `hooks/session-start`: dropped the external `obra/superpowers` issue link from the
+  bash-heredoc-workaround comment (comment-only; no behaviour change). Completes the
+  removal of superpowers references from p-flow's runtime artifacts — only design-history
+  docs still mention it, by design.
+
 ## v5.8.0 — `plugins/p-flow 1.4.0` — 2026-07-01 — subagent-driven-development skill + prior-art consultation
 
 - **New `subagent-driven-development` skill** — an isolated, in-session execution mode alongside
