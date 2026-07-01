@@ -8,7 +8,7 @@ allowed-tools: Read Edit Bash Glob Grep
 
 Walk the approved plan one step at a time. Implement → verify → check off. Never run ahead of the plan, never check off a step that isn't actually green.
 
-**Announce at start:** *"I'm using the `executing-plan` skill to work through `plan.md` step by step — implement, verify, check off."*
+**Announce at start:** *"I'm using the `executing-plan` skill to work through the plan step by step — implement, verify, check off."*
 
 ## When to use
 
@@ -22,15 +22,18 @@ Walk the approved plan one step at a time. Implement → verify → check off. N
 
 ## Inputs
 
-- `specs/<slug>/plan.md` — required. Resolve `<slug>` from the branch (`<type>/<slug>`); if the branch doesn't match, ask the user. If the file is missing, stop and point to `writing-plan`.
-- `specs/<slug>/specification.md` and `feature.feature` — read for acceptance context if present.
+Resolve `<slug>` from the branch (`<type>/<slug>`); if the branch doesn't match, ask the user. Required inputs depend on the mode (see "Mode" below — run the p-tasks gate first):
+
+- **Legacy mode (p-tasks absent):** `specs/<slug>/plan.md` — required. If the file is missing, stop and point to `writing-plan`.
+- **Canonical mode (p-tasks present):** `specs/<slug>/specification.md` (context) + the p-tasks parent task titled `<slug>` (the step list). There is **no `plan.md`** — do not look for one or stop on its absence. If the `<slug>` parent task is missing, stop and point to `writing-plan`.
+- `specs/<slug>/specification.md` and `feature.feature` — read for acceptance context if present (in canonical mode `specification.md` is the primary context source).
 
 ## Mode — where the step list lives
 
 Run the p-tasks gate in `${CLAUDE_SKILL_DIR}/../_shared/ptasks-bridge.md`:
 
 - **p-tasks absent (legacy mode)** → the step list is the `## Steps` checklist in `plan.md`. Walk it as described below, checking off `- [x]` in plan.md. Behaviour is unchanged from before the bridge existed.
-- **p-tasks present (canonical mode)** → the step list lives in p-tasks. Resolve the parent task by title == `<slug>` and enumerate its sub-tasks **in document order** via the Skill tool: `p-tasks:list <parent>`. Each sub-task is a step, carrying `status`, `acceptance`, `files`, `kind`, and `origin`. Work only the **`origin: plan`** sub-tasks here; sub-tasks with `origin: code-review:*` / `task-review:*` are review follow-ups owned by `receiving-code-review`. There is **no `## Steps`** in plan.md — do not look for one and do not write checkboxes there.
+- **p-tasks present (canonical mode)** → the step list lives in p-tasks. Resolve the parent task by title == `<slug>` and enumerate its sub-tasks **in document order** via the Skill tool: `p-tasks:list <parent>`. Each sub-task is a step, carrying `status`, `acceptance`, `files`, `kind`, and `origin`. Work only the **`origin: plan`** sub-tasks here; sub-tasks with `origin: code-review:*` / `task-review:*` are review follow-ups owned by `receiving-code-review`. There is **no `plan.md`** at all — do not look for one, do not read it, do not write checkboxes anywhere.
 
 The per-step loop below is identical in both modes except for two things: how you read the next step (a `- [ ]` line vs. the next not-`done` sub-task from `p-tasks:list`), how you classify it (sub-bullets/AC vs. the sub-task's `kind`), and how you record completion (check `- [x]` in plan.md vs. `p-tasks:set <st-id> --status done`).
 
@@ -70,7 +73,7 @@ When every step is done (every `## Steps` item is `- [x]` in legacy mode; every 
 - **Mark done only on green.** A `- [x]` (legacy) or a `--status done` (canonical) means the step's acceptance criterion was met — for a code step, that includes a passing `verification-before-completion` (full suite green, no regressions). Never mark done on intuition.
 - **Failure routes to `systematic-debugging`.** Never paper over a failing verification to keep moving.
 - **Only the plan steps are this skill's domain.** Review follow-ups belong to `receiving-code-review` (they need verify-the-finding-first): in legacy mode that's `## Review follow-ups` items; in canonical mode it's sub-tasks with `origin` = `code-review:*` / `task-review:*`. Don't execute those here — work only the `origin: plan` steps.
-- **Canonical plan.md sections are sacred.** In legacy mode edit checkboxes only; never rename or reorder `## Steps`, `## Review follow-ups — <date>`, `## Review decisions (audit)`, `## Open questions`, `## Risks`. In canonical mode plan.md has no `## Steps` — never add one; the step list lives in p-tasks.
+- **Canonical plan.md sections are sacred (legacy mode).** In legacy mode edit checkboxes only; never rename or reorder `## Steps`, `## Review follow-ups — <date>`, `## Review decisions (audit)`, `## Open questions`, `## Risks`. In canonical mode there is **no `plan.md`** — never create or read one; the step list lives in p-tasks and the narrative in `specification.md`.
 
 ## Red flags — STOP
 

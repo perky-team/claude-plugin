@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { repoRoot, findSkills } from './helpers.js';
 
@@ -58,25 +58,30 @@ describe('p-flow ↔ p-tasks bridge', () => {
     }
   });
 
-  it('canonical store: the bridge pins the "p-tasks owns the step list, plan.md keeps only narrative" rule', () => {
+  it('canonical store: the bridge pins the "p-tasks is the single artifact, NO plan.md" rule', () => {
     const doc = read(BRIDGE_DOC);
     // p-tasks is the single source of truth for steps when present…
     expect(doc).toMatch(/single canonical store|canonical work-item store|owns WORK ITEMS/i);
-    // …and plan.md no longer carries a Steps checklist.
-    expect(doc).toContain('no `## Steps`');
-    // the narrative-only sections that remain in plan.md
-    expect(doc).toContain('## Risks');
-    expect(doc).toContain('## Open questions');
-    expect(doc).toContain('## Review decisions (audit)');
+    // …and in canonical mode there is NO plan.md at all.
+    expect(doc).toMatch(/no .*plan\.md/i);
+    // narrative lives in specification.md, not a plan.md.
+    expect(doc).toContain('specification.md');
+    // the review audit lives in p-tasks as done sub-tasks carrying a `resolution`.
+    expect(doc).toContain('resolution');
   });
 
-  it('canonical store: the slim plan template carries no `## Steps` (it lives in p-tasks)', () => {
-    const slim = read('plugins/p-flow/skills/_shared/templates/plan-tasks.template.md');
-    expect(slim).not.toContain('## Steps');
-    expect(slim).toContain('## Risks');
-    expect(slim).toContain('## Open questions');
-    // writing-plan must reference the slim template so it is actually used.
-    expect(read('plugins/p-flow/skills/writing-plan/SKILL.md')).toContain('plan-tasks.template.md');
+  it('canonical store: there is NO slim plan template — writing-plan writes no plan.md in canonical mode', () => {
+    // The canonical-mode plan.md was eliminated; its template must be gone…
+    const templatePath = join(
+      repoRoot(),
+      'plugins/p-flow/skills/_shared/templates/plan-tasks.template.md',
+    );
+    expect(existsSync(templatePath), 'plan-tasks.template.md must be deleted').toBe(false);
+    // …and writing-plan must not reference it any more.
+    const wp = read('plugins/p-flow/skills/writing-plan/SKILL.md');
+    expect(wp).not.toContain('plan-tasks.template.md');
+    // writing-plan must explicitly NOT write plan.md in canonical mode.
+    expect(wp).toMatch(/do NOT write .*plan\.md/i);
   });
 
   it('4. decoupling: no p-flow skill calls p-tasks’ CLI directly', () => {

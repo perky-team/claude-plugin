@@ -1,12 +1,12 @@
 ---
 name: writing-plan
-description: Use after a spec exists at `specs/<slug>/specification.md` to produce a step-by-step implementation plan at `specs/<slug>/plan.md`. Refuses to write a step without an acceptance criterion. Decomposes work into 5–15 steps; flags larger work for sub-task split.
+description: Use after a spec exists at `specs/<slug>/specification.md` to produce a step-by-step implementation plan — as p-tasks sub-tasks when p-tasks is present (no plan.md), or `specs/<slug>/plan.md` when it is absent. Refuses to write a step without an acceptance criterion. Decomposes work into 5–15 steps; flags larger work for sub-task split.
 allowed-tools: Read Write Edit Bash(git rev-parse:*) Bash(test:*)
 ---
 
 # writing-plan
 
-Turn the brainstorm artifact into a concrete, ordered plan. One file: `specs/<slug>/plan.md`.
+Turn the brainstorm artifact into a concrete, ordered plan. Where the plan lives depends on the p-tasks gate: **p-tasks sub-tasks when p-tasks is present (no `plan.md`)**, or `specs/<slug>/plan.md` when it is absent.
 
 **Announce at start:** *"I'm using the `writing-plan` skill to turn the spec into an implementation plan."*
 
@@ -22,7 +22,7 @@ Turn the brainstorm artifact into a concrete, ordered plan. One file: `specs/<sl
 
 1a. **Run the p-tasks gate** in `${CLAUDE_SKILL_DIR}/../_shared/ptasks-bridge.md`. This decides where the step list will live:
    - **p-tasks absent** → *legacy mode*: the step list is a `## Steps` checklist written into `specs/<slug>/plan.md` (steps 3–8 below, "legacy mode" branch). Behave exactly as before — say nothing about p-tasks.
-   - **p-tasks present** → *canonical mode*: p-tasks is the single source of truth for the step list. You will create the parent task + one sub-task per step there, and write a **slim** plan.md with NO `## Steps`. Follow the "canonical mode" branch in steps 3–8.
+   - **p-tasks present** → *canonical mode*: p-tasks is the single source of truth for the step list. You will create the parent task + one sub-task per step there. **Do NOT write `plan.md`** — nothing in canonical mode creates or requires it; the narrative already lives in `specs/<slug>/specification.md` and a concise Overview goes into the parent task's `--description`. Follow the "canonical mode" branch in steps 3–8.
 
 2. **Detect plan type and ask the user.** Examine the spec to suggest a variant:
    - If `specs/<slug>/feature.feature` exists OR `specification.md` Acceptance Criteria mention function / endpoint / class / handler / script behaviours → suggest **TDD plan** (template: `${CLAUDE_SKILL_DIR}/../_shared/templates/plan-tdd.template.md`).
@@ -41,25 +41,24 @@ Turn the brainstorm artifact into a concrete, ordered plan. One file: `specs/<sl
 
    **Legacy mode (p-tasks absent):** Read the chosen template (`plan-tdd.template.md` or `plan-generic.template.md`), substitute `{{SLUG}}`, and write the full plan — including the `## Steps` checklist — to `specs/<slug>/plan.md`.
 
-   **Canonical mode (p-tasks present):** The steps live in p-tasks, not plan.md.
+   **Canonical mode (p-tasks present):** The steps live in p-tasks. **Write no `plan.md`** — there is none in this mode.
    - If the `.ptasks.json` destination is `jira`, first warn per the bridge doc (*"This creates real Jira issues."*) and proceed only on an explicit yes. For an `fs` destination, proceed as part of the normal flow (local, reversible — no separate prompt).
-   - Via the Skill tool, invoke `p-tasks:add` to create the parent `task` with `--title "<slug>"` and `--description` = the first sentence of the spec `## Overview` / `## Problem Statement`. Capture the returned parent id (`t-N`).
+   - Via the Skill tool, invoke `p-tasks:add` to create the parent `task` with `--title "<slug>"` and `--description` = a concise Overview of the task (the first sentence of the spec `## Overview` / `## Problem Statement`). This parent description is where the canonical-mode Overview lives — the rest of the narrative (Risks, Open questions) stays in `specs/<slug>/specification.md`.
    - For each step, via the Skill tool invoke `p-tasks:add` to create `sub-task <parent-id>` with `--title "<step title>"`, `--acceptance "<the step's acceptance criterion>"`, `--files "<comma list of expected files>"`, `--kind <code|non-code>` (per step 2), and `--origin plan`.
-   - Then write a **slim** plan.md: read `${CLAUDE_SKILL_DIR}/../_shared/templates/plan-tasks.template.md`, substitute `{{SLUG}}`, and write it to `specs/<slug>/plan.md`. It contains an Overview pointer, `## Open questions`, and `## Risks` — and **no `## Steps`** (the step list is in p-tasks).
+   - Do **not** create `specs/<slug>/plan.md` and do **not** read any plan template — the parent task's description + its sub-tasks + `specification.md` are the complete plan.
 
 6. **Self-review:** scan for placeholders (`TBD`, `TODO`, leftover `<...>` markers, internal contradictions). In legacy mode also check every step has an AC; in canonical mode check every sub-task was created with an `--acceptance`. Fix inline.
-7. **Show to user.** Legacy mode: *"Plan written to `specs/<slug>/plan.md`. Review and tell me what to amend before we move to execution."* Canonical mode: report how many sub-tasks were created in the `<slug>` task, and that plan.md holds only Risks / Open questions (walk the steps with `/p-tasks:list`).
+7. **Show to user.** Legacy mode: *"Plan written to `specs/<slug>/plan.md`. Review and tell me what to amend before we move to execution."* Canonical mode: report how many sub-tasks were created in the `<slug>` task, and that the plan lives entirely in p-tasks (no `plan.md`) with the narrative in `specification.md` — walk the steps with `/p-tasks:list`.
 8. **Hand off to execution.** Once the user has approved the plan, offer the two execution modes: *"Ready to implement? I can run `executing-plan` (inline — I implement in this session, TDD per code step, verify after each) or `subagent-driven-development` (a fresh implementer subagent per step, reviewed after each, keeping the main context clean). Which do you prefer?"* On a choice → invoke the chosen skill via the Skill tool. On **no** → stop here; the user can resume later (either skill picks up at the first unfinished step). Do not start writing code from this skill.
 
 ## Plan templates
 
-Three variants live in `_shared/templates/`:
+Templates apply to **legacy mode only** — canonical mode writes no `plan.md`, so it reads no template. Two variants live in `_shared/templates/`:
 
 - `${CLAUDE_SKILL_DIR}/../_shared/templates/plan-generic.template.md` — legacy mode, docs / research / non-code tasks. Each Step has `Acceptance` + `Files`.
 - `${CLAUDE_SKILL_DIR}/../_shared/templates/plan-tdd.template.md` — legacy mode, code tasks (the default when behaviour testing is feasible). Each Step has `Test first` (RED) + `Implement` (GREEN) + `Verify` (REFACTOR-safe) + `Acceptance` + `Files`.
-- `${CLAUDE_SKILL_DIR}/../_shared/templates/plan-tasks.template.md` — **canonical mode** (p-tasks present). A slim plan.md with an Overview pointer + `## Open questions` + `## Risks` and **no `## Steps`** — the step list lives in p-tasks.
 
-The skill reads the chosen template, substitutes `{{SLUG}}`, and writes the result to `specs/<slug>/plan.md`. In legacy mode the TDD/generic choice is the user's (step 2); in canonical mode the slim template is always used and the TDD/generic choice only sets each sub-task's `kind`.
+In legacy mode the skill reads the chosen template, substitutes `{{SLUG}}`, and writes the result to `specs/<slug>/plan.md`; the TDD/generic choice is the user's (step 2). In canonical mode no template is read — the TDD/generic choice only sets each sub-task's `kind`.
 
 ## Numbering convention
 
@@ -73,5 +72,5 @@ The skill reads the chosen template, substitutes `{{SLUG}}`, and writes the resu
 - No git operations.
 - No follow-up step generation — that's `requesting-code-review` / `requesting-task-review`.
 - Does not enforce TDD discipline during execution — that's the `test-driven-development` skill, invoked by Claude when actually writing code for a Step.
-- p-tasks integration is gated — see `${CLAUDE_SKILL_DIR}/../_shared/ptasks-bridge.md`. When p-tasks is present it is the canonical step store (sub-tasks replace the `## Steps` checklist); when absent, behaviour is the legacy plan.md-only flow. Creating real Jira issues still requires an explicit user yes.
+- p-tasks integration is gated — see `${CLAUDE_SKILL_DIR}/../_shared/ptasks-bridge.md`. When p-tasks is present it is the canonical step store (sub-tasks are the whole plan; no `plan.md` is written); when absent, behaviour is the legacy plan.md-only flow. Creating real Jira issues still requires an explicit user yes.
 - p-graph consultation is opt-in and gated — see `${CLAUDE_SKILL_DIR}/../_shared/pgraph-bridge.md`. Read-only advisory; absent graph → silent no-op; never a precondition for the plan.

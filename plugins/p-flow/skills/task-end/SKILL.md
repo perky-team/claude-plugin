@@ -29,7 +29,7 @@ task-end deliberately offers no options menu (no "merge / open PR / cleanup / ca
 
    Then check completeness. Run the p-tasks gate in `${CLAUDE_SKILL_DIR}/../_shared/ptasks-bridge.md`:
    - **Legacy mode (p-tasks absent):** read `specs/<slug>/plan.md`. If the file doesn't exist, warn (*"No plan at `specs/<slug>/plan.md` — skipping completeness check."*) and continue to pre-check 4. If it exists, count unchecked items (`- [ ]`) under sections `## Steps` and `## Review follow-ups — *`. **Do NOT count** items under `## Open questions`, `## Risks`, or `## Review decisions (audit)`.
-   - **Canonical mode (p-tasks present):** via the Skill tool, `p-tasks:list <parent>` for the task titled `<slug>`, and count the sub-tasks whose `status` ≠ `done` (these are the open plan steps **and** open review-origin follow-ups — both live as sub-tasks). plan.md holds no `## Steps`, so it is not counted.
+   - **Canonical mode (p-tasks present):** there is **no `plan.md`** — do not read one. Via the Skill tool, `p-tasks:list <parent>` for the task titled `<slug>`, and count the sub-tasks whose `status` ≠ `done` (these are the open plan steps **and** open review-origin follow-ups — both live as sub-tasks).
 
    If any incomplete items remain (unchecked lines, or not-done sub-tasks) — warn the user with the count, but allow them to continue.
 

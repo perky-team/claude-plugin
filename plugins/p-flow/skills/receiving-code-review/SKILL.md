@@ -1,6 +1,6 @@
 ---
 name: receiving-code-review
-description: Use when processing review feedback — a `## Review follow-ups` item in plan.md, a PR comment, an inline reviewer message. Enforces verify-the-finding-first discipline before implementing or rejecting. Counterpart to requesting-code-review.
+description: Use when processing review feedback — a review follow-up (a p-tasks sub-task in canonical mode, or a `## Review follow-ups` item in plan.md in legacy mode), a PR comment, an inline reviewer message. Enforces verify-the-finding-first discipline before implementing or rejecting. Counterpart to requesting-code-review.
 allowed-tools: Bash Read Glob Grep Edit Write
 ---
 
@@ -51,16 +51,17 @@ For each finding, ask:
 
 **Rejecting** a finding:
 - **Legacy mode** — a `## Review follow-ups` item in plan.md → mark the parent step `[x]` AND append a one-line `> Rejected — <evidence-based reason>` immediately below the step. Do NOT add a separate entry to `## Review decisions (audit)` — that section already records the original triage decision from `requesting-code-review`; rejecting on second look is a re-decision, annotated inline at the follow-up.
-- **Canonical mode** — the follow-up is a sub-task → via the Skill tool, `p-tasks:set <st-id> --status done --resolution "<evidence-based reason>"`. The `resolution` field records the re-decision (it replaces the inline `> Rejected —` annotation); don't write to plan.md.
+- **Canonical mode** — the follow-up is a sub-task → via the Skill tool, `p-tasks:set <st-id> --status done --resolution "rejected: <evidence-based reason>"`. The `resolution` field records the re-decision (it is the audit entry; there is no plan.md to annotate). Never create or write to plan.md.
 - If it's a PR comment / external review → reply with the evidence-based reason. Don't touch plan.md or p-tasks.
 
 **Deferring** a finding (rare — usually means we can't decide yet):
-- Add a `## Review decisions (audit)` bullet using the same format `requesting-code-review` uses — but prefixed `receiving:` so the source is traceable.
+- **Legacy mode** → add a `## Review decisions (audit)` bullet in plan.md using the same format `requesting-code-review` uses — but prefixed `receiving:` so the source is traceable.
+- **Canonical mode** → via the Skill tool, `p-tasks:set <st-id> --status done --resolution "deferred: <reason>"` on the follow-up sub-task. No plan.md is written.
 
 ## Hard rules
 
 - **Never blindly fix.** Every fix must be preceded by verification that the issue is real.
-- **Never silently reject.** Every rejection must be explicit and recorded (inline annotation in plan.md, or written reply for external reviews).
+- **Never silently reject.** Every rejection must be explicit and recorded — a `resolution` on the sub-task (canonical mode), an inline annotation in plan.md (legacy mode), or a written reply for external reviews.
 - **Never argue tone, argue facts.** "This is wrong" is not feedback; show evidence (file:line, test output, spec citation).
 - **Reviewer might be wrong.** Both `code-reviewer` and `task-reviewer` templates have ~20% scope leakage on Sonnet (see `plugins/p-flow/README.md` "Known limitations"). Read findings critically.
 

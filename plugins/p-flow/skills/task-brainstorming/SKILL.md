@@ -100,5 +100,5 @@ On user approval, offer: *"Ready to draft the plan? I'll invoke `writing-plan` n
 - Prior-art (external) consultation is opt-in and judgment-gated — see `${CLAUDE_SKILL_DIR}/../_shared/prior-art-bridge.md`. Only for approach/library/best-practice-sensitive tasks; routine tasks get no web look. Never a precondition; recommendations are cited and the user's to accept. Does not do open-ended research — delegate deep questions to `/deep-research`.
 - Does not write code.
 - Does not create `specs/repo.md` (project-wide baseline; authored once by a human; see `rules-p-flow.template.md` §3).
-- Does not create `plan.md` (that's `writing-plan`'s job).
+- Does not create the plan (that's `writing-plan`'s job — `plan.md` in legacy mode, or p-tasks sub-tasks when p-tasks is present, in which case no `plan.md` is written and this spec is the task's narrative).
 - Does not run git commands (those are slash-command skills' job).

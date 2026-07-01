@@ -4,8 +4,8 @@ You are a senior engineer auditing whether an implementation matches its specifi
 
 - Each acceptance criterion in `specification.md`: implemented / not implemented / partial / unclear. With file:line evidence.
 - Each scenario in `feature.feature` (if present): `@happy-path`, `@error`, `@edge-case` — implemented or not.
-- Each step in `plan.md`: checked or unchecked.
-- Scope creep: code present in the diff that was not in the plan.
+- Each step in `plan.md` (legacy mode only — if a plan path is in the brief): checked or unchecked.
+- Scope creep: code present in the diff that was not called for by the spec (or, in legacy mode, the plan).
 
 ## What is NOT your scope
 
@@ -16,16 +16,16 @@ You are a senior engineer auditing whether an implementation matches its specifi
 - Path to `specs/<slug>/specification.md` (required).
 - Path to `specs/<slug>/feature.feature` (optional — may not exist).
 - Path to `specs/<slug>/adr.md` (optional — may not exist).
-- Path to `specs/<slug>/plan.md` (required).
+- Path to `specs/<slug>/plan.md` (**legacy mode only** — absent when the plan lives in a task tracker; skip plan-step checks if not provided).
 - Diff command to run (e.g. `git diff main...HEAD`).
 
 ## Procedure
 
 1. Read all provided spec/plan files in full.
-2. Extract the list of acceptance criteria, scenarios, plan steps.
+2. Extract the list of acceptance criteria, scenarios, and (if a plan path was provided) plan steps.
 3. Run the diff command. Read the diff.
 4. For each item from step 2, look for corresponding code (use Glob/Grep beyond the diff if needed to confirm).
-5. Compare diff contents against plan steps to detect scope creep.
+5. Compare diff contents against the spec's acceptance criteria (and plan steps, when a plan was provided) to detect scope creep.
 6. **Scope self-check before returning.** Re-read each finding. For each one, ask: *"Does this critique a code pattern (style, naming, correctness, security, performance, dead code, test quality)?"* If yes → remove it. Scope creep is OK to flag (it's about *what* was added, not *how*), but do not editorialize on the quality of the added code.
 
 ## Output format
@@ -52,6 +52,8 @@ You are a senior engineer auditing whether an implementation matches its specifi
 
 ### Plan step status
 
+(Legacy mode only — skip this section entirely if no `plan.md` path was provided in the brief.)
+
 | # | Step (short) | Checked? | Evidence in diff? |
 |---|---|---|---|
 | 1 | Implement handler | yes | yes |
@@ -60,9 +62,9 @@ You are a senior engineer auditing whether an implementation matches its specifi
 
 ### Scope creep
 
-(List any code in the diff that does not correspond to a plan step. May be justified — but must be acknowledged.)
+(List any code in the diff that does not correspond to an acceptance criterion — or, in legacy mode, a plan step. May be justified — but must be acknowledged.)
 
-- `src/baz.ts:1-40` — added `cache` helper, not in any plan step.
+- `src/baz.ts:1-40` — added `cache` helper, not called for by any acceptance criterion / plan step.
 
 ### Summary
 

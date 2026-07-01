@@ -3,6 +3,36 @@
 > Marketplace tag → p-flow plugin version → date → headline.
 > Authored 2026-05-27; backfilled from `v4.6.0` onward (the first p-flow release on the marketplace was `v3.1.0` with `plugins/p-flow 0.1.0` — a minimal `init` skill; see `git log v4.5.0..v4.6.0 -- plugins/p-flow/`).
 
+## Unreleased — `plugins/p-flow 1.5.0` — canonical mode drops plan.md entirely
+
+- **When p-tasks is present ("canonical mode"), p-flow no longer creates or requires
+  `specs/<slug>/plan.md` at all.** p-tasks is now the single artifact for the step list, review
+  follow-ups, and the review audit; the task narrative lives in `specs/<slug>/specification.md`
+  (plus a concise Overview in the parent task's `--description`). This removes the last
+  duplication: the old canonical `plan.md` only held narrative already in `specification.md` and
+  a `## Review decisions (audit)` log that fits p-tasks' `origin` / `status` / `resolution` fields.
+  - `writing-plan` — canonical mode creates the parent task + one sub-task per step (as before)
+    and writes **no plan.md** and reads **no template**.
+  - `executing-plan` / `subagent-driven-development` — canonical mode's required input is
+    `specification.md` + the `<slug>` p-tasks parent task; the `plan.md` input gate is gone. The
+    step list comes from `p-tasks:list <parent>` (unchanged).
+  - `requesting-code-review` / `requesting-task-review` — canonical mode passes only
+    `specification.md` to the reviewer (no plan.md). Deferred/rejected findings are recorded as
+    done sub-tasks carrying `--origin <...>:<severity> --resolution "deferred|rejected: <reason>"`
+    instead of a `## Review decisions (audit)` section.
+  - `receiving-code-review` — canonical rejects/defers become `--status done --resolution
+    "rejected|deferred: <reason>"` on the sub-task; no plan.md touch.
+  - `task-end` — canonical mode sources completeness, "What changed", Summary, and Test-plan from
+    p-tasks + `specification.md`; never reads plan.md.
+- **Legacy mode (p-tasks absent) is byte-for-byte unchanged** — plan.md is still written, walked,
+  checked off, and read exactly as before.
+- Removed the now-unused `plan-tasks.template.md` (the old slim canonical plan template) and all
+  references to it. Updated `_shared/ptasks-bridge.md`, the `rules-p-flow.template.md` flow table,
+  `using-p-flow`, `task-brainstorming`, README, and CLAUDE.md to reflect the canonical/legacy split.
+- Test invariants updated: `tests/p-flow-ptasks-bridge.test.ts` now pins "no plan.md in canonical
+  mode" (narrative → `specification.md`, audit → done sub-tasks carrying a `resolution`, template
+  deleted).
+
 ## v5.8.1 — `plugins/p-flow 1.4.1` — 2026-07-01 — hook comment cleanup
 
 - `hooks/session-start`: dropped the external `obra/superpowers` issue link from the

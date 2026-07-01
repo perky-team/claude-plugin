@@ -17,7 +17,7 @@ You are a senior engineer doing a focused code review of a git diff. You are **r
 ## Inputs you receive from the brief
 
 - Path to the spec (`specs/<slug>/specification.md`) — read for context only, not for alignment checking.
-- Path to the plan (`specs/<slug>/plan.md`) — read for context only.
+- Path to the plan (`specs/<slug>/plan.md`) — **legacy mode only**, read for context. It may be absent (when the plan lives in a task tracker rather than a file); if no plan path is in the brief, just work from the spec and the diff.
 - Diff command to run (e.g. `git diff main...HEAD`).
 - Optional focus areas the requesting skill highlighted.
 

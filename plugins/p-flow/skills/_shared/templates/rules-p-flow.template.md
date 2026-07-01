@@ -85,6 +85,8 @@ This plugin provides a task development flow. From any non-trivial idea to a pus
 | Review (spec) | `requesting-task-review` skill + `task-reviewer` agent | Spec-alignment findings, triaged into `plan.md` follow-ups. |
 | Exit | `/p-flow:task-end` | `git push -u origin <branch>` + MR title/body recommendation with both `gh` and `glab` commands ready to copy. |
 
+The Plan/Execute/Review outputs above describe **legacy mode** (the `plan.md` file). If the `p-tasks` tracker is initialised in this repo (`docs/tasks/.ptasks.json` exists), p-flow runs in **canonical mode**: there is **no `plan.md`** at all — the step list, review follow-ups, and the review audit all live in p-tasks as sub-tasks under a task titled `<slug>`, and the task narrative stays in `specs/<slug>/specification.md`. `writing-plan` creates the sub-tasks, `executing-plan` walks them, the review skills add follow-ups (and defer/reject audit) as sub-tasks, and `task-end` counts/closes them.
+
 ### Note on §3 "N/A" rule
 
 The rule in §3.1 — "if a section doesn't apply, write `N/A` and a one-line reason — do not delete the heading" — applies to **feature** specs. For bugfix / hotfix / chore / tech-task specs, sections that don't apply may be **omitted entirely**. Skills produce specs that drop irrelevant sections rather than filling them with `N/A`.

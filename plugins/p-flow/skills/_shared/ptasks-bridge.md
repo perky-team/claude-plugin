@@ -1,8 +1,9 @@
 # p-tasks bridge (shared by writing-plan, executing-plan, review skills, task-end)
 
 When `p-tasks` is initialised in this same repo, it is the **single canonical store** for
-the task/step list and statuses. p-flow drives it; `plan.md` no longer duplicates the step
-list. This is still one-way: p-flow knows about p-tasks; p-tasks knows nothing about p-flow.
+the task/step list and statuses. p-flow drives it; there is **no `plan.md`** in this mode —
+the narrative lives in `specs/<slug>/specification.md` instead. This is still one-way: p-flow
+knows about p-tasks; p-tasks knows nothing about p-flow.
 
 ## Gate — run this BEFORE any p-tasks action
 
@@ -16,13 +17,20 @@ list. This is still one-way: p-flow knows about p-tasks; p-tasks knows nothing a
 
 ## What lives where (when p-tasks is active)
 
+When p-tasks is active there is **no `plan.md`** at all. p-tasks is the single artifact for the
+step list, the review follow-ups, and the review audit; the task **narrative** lives in
+`specs/<slug>/specification.md` (plus a concise Overview in the parent task's `--description`).
+
 - **p-tasks owns WORK ITEMS.** Plan steps and review follow-ups are each a `sub-task` under a
   parent `task` titled **exactly** the `<slug>`, each with a status. The step list and its
-  statuses live **only** in `tasks.yml` (or Jira) — never duplicated as a `## Steps` checklist
-  in plan.md.
-- **plan.md keeps ONLY narrative that was never a work item:** a short Overview/pointer,
-  `## Risks`, `## Open questions`, and `## Review decisions (audit)` (the defer/reject log).
-  There is **no `## Steps`** section when p-tasks is active.
+  statuses live **only** in `tasks.yml` (or Jira) — never duplicated in a `plan.md`.
+- **The review audit lives in p-tasks too.** A deferred or rejected finding is a `sub-task`
+  carrying `--origin <code-review|task-review>:<severity> --status done --resolution
+  "deferred: <reason>"` / `"rejected: <reason>"`. The `resolution` field **is** the audit trail —
+  there is no `## Review decisions (audit)` section and no `plan.md` to hold one.
+- **Narrative lives in `specification.md`.** Overview / Risks / Open questions were authored by
+  `task-brainstorming` in `specs/<slug>/specification.md`; p-flow does **not** duplicate them into
+  a `plan.md`. Nothing in the canonical flow creates or requires `specs/<slug>/plan.md`.
 
 ## Dispatch rules
 

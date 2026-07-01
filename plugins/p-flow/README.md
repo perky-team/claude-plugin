@@ -22,15 +22,15 @@ To disable: remove the `SessionStart` entry from `hooks/hooks.json`, or globally
 |---|---|
 | `using-p-flow` | Auto-emitted by the SessionStart hook on every fresh session / `/clear` / auto-compact. Establishes the p-flow surface for the model — lists commands, skills, hard rules. |
 | `task-brainstorming` | Right after `/p-flow:task-start`. Produces `specs/<slug>/{specification.md, feature.feature?, adr.md?}`. |
-| `writing-plan` | After spec is approved. Produces `specs/<slug>/plan.md` (5–15 steps, each with acceptance criteria). Offers a TDD-aligned template (default for code tasks) and a generic template (docs/research). |
-| `executing-plan` | After `plan.md` is approved, to implement **inline in this session**. Walks `## Steps` in order — invokes `test-driven-development` for code steps and `verification-before-completion` after each, checking off `- [x]` only on green. The inline execution loop between `writing-plan` and `task-end`. |
-| `subagent-driven-development` | After `plan.md` is approved, when you want **per-step context isolation**. Dispatches a fresh implementer subagent per step, a per-step review (spec compliance + code quality) after each, and a broad whole-branch review at the end — hands artifacts over as files so the controller's context stays clean. The isolated alternative to `executing-plan`; shares the same p-tasks / checkbox ledger. |
+| `writing-plan` | After spec is approved. Produces the plan as 5–15 steps, each with an acceptance criterion — p-tasks sub-tasks when p-tasks is present (no plan.md), or `specs/<slug>/plan.md` when absent. In legacy mode it offers a TDD-aligned template (default for code tasks) and a generic template (docs/research). |
+| `executing-plan` | After the plan is approved, to implement **inline in this session**. Walks the steps in order — invokes `test-driven-development` for code steps and `verification-before-completion` after each, marking done only on green. The inline execution loop between `writing-plan` and `task-end`. |
+| `subagent-driven-development` | After the plan is approved, when you want **per-step context isolation**. Dispatches a fresh implementer subagent per step, a per-step review (spec compliance + code quality) after each, and a broad whole-branch review at the end — hands artifacts over as files so the controller's context stays clean. The isolated alternative to `executing-plan`; shares the same p-tasks / checkbox ledger. |
 | `test-driven-development` | Before writing production code. Enforces RED-GREEN-REFACTOR (failing test first, minimal code, verify). Pairs with `verification-before-completion` ("before code" gate vs "before claiming done" gate). |
 | `verification-before-completion` | Before any "done" claim or commit. Quotes test/lint output. Writes a state marker so `task-end` knows verification ran. |
 | `systematic-debugging` | When verification fails or behaviour is unexpected, before proposing a fix. Reproduce → one falsifiable hypothesis → test it → narrow (bisect) → fix the root cause → re-verify. `executing-plan` routes here on a red step. |
-| `requesting-code-review` | After verification passes. Dispatches `general-purpose` with the colocated `code-reviewer.md` template; triages findings into `plan.md` follow-ups. |
+| `requesting-code-review` | After verification passes. Dispatches `general-purpose` with the colocated `code-reviewer.md` template; triages findings into follow-ups (p-tasks sub-tasks in canonical mode, `plan.md` steps in legacy mode). |
 | `requesting-task-review` | Same trigger as code review, orthogonal lens. Dispatches `general-purpose` with the colocated `task-reviewer.md` template; checks spec/plan alignment. |
-| `receiving-code-review` | Before processing review feedback (plan.md follow-ups, PR comments, reviewer replies). Verify the finding first; reject false positives with evidence. |
+| `receiving-code-review` | Before processing review feedback (a follow-up sub-task or `plan.md` item, PR comments, reviewer replies). Verify the finding first; reject false positives with evidence. |
 | `using-git-worktrees` | Reference doc for safe worktree creation, pitfalls, cleanup. Background for `--worktree` flow + long-running isolation. |
 | `writing-skills` | Authoring a new p-flow skill or substantially editing one — frontmatter / section / dispatch / template / test conventions. |
 
@@ -47,17 +47,17 @@ This pattern (inline templates rather than registered subagents) means the revie
 
 ## Integration with p-tasks (optional)
 
-If the [`p-tasks`](../p-tasks/) tracker is initialised in the same repo (detected by `docs/tasks/.ptasks.json`), it becomes the **single canonical store** for the task/step list and statuses — eliminating the old duplication where the step list lived both in `plan.md` and in p-tasks. plan.md then keeps only the narrative that was never a work item (`## Risks`, `## Open questions`, `## Review decisions (audit)`); the `## Steps` checklist is gone.
+If the [`p-tasks`](../p-tasks/) tracker is initialised in the same repo (detected by `docs/tasks/.ptasks.json`), it becomes the **single artifact** for the task/step list, statuses, review follow-ups, and the review audit — and there is **no `plan.md`** at all. The old duplication (a step list living in both `plan.md` and p-tasks) is gone, and so is the plan.md narrative: the task's Overview / Risks / Open questions live in `specs/<slug>/specification.md`, with a concise Overview also in the parent task's description.
 
 | Skill | Behaviour when p-tasks is present |
 |---|---|
-| `writing-plan` | Creates a p-tasks `task` named `<slug>` plus one `sub-task` per plan step (with `acceptance` / `files` / `kind` / `origin plan`), and writes a slim plan.md with **no `## Steps`**. |
-| `executing-plan` | Walks `p-tasks:list <parent>` in document order, classifies each by `kind`, verifies, and marks each done — no plan.md checkbox edits. |
-| `requesting-code-review` / `requesting-task-review` | Each accepted finding becomes a `sub-task` with `origin code-review:<severity>` / `task-review:<severity>`; defer/reject still log to plan.md `## Review decisions (audit)`. |
-| `receiving-code-review` | Fix → implement then mark the sub-task done; reject → `set --status done --resolution "<reason>"`. |
-| `task-end` | Completeness count = not-done sub-tasks; "What changed" = done sub-task titles; on finalize, close the parent and every remaining sub-task explicitly. |
+| `writing-plan` | Creates a p-tasks `task` named `<slug>` (Overview in its `--description`) plus one `sub-task` per plan step (with `acceptance` / `files` / `kind` / `origin plan`). Writes **no plan.md**. |
+| `executing-plan` | Walks `p-tasks:list <parent>` in document order, classifies each by `kind`, verifies, and marks each done — no plan.md exists. |
+| `requesting-code-review` / `requesting-task-review` | Pass only `specification.md` to the reviewer (no plan.md). Each accepted finding becomes a `sub-task` with `origin code-review:<severity>` / `task-review:<severity>`; defer/reject becomes a done sub-task carrying `--resolution "deferred\|rejected: <reason>"` (that resolution is the audit trail). |
+| `receiving-code-review` | Fix → implement then mark the sub-task done; reject → `set --status done --resolution "rejected: <reason>"`. |
+| `task-end` | Completeness count = not-done sub-tasks; "What changed" = done sub-task titles; Summary/Test-plan from `specification.md`; on finalize, close the parent and every remaining sub-task explicitly. Never reads plan.md. |
 
-This is a **soft, one-way** integration: p-flow knows about p-tasks, not the reverse, and there is **no plugin-manifest dependency** — each plugin installs and runs standalone. When p-tasks is **absent**, behaviour is byte-for-byte the legacy plan.md-only flow (the `## Steps` checklist). The bridge dispatches through the Skill tool (`p-tasks:add` / `p-tasks:set` / `p-tasks:list` / `p-tasks:summary` / `p-tasks:next`), never p-tasks' CLI, so it respects per-plugin isolation. Driving an `fs` store is part of the normal flow; creating or updating real Jira issues warns first and proceeds only on an explicit yes. Contract: `skills/_shared/ptasks-bridge.md`.
+This is a **soft, one-way** integration: p-flow knows about p-tasks, not the reverse, and there is **no plugin-manifest dependency** — each plugin installs and runs standalone. When p-tasks is **absent**, behaviour is byte-for-byte the legacy plan.md-only flow (the `## Steps` checklist, `## Review follow-ups`, and `## Review decisions (audit)` in plan.md). The bridge dispatches through the Skill tool (`p-tasks:add` / `p-tasks:set` / `p-tasks:list` / `p-tasks:summary` / `p-tasks:next`), never p-tasks' CLI, so it respects per-plugin isolation. Driving an `fs` store is part of the normal flow; creating or updating real Jira issues warns first and proceeds only on an explicit yes. Contract: `skills/_shared/ptasks-bridge.md`.
 
 ## Integration with p-wiki (optional)
 
@@ -115,10 +115,10 @@ specs/<slug>/
 ├── specification.md      ← always
 ├── feature.feature       ← if behavioral scenarios exist
 ├── adr.md                ← if an architectural decision is needed
-└── plan.md               ← written by writing-plan; review follow-ups appended after each review
+└── plan.md               ← legacy mode only (p-tasks absent); written by writing-plan, review follow-ups appended after each review. In canonical mode the plan lives in p-tasks and no plan.md is written.
 ```
 
-The `plan.md` file uses one of two templates from `_shared/templates/` — `plan-tdd.template.md` for code tasks (default) or `plan-generic.template.md` for docs/research. `writing-plan` asks the user which to use.
+In **legacy mode** the `plan.md` file uses one of two templates from `_shared/templates/` — `plan-tdd.template.md` for code tasks (default) or `plan-generic.template.md` for docs/research; `writing-plan` asks the user which to use. In **canonical mode** (p-tasks present) no plan.md and no template are used — the plan is p-tasks sub-tasks and the narrative stays in `specification.md`.
 
 ## More
 

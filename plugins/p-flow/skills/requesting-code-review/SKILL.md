@@ -1,12 +1,12 @@
 ---
 name: requesting-code-review
-description: Use after `verification-before-completion` passes and there is a diff worth reviewing. Dispatches a code-review subagent (via Task tool with `general-purpose` + inline template) on the branch diff, then leads the user through severity-aware triage and writes accepted findings into `plan.md` as follow-up steps with audit-tracked decisions.
+description: Use after `verification-before-completion` passes and there is a diff worth reviewing. Dispatches a code-review subagent (via Task tool with `general-purpose` + inline template) on the branch diff, then leads the user through severity-aware triage and records accepted findings as follow-ups — p-tasks sub-tasks in canonical mode, or `plan.md` steps in legacy mode.
 allowed-tools: Bash(git diff:*) Bash(git status:*) Bash(git log:*) Bash(git rev-parse:*) Bash(git merge-base:*) Bash(git remote:*) Bash(grep:*) Read Write Edit Glob Task
 ---
 
 # requesting-code-review
 
-Run a code-quality review on the current branch's diff, triage the findings, and integrate accepted findings into `plan.md`.
+Run a code-quality review on the current branch's diff, triage the findings, and record accepted findings as follow-ups (p-tasks sub-tasks in canonical mode, or `plan.md` steps in legacy mode).
 
 **Announce at start:** *"I'm using the `requesting-code-review` skill to run a code-quality review on the branch diff."*
 
@@ -14,7 +14,7 @@ Run a code-quality review on the current branch's diff, triage the findings, and
 
 1. **Resolve the base branch** for the diff: try `main` first, then `master`. If neither exists locally → run `git remote show origin | grep 'HEAD branch'` to read the remote's default; use that. If that also fails → ask the user for the base branch name. Call the result `<base>`.
 2. There is a diff to review. Check: `git diff <base>...HEAD` shows non-empty output. If empty — say: *"No diff to review. Run after implementing some steps."*
-3. `specs/<slug>/specification.md` and `specs/<slug>/plan.md` exist. Determine `<slug>` from the current branch name (strip the `<type>/` prefix) or ask the user.
+3. `specs/<slug>/specification.md` exists. Determine `<slug>` from the current branch name (strip the `<type>/` prefix) or ask the user. Run the p-tasks gate in `${CLAUDE_SKILL_DIR}/../_shared/ptasks-bridge.md` to fix the mode: **legacy mode** (p-tasks absent) additionally requires `specs/<slug>/plan.md`; **canonical mode** (p-tasks present) has no `plan.md` and uses the `<slug>` p-tasks task instead.
 
 ## Procedure
 
@@ -25,7 +25,7 @@ Capture:
 - **Goal**: one paragraph distilled from `specification.md` "Overview / Problem Statement / Proposed Solution".
 - **What was done**: the list of completed steps.
   - **Legacy mode** (p-tasks absent — run the gate in `${CLAUDE_SKILL_DIR}/../_shared/ptasks-bridge.md`): the checked items under `## Steps` in `plan.md` (do not include follow-ups or audit entries).
-  - **Canonical mode** (p-tasks present): the done sub-tasks of the `<slug>` task — via the Skill tool, `p-tasks:summary <parent>` (which returns done items only). plan.md has no `## Steps`.
+  - **Canonical mode** (p-tasks present): the done sub-tasks of the `<slug>` task — via the Skill tool, `p-tasks:summary <parent>` (which returns done items only). There is no plan.md in this mode.
 - **Focus areas**: by default — correctness, security, dead code, style consistency. If the user requested specific focus, prepend it.
 - **Diff command**: `git diff $(git merge-base <base> HEAD)...HEAD` where `<base>` is the branch resolved in precondition 1. Use `git rev-parse --abbrev-ref HEAD` to know the current branch.
 
@@ -34,7 +34,9 @@ Capture:
 Use the Task tool with `subagent_type: general-purpose`. The prompt MUST be assembled in this order:
 
 1. Read the template at `${CLAUDE_SKILL_DIR}/code-reviewer.md` (the file colocated with this SKILL.md) and inline its full content verbatim at the top of the prompt.
-2. Append a `---` separator and then a `## Brief` section containing the goal, what-was-done, focus areas, diff command, and the literal paths to `specification.md` and `plan.md` composed above.
+2. Append a `---` separator and then a `## Brief` section containing the goal, what-was-done, focus areas, diff command, and the spec/plan paths composed above:
+   - **Legacy mode:** the literal paths to both `specification.md` and `plan.md`.
+   - **Canonical mode:** only the path to `specification.md` (there is no `plan.md` — do not pass one; the reviewer works from the spec and the diff).
 
 This dispatches `general-purpose` with code-reviewer instructions — works whether or not the p-flow plugin is installed in the target session.
 
@@ -63,13 +65,17 @@ For each severity, follow exactly this protocol:
      - **Acceptance**: <derived from the agent's suggested fix>
   ```
 
-- **Canonical mode:** via the Skill tool, `p-tasks:add sub-task <parent>` with `--title "Fix: <short summary>"`, `--origin code-review:<severity>`, `--acceptance "<derived from the agent's suggested fix>"`, and `--files "<comma list>"` when known. The follow-up is now a sub-task alongside the plan steps — no `## Review follow-ups` section is written to plan.md. (If the destination is `jira`, warn per the bridge doc before creating issues.)
+- **Canonical mode:** via the Skill tool, `p-tasks:add sub-task <parent>` with `--title "Fix: <short summary>"`, `--origin code-review:<severity>`, `--acceptance "<derived from the agent's suggested fix>"`, and `--files "<comma list>"` when known. The follow-up is now a sub-task alongside the plan steps — no `plan.md` exists to hold a `## Review follow-ups` section. (If the destination is `jira`, warn per the bridge doc before creating issues.)
 
-**Deferred / rejected findings** (both modes) → append a bullet to `## Review decisions (audit)` in `plan.md` (create the section just before `## Open questions` if missing). This narrative audit log stays in plan.md regardless of mode:
+**Deferred / rejected findings:**
 
-```markdown
-- code-review <severity> "<short summary>" — **<deferred|rejected>**: <reason>
-```
+- **Legacy mode** → append a bullet to `## Review decisions (audit)` in `plan.md` (create the section just before `## Open questions` if missing). This narrative audit log lives in plan.md:
+
+  ```markdown
+  - code-review <severity> "<short summary>" — **<deferred|rejected>**: <reason>
+  ```
+
+- **Canonical mode** → the audit lives in p-tasks, not a `plan.md`. Via the Skill tool, `p-tasks:add sub-task <parent>` with `--title "<short summary>"`, `--origin code-review:<severity>`, `--status done`, and `--resolution "deferred: <reason>"` / `"rejected: <reason>"`. The done sub-task carrying a `resolution` **is** the audit entry — never create or write to `plan.md`. (Warn per the bridge doc before creating Jira issues.)
 
 ### 6. Close the loop
 

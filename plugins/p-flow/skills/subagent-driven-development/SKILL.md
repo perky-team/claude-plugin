@@ -23,8 +23,11 @@ Execute the approved plan one step at a time, but delegate each step to a **fres
 
 ## Inputs
 
-- `specs/<slug>/plan.md` — required. Resolve `<slug>` from the branch (`<type>/<slug>`); if it doesn't match, ask the user. Missing → stop, point to `writing-plan`.
-- `specs/<slug>/specification.md` / `feature.feature` — read once for the goal and global constraints.
+Resolve `<slug>` from the branch (`<type>/<slug>`); if it doesn't match, ask the user. Required inputs depend on the mode (see "Mode" below — run the p-tasks gate first):
+
+- **Legacy mode (p-tasks absent):** `specs/<slug>/plan.md` — required. Missing → stop, point to `writing-plan`.
+- **Canonical mode (p-tasks present):** `specs/<slug>/specification.md` (context) + the p-tasks parent task titled `<slug>` (the step list). There is **no `plan.md`** — do not look for one or stop on its absence. If the `<slug>` parent task is missing, stop and point to `writing-plan`.
+- `specs/<slug>/specification.md` / `feature.feature` — read once for the goal and global constraints (in canonical mode `specification.md` is the primary context source).
 - A feature branch (not `main`/`master`/`develop`). A worktree is recommended for long runs — see `using-git-worktrees`.
 
 ## Mode — where the step list and statuses live
