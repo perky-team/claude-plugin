@@ -168,3 +168,38 @@ describe('config v3', () => {
     expect(() => readConfig(dir)).toThrow();
   });
 });
+
+describe('validateConfig — git/http source kinds', () => {
+  const base = (dest: any) => ({ primary: 'fs', mirrors: [], sources: ['s'], destinations: { fs: { kind: 'fs' }, s: dest } });
+
+  it('accepts a valid gitlab source block', () => {
+    expect(validateConfig(base({ kind: 'gitlab', project: 'g/p' })).ok).toBe(true);
+  });
+  it('accepts a valid github source block', () => {
+    expect(validateConfig(base({ kind: 'github', owner: 'o', repo: 'r' })).ok).toBe(true);
+  });
+  it('accepts a valid http source block', () => {
+    expect(validateConfig(base({ kind: 'http', url: 'https://x/index.json' })).ok).toBe(true);
+    expect(validateConfig(base({ kind: 'http', url: 'https://x/index.json', authHeader: 'X-Tok', authTokenEnv: 'T' })).ok).toBe(true);
+  });
+  it('rejects gitlab without project', () => {
+    expect(validateConfig(base({ kind: 'gitlab' })).ok).toBe(false);
+  });
+  it('rejects github without owner/repo', () => {
+    expect(validateConfig(base({ kind: 'github', owner: 'o' })).ok).toBe(false);
+  });
+  it('rejects http with authHeader but no authTokenEnv', () => {
+    expect(validateConfig(base({ kind: 'http', url: 'https://x', authHeader: 'X-Tok' })).ok).toBe(false);
+  });
+  it('rejects an inline token', () => {
+    expect(validateConfig(base({ kind: 'gitlab', project: 'g/p', token: 'secret' })).ok).toBe(false);
+  });
+  it('rejects a source kind used as primary', () => {
+    const cfg = { primary: 'g', mirrors: [], destinations: { g: { kind: 'gitlab', project: 'g/p' } } };
+    expect(validateConfig(cfg).ok).toBe(false);
+  });
+  it('rejects a source kind used as a mirror', () => {
+    const cfg = { primary: 'fs', mirrors: ['g'], destinations: { fs: { kind: 'fs' }, g: { kind: 'gitlab', project: 'g/p' } } };
+    expect(validateConfig(cfg).ok).toBe(false);
+  });
+});

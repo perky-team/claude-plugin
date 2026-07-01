@@ -47,9 +47,16 @@ export function validateConfig(cfg) {
     if (!(s in cfg.destinations)) return { ok: false, error: `source "${s}" not defined in destinations` };
     if (writeRoles.has(s)) return { ok: false, error: `source "${s}" is also used as primary or a mirror (roles are mutually exclusive)` };
   }
+  const SOURCE_ONLY = new Set(['gitlab', 'github', 'http']);
+  const writeRolesSet = new Set([cfg.primary, ...(cfg.mirrors ?? [])]);
   for (const [name, block] of Object.entries(cfg.destinations)) {
     if (!block || typeof block !== 'object') return { ok: false, error: `destinations.${name} must be an object` };
-    if (block.kind !== 'fs' && block.kind !== 'confluence') return { ok: false, error: `destinations.${name}.kind must be "fs" or "confluence"` };
+    const kinds = ['fs', 'confluence', 'gitlab', 'github', 'http'];
+    if (!kinds.includes(block.kind)) return { ok: false, error: `destinations.${name}.kind must be one of ${kinds.join(', ')}` };
+    if (SOURCE_ONLY.has(block.kind) && writeRolesSet.has(name)) {
+      return { ok: false, error: `destinations.${name}.kind "${block.kind}" is read-only and cannot be primary or a mirror` };
+    }
+    if ('token' in block) return { ok: false, error: `destinations.${name}: inline token forbidden — use an env var` };
     if (block.kind === 'confluence') {
       for (const f of ['siteUrl', 'spaceKey', 'spaceId', 'rootPageId']) {
         if (typeof block[f] !== 'string' || !block[f]) return { ok: false, error: `destinations.${name}.${f} required` };
@@ -62,6 +69,18 @@ export function validateConfig(cfg) {
     }
     if (block.kind === 'fs' && block.path !== undefined && (typeof block.path !== 'string' || !block.path)) {
       return { ok: false, error: `destinations.${name}.path must be a non-empty string` };
+    }
+    if (block.kind === 'gitlab' && (typeof block.project !== 'string' || !block.project)) {
+      return { ok: false, error: `destinations.${name}.project required` };
+    }
+    if (block.kind === 'github') {
+      for (const f of ['owner', 'repo']) if (typeof block[f] !== 'string' || !block[f]) return { ok: false, error: `destinations.${name}.${f} required` };
+    }
+    if (block.kind === 'http') {
+      if (typeof block.url !== 'string' || !block.url) return { ok: false, error: `destinations.${name}.url required` };
+      if ((block.authHeader === undefined) !== (block.authTokenEnv === undefined)) {
+        return { ok: false, error: `destinations.${name}: authHeader and authTokenEnv must be set together` };
+      }
     }
   }
   return { ok: true };
