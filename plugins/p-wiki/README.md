@@ -78,6 +78,88 @@ node "${CLAUDE_PLUGIN_ROOT}/tools/pwiki.mjs" sync
 
 A wiki may also declare **read-only sources** — `"sources": ["other-wiki"]`, referencing `destinations` entries that p-wiki only *reads* (never writes). `search` and `query` union results from the primary plus every source (each result is tagged with its `source`; an unreachable source is reported in a `warnings` array rather than failing the search), and `pwiki get <path> --source=<name>` reads a page from a named source. Sources are p-wiki-formatted stores: a foreign Confluence space populated by another p-wiki (its block needs that space's `spaceId` / `rootPageId` / `subParents` — copy them from the source wiki's own `.pwiki.json`), or another on-disk wiki via an `fs` block with a `path`. All Confluence blocks share the same `PWIKI_CONFLUENCE_EMAIL` / `PWIKI_CONFLUENCE_TOKEN`, so a source on a different Atlassian account is not supported.
 
+#### Git and HTTP read-only sources
+
+Three additional source kinds let you pull pages from a remote wiki without cloning the repo: `gitlab`, `github`, and `http`. These kinds are **source-only** — they are rejected if listed as `primary` or in `mirrors`.
+
+Each kind reads a single pre-built JSON bundle (`docs/wiki/index.json` by default) that the remote repo publishes. The consumer fetches this file on every `search` or `get --source=<name>` call; there is no local clone or cache.
+
+**`gitlab`**
+
+```json
+{
+  "kind": "gitlab",
+  "project": "group/my-wiki-repo",
+  "baseUrl": "https://gitlab.com",
+  "ref": "main",
+  "indexPath": "docs/wiki/index.json"
+}
+```
+
+Fields: `project` (required, `group/repo` form); `baseUrl` (default `https://gitlab.com`); `ref` (default `main`); `indexPath` (default `docs/wiki/index.json`). Set `PWIKI_GITLAB_TOKEN` in env for private repos (never put the token in config).
+
+**`github`**
+
+```json
+{
+  "kind": "github",
+  "owner": "my-org",
+  "repo": "my-wiki-repo",
+  "ref": "main",
+  "indexPath": "docs/wiki/index.json"
+}
+```
+
+Fields: `owner` and `repo` (both required); `ref` (optional, defaults to the repo's default branch); `indexPath` (default `docs/wiki/index.json`); `apiBaseUrl` (default `https://api.github.com`, override for GitHub Enterprise). Set `PWIKI_GITHUB_TOKEN` in env for private repos.
+
+**`http`**
+
+```json
+{
+  "kind": "http",
+  "url": "https://example.com/wiki/index.json",
+  "authHeader": "Authorization",
+  "authTokenEnv": "MY_WIKI_TOKEN"
+}
+```
+
+Fields: `url` (required, must serve `index.json` as `application/json`); `authHeader` and `authTokenEnv` (both optional, but must be set together). The env var named by `authTokenEnv` holds the token value; the header named by `authHeader` carries it.
+
+#### Publishing a bundle for consumption
+
+Before another repo can read your wiki, publish the index bundle:
+
+```bash
+# From the wiki repo — regenerates index.md and writes docs/wiki/index.json
+node "${CLAUDE_PLUGIN_ROOT}/tools/pwiki.mjs" reindex
+git add docs/wiki/index.json
+git commit -m "chore: update wiki bundle"
+git push
+```
+
+No `pwiki sync`, no Confluence required. Consumers on GitLab/GitHub fetch `index.json` through the provider's raw-file API; consumers using `http` fetch it directly from your hosted URL.
+
+> **Committed-bundle churn:** every `reindex` changes `index.json`, producing a commit each time. If that noise bothers you, add `docs/wiki/index.json` to `.gitignore`, generate the file in CI (e.g. a pre-publish step), and publish it to GitLab/GitHub Pages or any static host — then point an `http` source at the Pages URL instead.
+
+#### Shared wiki over git — quick recipe
+
+1. In the **shared wiki repo**, run `pwiki reindex` and push `docs/wiki/index.json` to the default branch (or set up CI to generate and publish it).
+2. In each **consumer repo**, add a source block to `docs/wiki/.pwiki.json`:
+
+   ```json
+   {
+     "sources": ["shared"],
+     "destinations": {
+       "shared": {
+         "kind": "gitlab",
+         "project": "my-org/shared-wiki"
+       }
+     }
+   }
+   ```
+
+3. `pwiki search "<question>"` and `/p-wiki:query` now union results from both wikis. `pwiki get <path> --source=shared` reads a page from the shared wiki directly.
+
 Full details (frontmatter schemas, identity format, reversing direction) live in the generated `docs/wiki/CLAUDE.md`, which Claude auto-loads when working under `docs/wiki/`.
 
 ## Design
