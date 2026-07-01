@@ -1,7 +1,7 @@
 ---
 name: task-brainstorming
 description: Use when starting a new non-trivial task to elicit requirements through dialog and produce `specs/<slug>/specification.md` (always) plus optional `feature.feature` and `adr.md`. Invoked by `/p-flow:task-start`. Hard gate — does not invoke `writing-plan` or any implementation skill until the user approves the written spec.
-allowed-tools: Read Write Edit Bash(git rev-parse:*) Bash(test:*)
+allowed-tools: Read Write Edit Bash(git rev-parse:*) Bash(test:*) WebSearch WebFetch
 ---
 
 # task-brainstorming
@@ -43,6 +43,8 @@ If the user's repo has no `.claude/templates/p-flow/` (i.e. `/p-flow:init` was n
 ### 2. Dialog
 
 **Consult p-wiki first (optional, gated).** Once the task's subject area is clear, run the gate in `${CLAUDE_SKILL_DIR}/../_shared/pwiki-bridge.md` (read side). If p-wiki is **not** active in this repo, skip this silently — say nothing. If it **is** active, offer to query the wiki for prior knowledge about the area before designing, and feed what it returns into the dialog — reuse established patterns, and **surface any conflict** with accumulated decisions rather than silently overriding them. Querying is never a precondition for producing the spec.
+
+**Consult external prior art (optional, judgment-gated).** After the internal look, for a task that hinges on an approach — a library / framework / protocol / algorithm choice, a best-practice-sensitive domain, or an approach novel to this codebase — consider a prior-art look per `${CLAUDE_SKILL_DIR}/../_shared/prior-art-bridge.md`: how is this commonly solved, what are the pitfalls, which option fits. Prefer `context7` for library docs and `/deep-research` for deep questions; a bounded `WebSearch` / `WebFetch` for a quick scan. **Never automatic, never a precondition** — a routine task needs no web look, so don't offer one. Fold options into the dialog as concrete choices, and record the chosen approach + alternatives + **source URLs** in `adr.md`.
 
 **One question at a time.** Adapt questions to the implied work:
 
@@ -95,6 +97,7 @@ On user approval, offer: *"Ready to draft the plan? I'll invoke `writing-plan` n
 ## Out of scope
 
 - p-wiki consultation is opt-in and gated — see `${CLAUDE_SKILL_DIR}/../_shared/pwiki-bridge.md`. Absent p-wiki → silent no-op; present → an offer, never automatic. Never a precondition for the spec.
+- Prior-art (external) consultation is opt-in and judgment-gated — see `${CLAUDE_SKILL_DIR}/../_shared/prior-art-bridge.md`. Only for approach/library/best-practice-sensitive tasks; routine tasks get no web look. Never a precondition; recommendations are cited and the user's to accept. Does not do open-ended research — delegate deep questions to `/deep-research`.
 - Does not write code.
 - Does not create `specs/repo.md` (project-wide baseline; authored once by a human; see `rules-p-flow.template.md` §3).
 - Does not create `plan.md` (that's `writing-plan`'s job).

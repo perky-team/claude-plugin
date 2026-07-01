@@ -49,7 +49,7 @@ Turn the brainstorm artifact into a concrete, ordered plan. One file: `specs/<sl
 
 6. **Self-review:** scan for placeholders (`TBD`, `TODO`, leftover `<...>` markers, internal contradictions). In legacy mode also check every step has an AC; in canonical mode check every sub-task was created with an `--acceptance`. Fix inline.
 7. **Show to user.** Legacy mode: *"Plan written to `specs/<slug>/plan.md`. Review and tell me what to amend before we move to execution."* Canonical mode: report how many sub-tasks were created in the `<slug>` task, and that plan.md holds only Risks / Open questions (walk the steps with `/p-tasks:list`).
-8. **Hand off to execution.** Once the user has approved the plan, offer: *"Ready to implement? I'll invoke `executing-plan` to work through the steps — TDD per code step, verify after each."* On **yes** → invoke `executing-plan` via the Skill tool. On **no** → stop here; the user can resume later (`executing-plan` picks up at the first unfinished step). Do not start writing code from this skill.
+8. **Hand off to execution.** Once the user has approved the plan, offer the two execution modes: *"Ready to implement? I can run `executing-plan` (inline — I implement in this session, TDD per code step, verify after each) or `subagent-driven-development` (a fresh implementer subagent per step, reviewed after each, keeping the main context clean). Which do you prefer?"* On a choice → invoke the chosen skill via the Skill tool. On **no** → stop here; the user can resume later (either skill picks up at the first unfinished step). Do not start writing code from this skill.
 
 ## Plan templates
 

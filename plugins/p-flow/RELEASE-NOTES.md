@@ -3,6 +3,36 @@
 > Marketplace tag → p-flow plugin version → date → headline.
 > Authored 2026-05-27; backfilled from `v4.6.0` onward (the first p-flow release on the marketplace was `v3.1.0` with `plugins/p-flow 0.1.0` — a minimal `init` skill; see `git log v4.5.0..v4.6.0 -- plugins/p-flow/`).
 
+## v5.8.0 — `plugins/p-flow 1.4.0` — 2026-07-01 — subagent-driven-development skill + prior-art consultation
+
+- **New `subagent-driven-development` skill** — an isolated, in-session execution mode alongside
+  the existing inline `executing-plan`. The controller dispatches a **fresh implementer subagent
+  per plan step**, runs a **per-step review** (spec compliance + code quality) after each, and a
+  **broad whole-branch review** at the end. Artifacts (task brief, review package, implementer
+  report) are handed over as files under `.p-flow/sdd/` so the controller's context stays clean;
+  no step text or diff is pasted into a dispatch prompt.
+  - Dispatch is `Task` + `subagent_type: general-purpose` + colocated inline templates
+    (`implementer-prompt.md`, `task-reviewer-prompt.md`) — the Wave A pattern, never registered
+    subagents. The final broad review reuses the canonical `requesting-code-review/code-reviewer.md`.
+  - Progress ledger reuses the p-tasks gate: p-tasks sub-tasks (canonical) or plan.md `## Steps`
+    checkboxes (legacy) — no separate ledger file. Compaction-safe.
+  - Every dispatch specifies `model` explicitly (cost/speed control per role).
+- **`writing-plan` hand-off now offers a choice** between `executing-plan` (inline) and
+  `subagent-driven-development` (isolated). `using-p-flow` + README updated to describe both.
+- **Fully decoupled** — no external-plugin dependency, no `superpowers` string, no `.superpowers/`
+  path. Pinned by the new `tests/p-flow-sdd-decoupling.test.ts`.
+- **Prior-art consultation in `task-brainstorming`.** When a task hinges on an approach — a
+  library/framework/protocol/algorithm choice, a best-practice-sensitive domain, or an approach
+  novel to the codebase — the skill may look up how it's commonly solved and record a **cited**
+  recommendation in `adr.md`. Judgment-gated (not marker-gated): opt-in, never automatic, never
+  a precondition, and never offered for routine work. Prefers delegation — `context7` for
+  version-accurate library docs, `/deep-research` for deep questions — falling back to a bounded
+  `WebSearch` / `WebFetch`. No plugin dependency (`context7`/`deep-research` used when present;
+  web tools added to `task-brainstorming` allowed-tools). Contract:
+  `skills/_shared/prior-art-bridge.md`; pinned by `tests/p-flow-prior-art-bridge.test.ts`.
+- Cleanup: removed the remaining `superpowers` mentions from `task-end` and `writing-skills`
+  skill bodies (design-history docs untouched).
+
 ## v5.6.0 — `plugins/p-flow 1.2.0` — 2026-06-25 — execution loop + p-wiki & p-graph bridges
 
 - **Closed the execution-loop gap.** Two new skills replace the "Wave 2" placeholders that

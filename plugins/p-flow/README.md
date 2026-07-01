@@ -23,7 +23,8 @@ To disable: remove the `SessionStart` entry from `hooks/hooks.json`, or globally
 | `using-p-flow` | Auto-emitted by the SessionStart hook on every fresh session / `/clear` / auto-compact. Establishes the p-flow surface for the model — lists commands, skills, hard rules. |
 | `task-brainstorming` | Right after `/p-flow:task-start`. Produces `specs/<slug>/{specification.md, feature.feature?, adr.md?}`. |
 | `writing-plan` | After spec is approved. Produces `specs/<slug>/plan.md` (5–15 steps, each with acceptance criteria). Offers a TDD-aligned template (default for code tasks) and a generic template (docs/research). |
-| `executing-plan` | After `plan.md` is approved. Walks `## Steps` in order — invokes `test-driven-development` for code steps and `verification-before-completion` after each, checking off `- [x]` only on green. The execution loop between `writing-plan` and `task-end`. |
+| `executing-plan` | After `plan.md` is approved, to implement **inline in this session**. Walks `## Steps` in order — invokes `test-driven-development` for code steps and `verification-before-completion` after each, checking off `- [x]` only on green. The inline execution loop between `writing-plan` and `task-end`. |
+| `subagent-driven-development` | After `plan.md` is approved, when you want **per-step context isolation**. Dispatches a fresh implementer subagent per step, a per-step review (spec compliance + code quality) after each, and a broad whole-branch review at the end — hands artifacts over as files so the controller's context stays clean. The isolated alternative to `executing-plan`; shares the same p-tasks / checkbox ledger. |
 | `test-driven-development` | Before writing production code. Enforces RED-GREEN-REFACTOR (failing test first, minimal code, verify). Pairs with `verification-before-completion` ("before code" gate vs "before claiming done" gate). |
 | `verification-before-completion` | Before any "done" claim or commit. Quotes test/lint output. Writes a state marker so `task-end` knows verification ran. |
 | `systematic-debugging` | When verification fails or behaviour is unexpected, before proposing a fix. Reproduce → one falsifiable hypothesis → test it → narrow (bisect) → fix the root cause → re-verify. `executing-plan` routes here on a red step. |
@@ -78,6 +79,12 @@ If the [`p-graph`](../p-graph/) code knowledge graph is initialised in the same 
 | `writing-plan` | When the spec touches existing code — find the change's impact set (downstream callers/callees), let it inform step granularity, and record notable affected modules under the plan's `## Risks` section. |
 
 This bridge is **advisory and read-only** — unlike the p-tasks/p-wiki bridges it makes no offer and writes nothing. p-graph exposes no query skill (its structural queries are CLI commands), and `/p-graph:init` already installs a repo rule (`.claude/rules/p-graph.md`) that tells the model how to query the graph. So p-flow only **points** the model at the graph at the right moment and defers the actual commands to that installed rule — keeping p-flow uncoupled from p-graph's pre-1.0 CLI. The one stateful action, refreshing a stale graph, goes through the Skill tool (`p-graph:sync`). Contract: `skills/_shared/pgraph-bridge.md`.
+
+## Prior-art consultation (optional)
+
+`task-brainstorming` can consult **external prior art** while designing — how a problem is commonly solved, what the pitfalls are, which library/approach fits — and record a cited recommendation in `specs/<slug>/adr.md`. This is **judgment-gated, not marker-gated**: there's no plugin to detect, so it's offered only when a task hinges on an approach (a library/framework/protocol/algorithm choice, a best-practice-sensitive domain, or an approach novel to the codebase) — never for routine work, never automatic, never a precondition for the spec.
+
+It prefers to **delegate**: `context7` for version-accurate library docs when installed, `/deep-research` for deep multi-source questions, and a bounded `WebSearch` / `WebFetch` for a quick scan otherwise. No plugin-manifest dependency — `context7` / `deep-research` are used when present, and the built-in web tools are the only hard capability. Contract: `skills/_shared/prior-art-bridge.md`.
 
 ## What `/p-flow:init` writes
 

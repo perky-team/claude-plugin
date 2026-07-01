@@ -39,7 +39,7 @@ May have:
 
 Do NOT use:
 
-- `tools:` — that's the agents/ field; p-flow uses inline templates, not registered agents (see Wave A migration in `docs/plans/2026-05-27-superpowers-parity-remediation.md`).
+- `tools:` — that's the agents/ field; p-flow uses inline templates, not registered agents (see the Wave A migration decision in `plugins/p-flow/CLAUDE.md`).
 - `model:` — skills don't pick models; the calling subagent does.
 - `color:` — UI affordance for registered agents only.
 
@@ -97,6 +97,6 @@ If the skill adds a new cross-skill invariant (e.g. references a canonical secti
 ## What this skill does NOT do
 
 - Does not generate skills automatically — you write the SKILL.md by hand.
-- Does not validate the skill's behavioural effectiveness — that's manual smoke testing (see `plugins/p-flow/docs/specs/2026-05-27-superpowers-parity.md` "Tier 3 — not testable automatically").
+- Does not validate the skill's behavioural effectiveness — that's manual smoke testing; there's no automated way to assert prompt discipline (see the "Known limitations" section in `plugins/p-flow/CLAUDE.md`).
 - Does not enforce style on existing skills retroactively — only applies when you're authoring or editing.
 - Does not cover agents/ (that pattern was removed in Wave A) or hooks (see `plugins/p-flow/CLAUDE.md` for hook conventions).
