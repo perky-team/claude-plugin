@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { resolve } from 'node:path';
+import { resolve, join } from 'node:path';
 import { parseFrontmatter, serializeFrontmatter } from './lib/fm.mjs';
 import { extractSummary, renderIndex } from './lib/index.mjs';
 import { resolveDestination } from './lib/destination.mjs';
@@ -13,6 +13,7 @@ import { createHttpClient } from './lib/confluence/http.mjs';
 import { ensureSubParent } from './lib/confluence/tree.mjs';
 import { writeConfig, validateConfig } from './lib/config.mjs';
 import { syncToMirror } from './lib/sync.mjs';
+import { buildBundle } from './lib/bundle.mjs';
 
 const VERSION = '3.3.0';
 
@@ -292,7 +293,7 @@ if (process.argv.slice(2)[0] === '--version') {
 const command = process.argv[2];
 const args = parseArgs(process.argv.slice(3));
 
-const KNOWN = ['new', 'set', 'promote', 'search', 'lint', 'backlinks', 'index', 'init', 'sync', 'get'];
+const KNOWN = ['new', 'set', 'promote', 'search', 'lint', 'backlinks', 'index', 'reindex', 'init', 'sync', 'get'];
 if (!KNOWN.includes(command)) die(`unknown command: ${command}`, 1);
 
 try {
@@ -534,7 +535,20 @@ try {
       process.exit(0);
     }
     const r = await dest.regenerateIndex();
+    const root = findWikiRoot(process.cwd());
+    const bundle = buildBundle(dest);
+    writeFileSync(join(root, 'docs', 'wiki', 'index.json'), JSON.stringify(bundle, null, 2) + '\n', 'utf-8');
     emitJson(r, 0);
+  }
+
+  if (command === 'reindex') {
+    const res = resolveDestination({ cwd: process.cwd(), transport: makeRealTransport() });
+    if (!res) die('not inside a p-wiki repo', 1);
+    const idx = res.primary.regenerateIndex();                       // writes index.md
+    const root = findWikiRoot(process.cwd());
+    const bundle = buildBundle(res.primary);
+    writeFileSync(join(root, 'docs', 'wiki', 'index.json'), JSON.stringify(bundle, null, 2) + '\n', 'utf-8');
+    emitJson({ index: idx, bundle: { pages: bundle.pages.length, path: 'docs/wiki/index.json' } });
   }
 
   if (command === 'sync') {
