@@ -80,7 +80,7 @@ On read, the block is split off so the human description is recovered cleanly, a
 
 ## Design
 
-See [`docs/superpowers/specs/2026-05-20-p-tasks-plugin-design.md`](./docs/superpowers/specs/2026-05-20-p-tasks-plugin-design.md) and [`docs/superpowers/plans/2026-05-20-p-tasks-plugin.md`](./docs/superpowers/plans/2026-05-20-p-tasks-plugin.md).
+Design specs and implementation plans for this plugin live under [`docs/`](./docs/).
 
 ## Validate
 

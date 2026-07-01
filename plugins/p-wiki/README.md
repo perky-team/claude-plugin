@@ -82,7 +82,7 @@ Full details (frontmatter schemas, identity format, reversing direction) live in
 
 ## Design
 
-See [`docs/superpowers/specs/2026-05-11-p-wiki-plugin-design.md`](./docs/superpowers/specs/2026-05-11-p-wiki-plugin-design.md) and [`docs/superpowers/plans/2026-05-11-p-wiki-plugin.md`](./docs/superpowers/plans/2026-05-11-p-wiki-plugin.md).
+Design specs and implementation plans for this plugin live under [`docs/`](./docs/).
 
 ## Validate
 

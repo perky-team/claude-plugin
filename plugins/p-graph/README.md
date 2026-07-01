@@ -98,7 +98,7 @@ The graph is purely local — there is no remote service, no MCP server, and no 
 
 ## Design
 
-See [`docs/superpowers/specs/2026-06-15-p-graph-design.md`](./docs/superpowers/specs/2026-06-15-p-graph-design.md) and [`docs/superpowers/plans/2026-06-15-p-graph.md`](./docs/superpowers/plans/2026-06-15-p-graph.md).
+Design specs and implementation plans for this plugin live under [`docs/`](./docs/).
 
 ## Validate
 
