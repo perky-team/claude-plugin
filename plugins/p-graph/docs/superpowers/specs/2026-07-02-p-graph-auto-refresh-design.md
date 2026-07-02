@@ -191,9 +191,19 @@ stable. `/p-graph:sync` behaviour is unchanged whenever there are real changes.
   before the freshness gate ever runs, so the query would die instead of
   degrading. If the normal open throws, retry opening the store read-only (the
   `node:sqlite` `DatabaseSync` read-only open option — exact option name to be
-  confirmed against the installed Node during implementation — and skip the WAL
-  pragma). A read-only store can serve every query command; the refresh path then
-  fails to write and degrades with the banner, as required.
+  confirmed against the installed Node during implementation). The read-only path
+  must **skip every write `openStore` normally performs**, because they would all
+  fail on a read-only handle: the WAL pragma, the `db.exec(DDL)`
+  (`CREATE TABLE IF NOT EXISTS`), the FTS `CREATE VIRTUAL TABLE`, and the initial
+  `meta` schema-version `INSERT`. This is safe because a read-only DB is one that
+  `init` already created and populated — the tables exist; only the read-path
+  prepared statements are needed. Implement this as an `openStore(dbPath, { readOnly:
+  true })` branch that prepares only the query statements (`search`, `node`,
+  `callers`, `callees`, `files`, `impact`, `trace`, `status`, `getMeta`) and leaves
+  the mutators absent/no-op. A read-only store serves every query command; the
+  refresh path then finds it cannot write and degrades with the banner, as required.
+  (Read-only FS remains best-effort — WAL DBs can be awkward to open read-only; the
+  deterministic degradation test uses the non-git path.)
 
 ## Data flow
 
