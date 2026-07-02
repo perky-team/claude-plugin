@@ -6,6 +6,11 @@ import { toPosix, isIgnored } from '../config.mjs';
 import { resolveLang, SUPPORTED_EXTS } from '../parse/index.mjs';
 import { extract } from '../parse/driver.mjs';
 
+export function headSha(root) {
+  try { return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf-8' }).trim(); }
+  catch { return null; }
+}
+
 function walk(root, dir, ignorePatterns, acc) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const abs = join(dir, entry.name);
@@ -19,12 +24,17 @@ function walk(root, dir, ignorePatterns, acc) {
 
 export async function indexFile(root, store, rel) {
   const cfg = resolveLang(rel);
-  if (!cfg) return;
+  if (!cfg) return false;
   const source = readFileSync(join(root, rel), 'utf-8');
   const hash = createHash('sha1').update(source).digest('hex');
+  // Skip files whose content is unchanged since the last index. `indexFull`
+  // calls store.clear() first (files table truncated), so fileHash is null there
+  // and every file is fully parsed; only incremental runs skip.
+  if (store.fileHash?.(rel) === hash) return false;
   const { nodes, edges } = await extract({ file: rel, lang: cfg.lang, langId: cfg.langId, scm: cfg.query, source });
   store.upsertFile(rel, hash, cfg.lang);
   store.replaceFileSymbols(rel, nodes, edges);
+  return true;
 }
 
 export async function indexFull({ root, store, ignorePatterns, onError }) {
@@ -92,13 +102,17 @@ export async function indexChanged({ root, store, ignorePatterns, changedFiles, 
   for (const rel of change.modified) {
     if (isIgnored(rel, ignorePatterns) || !resolveLang(rel)) continue;
     try {
-      await indexFile(root, store, rel); n++;
+      if (await indexFile(root, store, rel)) n++;
     } catch (err) {
       skipped++;
       onError?.(rel, err);
     }
   }
   for (const rel of change.deleted) store.removeFile(rel);
-  store.resolvePending();
+  // Edge resolution only changes when nodes are added or removed. If nothing was
+  // reparsed and nothing was deleted, the resolution state is already correct, so
+  // skip the (full-table) resolvePending scan — this keeps repeat queries over a
+  // stable dirty tree cheap.
+  if (n > 0 || change.deleted.length > 0) store.resolvePending();
   return { changed: n, deleted: change.deleted.length, skipped };
 }

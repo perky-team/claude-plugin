@@ -136,6 +136,8 @@ export function openStore(dbPath) {
     }
     return rows.filter((r) => (!kind || r.kind === kind) && (!lang || r.lang === lang)).slice(0, 100);
   };
+  store.fileHash = (path) =>
+    db.prepare('SELECT hash FROM files WHERE path = ?').get(path)?.hash ?? null;
   store.node = (idOrQname) =>
     db.prepare('SELECT * FROM nodes WHERE id = ? OR qname = ? LIMIT 1').get(idOrQname, idOrQname) ?? null;
   store.callers = (name) => db.prepare(`
