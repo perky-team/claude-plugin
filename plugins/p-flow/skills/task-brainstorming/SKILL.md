@@ -1,7 +1,7 @@
 ---
 name: task-brainstorming
 description: Use when starting a new non-trivial task to elicit requirements through dialog and produce `specs/<slug>/specification.md` (always) plus optional `feature.feature` and `adr.md`. Invoked by `/p-flow:task-start`. Hard gate — does not invoke `writing-plan` or any implementation skill until the user approves the written spec.
-allowed-tools: Read Write Edit Bash(git rev-parse:*) Bash(test:*) WebSearch WebFetch
+allowed-tools: Read Write Edit Bash(git rev-parse:*) Bash(test:*) WebSearch WebFetch Task
 ---
 
 # task-brainstorming
@@ -67,22 +67,31 @@ If the request spans multiple independent subsystems, flag it. Suggest splitting
 - Sections that don't apply are **omitted entirely**, not filled with `N/A`. (Relaxation of the §3 rule in `rules-p-flow.template.md` for non-feature tasks.)
 - Fill all `{{PLACEHOLDERS}}` from the dialog. Never leave a placeholder in the output.
 
-### 5. Self-review
+### 5. Spec audit (subagent loop)
 
-Scan produced files for:
+Before showing the spec to the user, dispatch a **fresh-context auditor subagent** to hunt logical errors and inconsistencies and fix them. This replaces a shallow inline self-review — the auditor reads the spec with no authoring bias. (Runs only on this full spec — never on `/p-flow:init` Phase 2 stubs.)
 
-- Placeholders still present (`{{`, `TBD`, `TODO`).
-- Internal contradictions.
-- Ambiguous requirements (could be interpreted two ways).
-- Scope creep into adjacent work.
+First, a one-line inline guard: if any `{{PLACEHOLDER}}`, `TBD`, or `TODO` is still present, fill it from the dialog before dispatching — the auditor audits meaning, not leftover template holes.
 
-Fix inline.
+Then loop, `pass = 1..3`:
+
+1. Dispatch via the `Task` tool with `subagent_type: general-purpose`. The prompt is the content of `${CLAUDE_SKILL_DIR}/spec-auditor.md`, followed by: the paths of every file in `specs/<slug>/`, and — on passes after the first — the user's answers to any questions raised so far.
+2. The subagent fixes what it can unambiguously fix (all severities) and returns `### Fixed` / `### Blockers remaining` / `### Questions for the user`.
+3. Act on the result:
+   - **Questions present** → ask the user **one at a time**, collect answers, and re-dispatch with them **without advancing `pass`** (a question round is not a wasted pass — the subagent still has to apply the resolution).
+   - **No questions and no Blockers remaining** → the spec is clean. Exit the loop.
+   - **No questions but Blockers remain** → advance `pass` and re-dispatch (a fresh pass catches regressions the fixes introduced).
+4. **Cap: 3 passes.** If Blockers still remain after pass 3, stop looping and carry the remaining list into §6 — never loop indefinitely.
+
+**Only Blockers drive the loop.** Suggestions and Nits are fixed in-pass but never keep the loop running.
 
 ### 6. User review gate
 
-Say: *"Spec written in `specs/<slug>/`. Review and tell me what to change before we move to the plan."*
+Summarize what the auditor changed across all passes (one line per file). If any Blockers remained after the 3-pass cap, list them explicitly so the user decides.
 
-Wait for response. If user requests changes — apply, re-run §5.
+Say: *"Spec written in `specs/<slug>/` and audited. What the audit changed: <summary>. Review and tell me what to change before we move to the plan."*
+
+Wait for response. If user requests changes — apply, and re-run §5 when the change is substantive.
 
 ### 7. Hand-off
 
