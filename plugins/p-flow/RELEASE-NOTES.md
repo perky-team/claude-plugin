@@ -3,6 +3,14 @@
 > Marketplace tag → p-flow plugin version → date → headline.
 > Authored 2026-05-27; backfilled from `v4.6.0` onward (the first p-flow release on the marketplace was `v3.1.0` with `plugins/p-flow 0.1.0` — a minimal `init` skill; see `git log v4.5.0..v4.6.0 -- plugins/p-flow/`).
 
+## `plugins/p-flow 1.7.1` (marketplace `v5.14.1`) — SDD model-selection floor
+
+- **`subagent-driven-development` §Model selection now states the cheap-tier floor explicitly.** The
+  cheapest tier applies only when the plan already contains the code to write; for prose-described
+  steps and all reviewers the floor is mid tier, because cheap models routinely take 2–3× the turns
+  on multi-step work and cost more overall. Restores the one behavioural cue that was dropped when
+  the section was condensed from the upstream `superpowers` original — no dispatch mechanics change.
+
 ## `plugins/p-flow 1.7.0` (marketplace `v5.14.0`) — spec audit subagent in task-brainstorming
 
 - **`task-brainstorming` now audits the spec with a fresh-context subagent instead of a shallow

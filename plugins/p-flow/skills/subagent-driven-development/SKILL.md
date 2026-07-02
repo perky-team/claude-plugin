@@ -102,6 +102,8 @@ Specify `model` on **every** dispatch. Use the least powerful model that fits th
 - **The final whole-branch review** → the most capable tier.
 - **Per-step reviewers** → scale to the diff: a small mechanical diff needs a mid tier; a subtle change needs the capable tier.
 
+**Cheapest tier only when the plan already contains the code to write.** For prose-described steps and all reviewers the floor is mid tier — cheap models routinely take 2–3× the turns on multi-step work and cost more overall.
+
 An omitted `model` silently inherits the session's model (often the most expensive) — never omit it.
 
 ## Handling implementer status
