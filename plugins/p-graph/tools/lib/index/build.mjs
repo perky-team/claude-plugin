@@ -75,7 +75,7 @@ export function parseGitChanges(diffText, porcelainText) {
 }
 
 export function gitChangedFiles(root, indexedSha) {
-  const run = (args) => execFileSync('git', args, { cwd: root, encoding: 'utf-8' }).trim();
+  const run = (args) => execFileSync('git', args, { cwd: root, encoding: 'utf-8' }).trimEnd();
   try {
     const diffText = indexedSha ? run(['diff', '--name-status', `${indexedSha}..HEAD`]) : '';
     const porcelainText = run(['status', '--porcelain']);

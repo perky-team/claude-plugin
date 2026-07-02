@@ -1,12 +1,8 @@
-import { execFileSync } from 'node:child_process';
-import { indexFull, indexChanged, gitChangedFiles } from '../index/build.mjs';
-
-function headSha(root) {
-  try { return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf-8' }).trim(); }
-  catch { return null; }
-}
+import { indexFull, indexChanged, gitChangedFiles, headSha } from '../index/build.mjs';
+import { ensureFresh } from '../freshness.mjs';
 
 export async function runCommand(ctx) {
+  await ensureFresh(ctx); // no-op for non-query commands; refreshes a stale graph before a query
   const { command, opts, root, store, ignorePatterns, out, emitJson, die } = ctx;
 
   if (command === 'index') {

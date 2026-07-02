@@ -25,6 +25,7 @@ function parseArgs(argv) {
 }
 function out(s) { process.stdout.write(s + '\n'); }
 function emitJson(o) { process.stdout.write(JSON.stringify(o) + '\n'); }
+function warn(s) { process.stderr.write(s + '\n'); }
 function die(msg, code = 1) { process.stderr.write(`pgraph: ${msg}\n`); process.exit(code); }
 
 const argv = process.argv.slice(2);
@@ -47,11 +48,23 @@ if (command === 'index') {
 }
 
 let store;
-try { store = resolveDestination(cfg, dbPath); }
-catch (e) { die(e.message, 1); }
+try {
+  store = resolveDestination(cfg, dbPath);
+} catch (e) {
+  // Writable (WAL) open failed — e.g. a read-only filesystem. Fall back to a
+  // read-only store so the query can still answer (the refresh will then degrade
+  // with a banner). If even this fails, there is genuinely no graph to read.
+  try { store = resolveDestination(cfg, dbPath, { readOnly: true }); }
+  catch { die(e.message, 1); }
+}
 
 try {
-  await runCommand({ command, opts, root, store, ignorePatterns: readIgnorePatterns(root), out, emitJson, die });
+  await runCommand({
+    command, opts, root, store,
+    ignorePatterns: readIgnorePatterns(root),
+    pgraphDir: join(root, PGRAPH_DIR),
+    out, emitJson, warn, die,
+  });
 } catch (e) {
   try { store.close(); } catch { /* ignore */ }
   die(e?.message ?? String(e), 3);
