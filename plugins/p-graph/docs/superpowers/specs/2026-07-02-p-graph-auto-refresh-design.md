@@ -33,6 +33,17 @@ then answers from the now-fresh graph. `index` and `status` keep their current
 behaviour — `status` reports drift but never refreshes, and `index` is the refresh
 itself.
 
+Note on "`status` output is unchanged": this means the `status` command's code and
+behaviour are untouched and it never triggers a reindex. The drift *number* it
+prints can legitimately change after a query auto-refreshes, because a successful
+refresh advances `indexed_sha` to HEAD (so committed changes stop counting) — just
+as running `index` would. Advancing the SHA is deliberate: it is what lets the
+staleness banner tell the truth. If we left `indexed_sha` untouched, the banner
+would keep crying "N files changed" even after the graph was fully refreshed.
+Tests for this criterion must assert that `status` does not reindex (node/edge
+counts and `indexed_sha` are not mutated *by running status*), not that the drift
+number is frozen across an intervening query.
+
 ### Concurrency mechanism (decided)
 
 The reindex is guarded by an **exclusive lock file** under `.pgraph/`, and the DB
@@ -259,7 +270,10 @@ Vitest, alongside the existing suite:
 - **Graceful degradation:** non-git repo → the query still answers, with the
   unknown-drift banner (deterministic). Read-only filesystem is covered
   best-effort via the read-only store-open fallback.
-- **`status` unchanged:** still reports drift; does not refresh.
+- **`status` unchanged:** running `status` does not reindex — node/edge counts and
+  `indexed_sha` are not mutated by it. (Do **not** assert the drift number is frozen
+  across an intervening auto-refreshing query; a refresh legitimately advances
+  `indexed_sha`.)
 - **Lock unit test:** acquire, contended wait, stale-lock steal by pid-liveness
   (a lock whose recorded pid is dead is stolen; a live pid's lock is not).
 - All existing tests continue to pass.
