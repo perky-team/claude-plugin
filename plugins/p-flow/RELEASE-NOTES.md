@@ -3,7 +3,7 @@
 > Marketplace tag → p-flow plugin version → date → headline.
 > Authored 2026-05-27; backfilled from `v4.6.0` onward (the first p-flow release on the marketplace was `v3.1.0` with `plugins/p-flow 0.1.0` — a minimal `init` skill; see `git log v4.5.0..v4.6.0 -- plugins/p-flow/`).
 
-## Unreleased — `plugins/p-flow 1.7.0` — spec audit subagent in task-brainstorming
+## `plugins/p-flow 1.7.0` (marketplace `v5.14.0`) — spec audit subagent in task-brainstorming
 
 - **`task-brainstorming` now audits the spec with a fresh-context subagent instead of a shallow
   inline self-review.** After the spec is materialized (§4) and before the user review gate (§6),
@@ -20,7 +20,7 @@
   contain, the subagent returns a question; `task-brainstorming` asks the user one at a time and
   re-dispatches with the answers.
 
-## Unreleased — `plugins/p-flow 1.6.0` — canonical status lifecycle (todo → in_progress → done)
+## `plugins/p-flow 1.6.0` (marketplace `v5.13.0`) — canonical status lifecycle (todo → in_progress → done)
 
 - **In canonical mode (p-tasks present), the execution skills now use the full three-state
   status lifecycle instead of only flipping `todo → done`.** This makes the tracker show what is
