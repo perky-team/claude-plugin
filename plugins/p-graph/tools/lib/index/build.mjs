@@ -31,9 +31,9 @@ export async function indexFile(root, store, rel) {
   // calls store.clear() first (files table truncated), so fileHash is null there
   // and every file is fully parsed; only incremental runs skip.
   if (store.fileHash?.(rel) === hash) return false;
-  const { nodes, edges } = await extract({ file: rel, lang: cfg.lang, langId: cfg.langId, scm: cfg.query, source });
+  const { nodes, edges, fieldTypes } = await extract({ file: rel, lang: cfg.lang, langId: cfg.langId, scm: cfg.query, source });
   store.upsertFile(rel, hash, cfg.lang);
-  store.replaceFileSymbols(rel, nodes, edges);
+  store.replaceFileSymbols(rel, nodes, edges, fieldTypes);
   return true;
 }
 

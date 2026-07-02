@@ -45,17 +45,47 @@ function goContext(caps) {
   return { pkg, importNames, hasDotImport };
 }
 
+// Render a Go field type node to a package-qualified type name, stripping any
+// leading '*' (pointer). `core.Core` -> "core.Core" (qualifier from syntax);
+// a bare `Helper` -> "<pkg>.Helper" (same package). Returns null for shapes we
+// don't resolve method receivers through (slices, maps, funcs, interfaces,
+// channels, embedded fields) — those keep the bare-name fallback.
+function goFieldTypeName(typeNode, pkg) {
+  let n = typeNode;
+  while (n && n.type === 'pointer_type') n = n.namedChild(0);
+  if (!n) return null;
+  if (n.type === 'qualified_type') {
+    const p = n.childForFieldName?.('package');
+    const nm = n.childForFieldName?.('name');
+    return p && nm ? `${p.text}.${nm.text}` : null;
+  }
+  if (n.type === 'type_identifier') return pkg ? `${pkg}.${n.text}` : n.text;
+  return null;
+}
+
 // Resolve the qualified call target for a Go reference.call capture. Carries the
 // qualifier the call site syntactically provides so the conservative resolver
 // can match a qualified qname without guessing; leaves the bare name when the
 // qualifier can't be classified as a package (method call on a value/expr) or
 // when the call is a builtin / lives in a dot-importing file.
+//
+// For `recvVar.field.Method()` (operand is a `recvVar.field` selector) it returns
+// structured info {bare, recvVar, field, method} so the build-time resolver can
+// look the field's static type up in the field-type table; `bare` stays as the
+// fallback dst_name if the type can't be inferred.
 function goCallTarget(c, { pkg, importNames, hasDotImport }) {
   const node = c.node;
   if (node?.type === 'field_identifier') {
     const operand = node.parent?.childForFieldName?.('operand');
     if (operand?.type === 'identifier' && (importNames.has(operand.text) || operand.text === pkg)) {
       return `${operand.text}.${c.text}`;
+    }
+    if (operand?.type === 'selector_expression') {
+      const innerRecv = operand.childForFieldName?.('operand');
+      const innerField = operand.childForFieldName?.('field');
+      if (innerRecv?.type === 'identifier' && innerField?.type === 'field_identifier') {
+        return { bare: c.text, recvVar: innerRecv.text, field: innerField.text, method: c.text };
+      }
     }
     return c.text; // receiver type unknown (no type inference) — keep bare name
   }
@@ -73,6 +103,7 @@ export async function extract({ file, lang, langId, scm, source }) {
   const defCaps = caps.filter((c) => c.name.startsWith('definition.'));
   const nameCaps = caps.filter((c) => c.name === 'name');
   const recvCaps = caps.filter((c) => c.name === 'receiver');
+  const recvNameCaps = caps.filter((c) => c.name === 'receiver.name');
   for (const d of defCaps) {
     const kind = d.name.split('.')[1];
     if (!defKinds.includes(kind)) continue;
@@ -101,7 +132,16 @@ export async function extract({ file, lang, langId, scm, source }) {
       let local = def.name;
       if (def.kind === 'method') {
         const rc = recvCaps.find((r) => within(r, def));
-        if (rc) local = `${rc.text}.${local}`;
+        if (rc) {
+          local = `${rc.text}.${local}`;
+          // Package-qualified receiver type, e.g. "events.Server". Used to build
+          // the field-type table key when a call goes through the receiver.
+          def.recvType = goCtx.pkg ? `${goCtx.pkg}.${rc.text}` : rc.text;
+        }
+        // Receiver variable name (the "s" in `func (s Server) ...`), so a call
+        // `s.field.Method()` can be bound to this receiver's type — and only this.
+        const rn = recvNameCaps.find((r) => within(r, def));
+        if (rn) def.recvVar = rn.text;
       }
       def.qname = goCtx.pkg ? `${goCtx.pkg}.${local}` : local;
     } else {
@@ -119,17 +159,51 @@ export async function extract({ file, lang, langId, scm, source }) {
     signature: d.signature, doc: '', container_id: d.container_id,
   }));
 
+  // Struct-field-type table: <struct qname>.<field> -> package-qualified field
+  // type ('*' stripped). Built at extraction (local syntax), resolved at build
+  // time (cross-package). Only emitted for Go, where receiver typing applies.
+  const fieldTypes = [];
+  if (goCtx) {
+    const fieldDeclCaps = caps.filter((c) => c.name === 'field.decl');
+    for (const fd of fieldDeclCaps) {
+      const structDef = defs
+        .filter((d) => d.kind === 'struct' && within(fd, d))
+        .sort((a, b) => b.startLine - a.startLine)[0];
+      if (!structDef) continue;
+      const node = fd.node;
+      const typeName = goFieldTypeName(node?.childForFieldName?.('type'), goCtx.pkg);
+      if (!typeName) continue; // embedded field or a type shape we don't resolve through
+      for (let i = 0; i < node.childCount; i++) {
+        if (node.fieldNameForChild(i) !== 'name') continue;
+        fieldTypes.push({ key: `${structDef.qname}.${node.child(i).text}`, type: typeName, file });
+      }
+    }
+  }
+
   const refMap = { 'reference.call': 'call', 'reference.import': 'import', 'reference.include': 'include' };
   const edges = [];
   for (const c of caps) {
     const kind = refMap[c.name];
     if (!kind) continue;
     const enclosing = defs.filter((d) => within(c, d)).sort((a, b) => b.startLine - a.startLine)[0];
-    const dst_name = goCtx && kind === 'call' ? goCallTarget(c, goCtx) : c.text;
+    let dst_name, field_key = null, method = null;
+    const target = goCtx && kind === 'call' ? goCallTarget(c, goCtx) : c.text;
+    if (target && typeof target === 'object') {
+      dst_name = target.bare; // bare method name — the fallback if we can't infer the type
+      // Bind the field-selector only when its receiver var IS the enclosing
+      // method's own receiver and that receiver's type is known. Anything else
+      // (plain function, param, local var) keeps the bare-name fallback — no guessing.
+      if (enclosing?.kind === 'method' && enclosing.recvVar && enclosing.recvVar === target.recvVar && enclosing.recvType) {
+        field_key = `${enclosing.recvType}.${target.field}`;
+        method = target.method;
+      }
+    } else {
+      dst_name = target;
+    }
     edges.push({
       src_id: enclosing ? enclosing.id : null,
-      dst_id: null, dst_name, kind, file, line: c.startLine,
+      dst_id: null, dst_name, field_key, method, kind, file, line: c.startLine,
     });
   }
-  return { nodes, edges };
+  return { nodes, edges, fieldTypes };
 }

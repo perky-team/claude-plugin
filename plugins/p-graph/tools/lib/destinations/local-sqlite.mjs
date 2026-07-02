@@ -8,7 +8,10 @@ function loadDatabaseSync() {
 // 2: Go qnames became package/receiver-qualified (e.g. "filesink.New",
 // "filesink.Writer.Write"). The qname format changed, so a DB written by an
 // older version must be fully reindexed rather than incrementally patched.
-export const SCHEMA_VERSION = 2;
+// 3: added the field_types table + edges.field_key/method columns for Go
+// struct-field method-call resolution (recv.field.Method()). New columns/table
+// only exist after a rebuild, so a stale DB must fully reindex.
+export const SCHEMA_VERSION = 3;
 
 const DDL = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
@@ -24,12 +27,22 @@ CREATE INDEX IF NOT EXISTS nodes_file ON nodes(file);
 CREATE INDEX IF NOT EXISTS nodes_name ON nodes(name);
 CREATE INDEX IF NOT EXISTS nodes_qname ON nodes(qname);
 CREATE TABLE IF NOT EXISTS edges (
-  src_id TEXT, dst_id TEXT, dst_name TEXT, kind TEXT, file TEXT, line INTEGER
+  src_id TEXT, dst_id TEXT, dst_name TEXT, kind TEXT, file TEXT, line INTEGER,
+  field_key TEXT, method TEXT
 );
 CREATE INDEX IF NOT EXISTS edges_src ON edges(src_id);
 CREATE INDEX IF NOT EXISTS edges_dst ON edges(dst_id);
 CREATE INDEX IF NOT EXISTS edges_dstname ON edges(dst_name);
 CREATE INDEX IF NOT EXISTS edges_file ON edges(file);
+CREATE INDEX IF NOT EXISTS edges_fieldkey ON edges(field_key);
+-- Struct-field-type table for Go: key "<pkg>.<Struct>.<field>" -> package-
+-- qualified field type ('*' stripped), e.g. "events.Server.dimpleCore" ->
+-- "core.Core". Lets resolvePending() type a recv.field.Method() call.
+CREATE TABLE IF NOT EXISTS field_types (
+  key TEXT, type TEXT, file TEXT
+);
+CREATE INDEX IF NOT EXISTS field_types_key ON field_types(key);
+CREATE INDEX IF NOT EXISTS field_types_file ON field_types(file);
 `;
 
 export function openStore(dbPath, opts = {}) {
@@ -67,7 +80,9 @@ export function openStore(dbPath, opts = {}) {
   const delNodesByFile = db.prepare('DELETE FROM nodes WHERE file = ?');
   const delEdgesByFile = db.prepare('DELETE FROM edges WHERE file = ?');
   const insEdge = db.prepare(
-    'INSERT INTO edges (src_id,dst_id,dst_name,kind,file,line) VALUES (?,?,?,?,?,?)');
+    'INSERT INTO edges (src_id,dst_id,dst_name,kind,file,line,field_key,method) VALUES (?,?,?,?,?,?,?,?)');
+  const insFieldType = db.prepare('INSERT INTO field_types (key,type,file) VALUES (?,?,?)');
+  const delFieldTypesByFile = db.prepare('DELETE FROM field_types WHERE file = ?');
   const insFile = db.prepare(`INSERT INTO files (path,hash,lang,indexed_at)
     VALUES (?,?,?,'') ON CONFLICT(path) DO UPDATE SET hash=excluded.hash, lang=excluded.lang`);
   const delFile = db.prepare('DELETE FROM files WHERE path = ?');
@@ -88,6 +103,7 @@ export function openStore(dbPath, opts = {}) {
       db.exec('DELETE FROM edges');
       db.exec('DELETE FROM nodes');
       db.exec('DELETE FROM files');
+      db.exec('DELETE FROM field_types');
       db.prepare('COMMIT').run();
     } catch (err) { db.prepare('ROLLBACK').run(); throw err; }
   };
@@ -96,20 +112,23 @@ export function openStore(dbPath, opts = {}) {
     if (delFtsByFile) delFtsByFile.run(path);
     delNodesByFile.run(path);
     delEdgesByFile.run(path);
+    delFieldTypesByFile.run(path);
     delFile.run(path);
   };
-  store.replaceFileSymbols = (file, nodes, edges) => {
+  store.replaceFileSymbols = (file, nodes, edges, fieldTypes = []) => {
     db.prepare('BEGIN').run();
     try {
       if (delFtsByFile) delFtsByFile.run(file);
       delNodesByFile.run(file);
       delEdgesByFile.run(file);
+      delFieldTypesByFile.run(file);
       for (const n of nodes) {
         insNode.run(n.id, n.name, n.qname, n.kind, n.lang, n.file,
           n.start_line, n.end_line, n.signature, n.doc, n.container_id);
         if (insFts) insFts.run(n.id, n.name, n.qname, n.signature);
       }
-      for (const e of edges) insEdge.run(e.src_id, e.dst_id ?? null, e.dst_name ?? null, e.kind, e.file, e.line);
+      for (const e of edges) insEdge.run(e.src_id, e.dst_id ?? null, e.dst_name ?? null, e.kind, e.file, e.line, e.field_key ?? null, e.method ?? null);
+      for (const f of fieldTypes) insFieldType.run(f.key, f.type, f.file ?? file);
       db.prepare('COMMIT').run();
     } catch (err) { db.prepare('ROLLBACK').run(); throw err; }
   };
@@ -133,6 +152,30 @@ export function openStore(dbPath, opts = {}) {
       )
       WHERE dst_id IS NULL AND dst_name IS NOT NULL
         AND (SELECT count(*) FROM nodes n WHERE n.qname = dst_name) = 1`).run();
+    // A field-selector target depends on the field_types table, which can change
+    // in a DIFFERENT file than the call site (the struct's field type is edited
+    // but the calling method's file isn't reparsed, so its dst_id would go
+    // stale). Clear every field-selector edge so Pass F recomputes it from the
+    // current field_types. The bare-name fallback (Pass B) re-links any that
+    // Pass F can't resolve, so this never loses a legitimately fallback-linked edge.
+    db.prepare(`UPDATE edges SET dst_id = NULL WHERE field_key IS NOT NULL`).run();
+    // Pass F — Go recv.field.Method() resolution via the field-type table. An
+    // edge tagged with field_key ("<pkg>.<Struct>.<field>") + method resolves to
+    // the node "<field type>.<method>". This runs BEFORE the bare-name fallback
+    // so an ambiguous method name (two types with a same-named method) links to
+    // the RIGHT type. Guarded twice — exactly one known field type for the key
+    // AND exactly one node with the target qname — so an unknown/ambiguous field
+    // type creates no edge and falls through to the bare-name fallback instead.
+    db.prepare(`
+      UPDATE edges SET dst_id = (
+        SELECT n.id FROM nodes n
+        WHERE n.qname = (SELECT ft.type FROM field_types ft WHERE ft.key = edges.field_key LIMIT 1) || '.' || edges.method
+        LIMIT 1
+      )
+      WHERE dst_id IS NULL AND field_key IS NOT NULL AND method IS NOT NULL
+        AND (SELECT count(DISTINCT ft.type) FROM field_types ft WHERE ft.key = edges.field_key) = 1
+        AND (SELECT count(*) FROM nodes n
+             WHERE n.qname = (SELECT ft.type FROM field_types ft WHERE ft.key = edges.field_key LIMIT 1) || '.' || edges.method) = 1`).run();
     // Pass B — fall back to a unique bare-name match only when no qualified
     // candidate exists (e.g. a method call left bare, or a non-Go language).
     // The "exactly one" guard is preserved: a genuinely ambiguous bare name
