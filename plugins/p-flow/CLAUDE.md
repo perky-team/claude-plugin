@@ -21,6 +21,7 @@ For authoring or editing **skills**, see also `skills/writing-skills/SKILL.md` �
 | Prior-art consultation in `task-brainstorming`: a **judgment-gated** (not marker-gated) contract — offered only for approach/library/best-practice-sensitive tasks, never routine, never automatic, never a precondition. Prefers delegation (`context7`, `/deep-research`) over the built-in `WebSearch`/`WebFetch`; records cited recommendations in `adr.md`. NO `plugin.json#dependencies` — context7/deep-research used when present; web tools are the only hard capability (added to `task-brainstorming` allowed-tools). | I | `skills/_shared/prior-art-bridge.md`, `skills/task-brainstorming/SKILL.md` |
 | Optional soft bridge to `p-wiki`: gated on `docs/wiki/.pwiki.json`, dispatched via the Skill tool (`p-wiki:query` read at `task-brainstorming`, `p-wiki:compile` write at `task-end`) NOT its CLI. Capture is `compile` NOT `ingest` (ingest refuses in-repo paths). Offers never silent; Confluence warning on confluence destinations. NO `plugin.json#dependencies`. | G | `skills/_shared/pwiki-bridge.md` |
 | Optional soft bridge to `p-graph`: gated on `.pgraph/config.json`, used by `writing-plan` during decomposition. **Advisory + read-only** (no offer) — p-graph has no query skill, so the bridge defers structural queries to the installed repo rule `.claude/rules/p-graph.md` and uses the Skill tool only for `p-graph:sync`. Does NOT duplicate p-graph's pre-1.0 command table. NO `plugin.json#dependencies`. | G | `skills/_shared/pgraph-bridge.md` |
+| Spec audit as a **read-write** subagent in `task-brainstorming` §5 (replacing the inline self-review): the one sanctioned exception to "reviews are read-only", and only for specs — prose, cheap, and always gated by the §6 human review. Dispatched via `Task` + `general-purpose` + colocated `spec-auditor.md` (Wave A pattern). Loop capped at 3 passes, Blockers-driven; genuine ambiguity is escalated to the user, never guessed. Code/plan reviewers stay read-only. | J | `docs/specs/2026-07-02-spec-audit-subagent.md`, `docs/plans/2026-07-02-spec-audit-subagent.md` |
 
 If you're tempted to revisit any of these — read the linked plan and spec first. The decisions are documented because they were made deliberately and shouldn't be re-litigated on a per-PR basis.
 
@@ -31,6 +32,7 @@ If you're tempted to revisit any of these — read the linked plan and spec firs
   - `skills/requesting-task-review/task-reviewer.md`
 - The requesting SKILL.md reads the template via `${CLAUDE_SKILL_DIR}/<reviewer>.md` and inlines its content into the `Task` tool prompt.
 - **Structural invariant** (enforced by `tests/review-template-refs.test.ts`) — each template MUST contain a `## What is NOT your scope` section. This is the scope-discipline mechanism; removing it weakens the agent.
+- `skills/task-brainstorming/spec-auditor.md` follows the same colocated-template + `Task`/`general-purpose` dispatch pattern, but is **read-write** (it fixes the spec) — unlike `code-reviewer.md` / `task-reviewer.md`, which are read-only. All three must keep a `## What is NOT your scope` section (`tests/review-template-refs.test.ts`).
 
 ## Severity model
 

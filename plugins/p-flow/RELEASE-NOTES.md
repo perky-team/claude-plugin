@@ -3,6 +3,23 @@
 > Marketplace tag → p-flow plugin version → date → headline.
 > Authored 2026-05-27; backfilled from `v4.6.0` onward (the first p-flow release on the marketplace was `v3.1.0` with `plugins/p-flow 0.1.0` — a minimal `init` skill; see `git log v4.5.0..v4.6.0 -- plugins/p-flow/`).
 
+## Unreleased — `plugins/p-flow 1.7.0` — spec audit subagent in task-brainstorming
+
+- **`task-brainstorming` now audits the spec with a fresh-context subagent instead of a shallow
+  inline self-review.** After the spec is materialized (§4) and before the user review gate (§6),
+  a `general-purpose` subagent (prompt = new colocated `spec-auditor.md`) reads the whole
+  `specs/<slug>/` and hunts logical errors, internal contradictions, cross-file inconsistencies
+  (`specification.md` ↔ `feature.feature` ↔ `adr.md`), coverage gaps, and scope creep.
+- **The auditor fixes the spec directly** — a deliberate, spec-only exception to p-flow's
+  "reviews are read-only" rule (specs are prose, cheap, and still pass the §6 human gate). Code
+  and plan reviewers stay read-only.
+- **Loop-until-clean, capped at 3 passes, Blockers-driven.** Suggestions/Nits are fixed in-pass
+  but never keep the loop running; after 3 passes any remaining Blockers are surfaced to the user
+  at §6.
+- **Genuine ambiguity is escalated, not guessed.** When a fix needs a decision the spec doesn't
+  contain, the subagent returns a question; `task-brainstorming` asks the user one at a time and
+  re-dispatches with the answers.
+
 ## Unreleased — `plugins/p-flow 1.6.0` — canonical status lifecycle (todo → in_progress → done)
 
 - **In canonical mode (p-tasks present), the execution skills now use the full three-state

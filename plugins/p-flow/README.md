@@ -36,12 +36,13 @@ To disable: remove the `SessionStart` entry from `hooks/hooks.json`, or globally
 
 ## Reviewer templates
 
-The `requesting-code-review` and `requesting-task-review` skills dispatch the **`general-purpose`** subagent via the `Task` tool, inlining a reviewer prompt template from the skill's own directory:
+The `requesting-code-review`, `requesting-task-review`, and `task-brainstorming` skills dispatch the **`general-purpose`** subagent via the `Task` tool, inlining a reviewer prompt template from the skill's own directory:
 
 | Template | Used by | Purpose |
 |---|---|---|
 | [`skills/requesting-code-review/code-reviewer.md`](./skills/requesting-code-review/code-reviewer.md) | `requesting-code-review` | Code-quality review of the branch diff. Returns findings by severity (blocker / suggestion / nit). Read-only. |
 | [`skills/requesting-task-review/task-reviewer.md`](./skills/requesting-task-review/task-reviewer.md) | `requesting-task-review` | Spec-alignment review: acceptance criteria, feature scenarios, plan-step coverage, scope creep. Read-only. |
+| [`skills/task-brainstorming/spec-auditor.md`](./skills/task-brainstorming/spec-auditor.md) | `task-brainstorming` | Spec audit: logical errors, internal contradictions, cross-file inconsistencies, coverage gaps, scope creep. **Read-write** — fixes the spec directly (specs only), loops max 3 passes on Blockers. |
 
 This pattern (inline templates rather than registered subagents) means the review skills work in any Claude Code session — no plugin install required at the target.
 
