@@ -1,10 +1,14 @@
 ---
 name: sync
-description: Refresh the p-graph code graph after code changes (incremental by default). Use when the user says "sync p-graph", "reindex", "update the code graph", or after pulling/branch-switching.
+description: Explicitly rebuild the p-graph code graph — full or incremental. Day-to-day freshness is automatic (queries auto-refresh); use this for a full rebuild after a big refactor, or to warm the graph after a pull. Use when the user says "sync p-graph", "reindex", "rebuild the code graph", or "full reindex".
 allowed-tools: Bash(node:*)
 ---
 
 # p-graph: sync
+
+> Structural queries now auto-refresh the graph before answering, so you rarely
+> need this. Use `/p-graph:sync` for an explicit full rebuild after a large
+> refactor, or to warm the graph after a pull/branch-switch.
 
 1. Run incremental sync: `node ${CLAUDE_PLUGIN_ROOT}/tools/pgraph.mjs index --changed`.
    - This diffs `git diff <indexed_sha>..HEAD` plus the dirty working tree and reparses

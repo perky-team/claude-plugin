@@ -50,7 +50,7 @@ C++ support is best-effort: no preprocessor expansion beyond `#include` tracking
 | Skill | What it does |
 |---|---|
 | `/p-graph:init` | Creates `.pgraph/`, gitignores it, installs a rule at `.claude/rules/p-graph.md`, and runs the first full index. |
-| `/p-graph:sync` | Refreshes the graph after code changes — incremental by default (`--changed`), full rebuild on request (`--full`). |
+| `/p-graph:sync` | Explicitly rebuild the graph — full (`--full`) or incremental (`--changed`). Day-to-day freshness is automatic (queries auto-refresh); use this for a full rebuild after a big refactor or to warm the graph after a pull. |
 | `/p-graph:help` | Prints the pgraph command cheat-sheet. |
 
 ## Commands
@@ -75,7 +75,13 @@ node "${CLAUDE_PLUGIN_ROOT}/tools/pgraph.mjs" <command> [args]
 | `index [--full\|--changed]` | Build or rebuild the graph. `--changed` (default) reparses only files modified since the last indexed commit; `--full` rebuilds from scratch. |
 | `status` | Node, edge, and file counts; drift since last index. |
 
-Refresh with `/p-graph:sync`. Prefer these commands over grep for structural questions — a grep can find a symbol name in a string literal; the graph tells you what actually calls it at runtime.
+Structural queries **auto-refresh** the graph before answering: `pgraph` reindexes
+changed files first (incrementally, git-based), so day-to-day freshness is
+automatic and you rarely need `/p-graph:sync`. Pass `--stale-ok` or set
+`PGRAPH_AUTOREFRESH=0` on any query to skip the refresh and answer from the graph
+as-is (you'll get a `⚠ p-graph STALE` note on stderr when it's stale). Prefer these
+commands over grep for structural questions — a grep can find a symbol name in a
+string literal; the graph tells you what actually calls it at runtime.
 
 ## How it works
 

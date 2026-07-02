@@ -16,6 +16,10 @@ contents, comments, log messages).
 | Several symbols at once | `pgraph explore A B C` |
 | What files are under path/ | `pgraph files path/` |
 
-**Freshness:** the graph does not auto-update. If `pgraph status` reports drift,
-or you changed code this session, run `/p-graph:sync` before trusting structural
-answers — a stale graph that answers confidently wrong is worse than grep.
+**Freshness:** structural queries **auto-refresh** the graph before answering —
+`pgraph` reindexes any changed files first, so a query never answers from a stale
+graph and manual syncing is normally unnecessary. To skip the refresh (answer from
+the graph as-is), pass `--stale-ok` or set `PGRAPH_AUTOREFRESH=0`; when the graph
+is stale you'll get a one-line `⚠ p-graph STALE` note on stderr. `/p-graph:sync`
+is still available for an explicit full rebuild (`index --full`) and to warm the
+graph after a pull.
