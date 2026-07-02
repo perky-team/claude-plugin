@@ -87,19 +87,31 @@ Logic:
 
 `withReindexLock(pgraphDir, { timeoutMs, staleMs }, fn)`:
 
-- **Acquire:** `fs.openSync('.pgraph/reindex.lock', 'wx')` (exclusive create).
-  Write `pid` + timestamp, close the fd.
-- **Contended (`EEXIST`):** poll every ~50 ms up to `timeoutMs` (~5 s). A lock
-  older than `staleMs` (~30 s — the holder likely died) is stolen (unlink +
-  retry).
+- **Acquire:** `fs.openSync('.pgraph/reindex.lock', 'wx')` (exclusive create —
+  `O_CREAT|O_EXCL` is atomic, so exactly one process wins). Write `pid` +
+  timestamp as JSON, close the fd. The lock is represented by the file's
+  *existence*, not a held handle.
+- **Contended (`EEXIST`):** poll every ~50 ms up to `timeoutMs` (~5 s). A lock is
+  considered **stale and stolen** (unlink + retry) when its recorded `pid` is no
+  longer alive — checked via `process.kill(pid, 0)` (cross-platform: throws
+  `ESRCH` for a dead process, works on Windows). Timestamp age (`staleMs`, ~60 s)
+  is a fallback for when the pid check is inconclusive (e.g. pid reused). Pid
+  liveness is preferred over pure age so a slow-but-alive holder (a schema-upgrade
+  full rebuild) is never robbed of its lock.
 - **On acquire, re-check drift:** another process may have refreshed while we
   waited. If drift is now 0, release and let the caller query the fresh graph — we
   do **not** reindex again (this is the "waits, then reads fresh" requirement).
 - **Reindex:** emit `p-graph: refreshing N changed files…` to stderr, then
   `indexChanged({ root, store, ignorePatterns, changedFiles: () => change, onError })`
-  in place on the already-open WAL store.
+  in place on the already-open WAL store. If the store reports a stale schema
+  (`store.schemaStale()`), `indexChanged` performs a full rebuild — in that case
+  emit `p-graph: rebuilding graph after schema upgrade…` instead, so the note is
+  not misleading. (Rare: only after a plugin upgrade bumps `SCHEMA_VERSION`.)
 - **On full success (no parse errors):** advance `indexed_sha` to HEAD (as `index`
   does) so committed changes stop counting as drift and repeat queries stay cheap.
+  Uncommitted working-tree edits still show as drift until committed — see the
+  content-hash skip below, which keeps repeat queries over a stable dirty tree
+  cheap regardless.
 - **On parse error(s):** do **not** advance `indexed_sha`; emit the staleness
   banner (graceful degrade — the changed file that failed keeps being flagged).
 - **Timeout waiting for the lock, or any thrown error:** answer from the current
@@ -116,12 +128,43 @@ are unaffected. All notes and banners go to stderr.
 - Git unavailable (drift unknown):
   `⚠ p-graph STALE: cannot verify freshness (not a git checkout); results may be wrong. Run /p-graph:sync`
 
-### 4. CLI wiring — `tools/pgraph.mjs`
+### 4. Content-hash skip — `tools/lib/index/build.mjs` + store
+
+To keep repeat queries over a **dirty working tree** cheap, `indexFile` skips a
+file whose current content hash equals the hash already stored for it:
+
+- `indexFile` already reads the source and computes its sha1. Add: if
+  `store.fileHash(rel) === hash`, return early (no parse, no DB write).
+- Add `store.fileHash(path)` — `SELECT hash FROM files WHERE path = ?`.
+
+This is safe across both index modes:
+
+- `indexFull` calls `store.clear()` first, which truncates `files`, so
+  `store.fileHash` returns `null` and every file is fully parsed — a full rebuild
+  still reparses everything.
+- `indexChanged` (and the auto-refresh path) reparse only files whose content
+  actually differs from what the graph holds. A working tree that is dirty but
+  unchanged since the last refresh reparses nothing.
+
+Without this, advancing `indexed_sha` handles committed changes, but every query
+made while uncommitted edits sit in the working tree would reparse the entire
+dirty set — a performance cliff during normal development. The hash skip restores
+"negligible overhead when nothing actually changed" even for a dirty tree.
+
+### 5. CLI wiring — `tools/pgraph.mjs`
 
 - Parse `--stale-ok` (already handled generically by `parseArgs` as a boolean).
 - Read `PGRAPH_AUTOREFRESH` from env.
 - Add `warn(msg)` → `process.stderr.write(msg + '\n')`; pass it plus `pgraphDir`
   into the command context.
+- **Read-only fallback for store open.** WAL mode needs write access even to read
+  (it creates `-wal`/`-shm`). On a read-only filesystem `openStore` can fail
+  before the freshness gate ever runs, so the query would die instead of
+  degrading. If the normal open throws, retry opening the store read-only (the
+  `node:sqlite` `DatabaseSync` read-only open option — exact option name to be
+  confirmed against the installed Node during implementation — and skip the WAL
+  pragma). A read-only store can serve every query command; the refresh path then
+  fails to write and degrades with the banner, as required.
 
 ## Data flow
 
@@ -160,11 +203,19 @@ Vitest, alongside the existing suite:
 - **Opt-out:** `--stale-ok` and `PGRAPH_AUTOREFRESH=0` both skip the refresh and
   emit the staleness banner when drift > 0.
 - **Lock / concurrency:** launch two `callers` processes in parallel right after a
-  change; `graph.db` is not corrupted and both return the correct answer.
-- **Graceful degradation:** non-git repo and read-only `.pgraph` → the query still
-  answers, with the banner.
+  **committed** change; `graph.db` is not corrupted and both return the correct
+  answer. Committing (not just a dirty edit) is deliberate: after the winner
+  advances `indexed_sha`, the loser's post-lock drift re-check reads 0 and
+  exercises the "waited, then read fresh, did not reindex again" path.
+- **Content-hash skip:** after a refresh, a second query over the same (still
+  dirty) tree does no reparsing — assert no `refreshing…`-triggered rework, e.g.
+  by observing that a file whose content is unchanged is not re-parsed.
+- **Graceful degradation:** non-git repo → the query still answers, with the
+  unknown-drift banner (deterministic). Read-only filesystem is covered
+  best-effort via the read-only store-open fallback.
 - **`status` unchanged:** still reports drift; does not refresh.
-- **Lock unit test:** acquire, contended wait, stale-lock steal.
+- **Lock unit test:** acquire, contended wait, stale-lock steal by pid-liveness
+  (a lock whose recorded pid is dead is stolen; a live pid's lock is not).
 - All existing tests continue to pass.
 
 ## Docs / rule updates
@@ -190,8 +241,10 @@ publish — the maintainer releases.
 
 ## Out of scope (YAGNI)
 
-- No content-hash skip optimization (advancing `indexed_sha` already prevents
-  rework on committed changes; actively-edited dirty files genuinely need
-  reparsing).
 - No new config keys or flags beyond `--stale-ok`.
-- No automatic full-index fallback for auto-refresh in a large non-git tree.
+- No automatic full-index fallback for auto-refresh in a large non-git tree
+  (degrade + banner instead). The one exception is a stale-schema DB, where
+  `indexChanged` already escalates to a full rebuild — correct and rare.
+- No single-`git`-invocation optimization of the drift check; two invocations
+  (`diff` + `status --porcelain`) match what `status` already pays and meet the
+  "git-based, cheap" bar.
