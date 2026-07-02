@@ -66,9 +66,24 @@ commands: `search`, `node`, `callers`, `callees`, `impact`, `trace`, `context`,
 
 Logic:
 
-1. `change = gitChangedFiles(root, store.getMeta('indexed_sha'))`;
-   `drift = change ? change.modified.length + change.deleted.length : null`
-   (`null` means git is unavailable / not a git checkout).
+1. `change = gitChangedFiles(root, store.getMeta('indexed_sha'))` (`null` means git
+   is unavailable / not a git checkout). Then compute **actionable drift** — only
+   files the graph actually indexes: filter `change.modified` through
+   `!isIgnored(rel, ignorePatterns) && resolveLang(rel)`, and `change.deleted`
+   through `!isIgnored(rel, ignorePatterns)`. `drift = actionable.modified.length +
+   actionable.deleted.length` (or `null` when `change` is `null`).
+
+   This matters: `git status`/`git diff` report every changed path, but
+   `indexChanged` skips ignored and non-source files. Counting raw git output would
+   make an uncommitted `README.md` edit (or any `.json`/`.yaml`/doc change) show as
+   perpetual drift — every query would then take the lock and run a no-op refresh
+   that never clears (the edit is uncommitted, so `indexed_sha` can't advance past
+   it). Filtering to actionable files means an edit the graph doesn't care about
+   leaves drift at 0 (fast path, no lock, no banner), and the banner's `N` counts
+   only files that actually affect the graph. It also defends against a
+   non-gitignored `.pgraph/` (lock file, `graph.db`) causing a refresh loop. The
+   raw, unfiltered count stays in `gitChangedFiles`/`status`, so **`status` output
+   is unchanged**; the filter lives only in the gate.
 2. `autorefresh = process.env.PGRAPH_AUTOREFRESH !== '0' && !opts['stale-ok']`.
 3. **drift === 0** → return immediately. Overhead is a single git invocation; no
    lock, no DB write.
@@ -98,12 +113,16 @@ Logic:
   is a fallback for when the pid check is inconclusive (e.g. pid reused). Pid
   liveness is preferred over pure age so a slow-but-alive holder (a schema-upgrade
   full rebuild) is never robbed of its lock.
-- **On acquire, re-check drift:** another process may have refreshed while we
-  waited. If drift is now 0, release and let the caller query the fresh graph — we
-  do **not** reindex again (this is the "waits, then reads fresh" requirement).
-- **Reindex:** emit `p-graph: refreshing N changed files…` to stderr, then
-  `indexChanged({ root, store, ignorePatterns, changedFiles: () => change, onError })`
-  in place on the already-open WAL store. If the store reports a stale schema
+- **On acquire, re-check actionable drift:** another process may have refreshed
+  while we waited. Recompute the actionable set; if it is now 0, release and let
+  the caller query the fresh graph — we do **not** reindex again (this is the
+  "waits, then reads fresh" requirement).
+- **Reindex:** emit `p-graph: refreshing N changed files…` to stderr (`N` = size
+  of the actionable set), then
+  `indexChanged({ root, store, ignorePatterns, changedFiles: () => actionable, onError })`
+  in place on the already-open WAL store. (`indexChanged` re-applies the same
+  ignore/lang filter internally, so passing the actionable set is belt-and-braces,
+  not load-bearing.) If the store reports a stale schema
   (`store.schemaStale()`), `indexChanged` performs a full rebuild — in that case
   emit `p-graph: rebuilding graph after schema upgrade…` instead, so the note is
   not misleading. (Rare: only after a plugin upgrade bumps `SCHEMA_VERSION`.)
@@ -200,6 +219,9 @@ Vitest, alongside the existing suite:
   `index --full`, edit a source file, run `callers X` with **no** manual sync →
   the result reflects the change (verified against a full reindex).
 - **drift 0 fast path:** no `refreshing…` note on stderr; result matches.
+- **Actionable-drift filter:** editing a non-source / ignored file (e.g.
+  `README.md`) leaves actionable drift at 0 → no refresh, no banner, no lock taken;
+  a real `.ts` edit does trigger a refresh.
 - **Opt-out:** `--stale-ok` and `PGRAPH_AUTOREFRESH=0` both skip the refresh and
   emit the staleness banner when drift > 0.
 - **Lock / concurrency:** launch two `callers` processes in parallel right after a
