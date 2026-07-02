@@ -32,8 +32,9 @@ CREATE INDEX IF NOT EXISTS edges_dstname ON edges(dst_name);
 CREATE INDEX IF NOT EXISTS edges_file ON edges(file);
 `;
 
-export function openStore(dbPath) {
+export function openStore(dbPath, opts = {}) {
   const DatabaseSync = loadDatabaseSync();
+  if (opts.readOnly) return openReadOnly(DatabaseSync, dbPath);
   const db = new DatabaseSync(dbPath);
   db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = OFF;');
   db.exec(DDL);
@@ -113,13 +114,52 @@ export function openStore(dbPath) {
     } catch (err) { db.prepare('ROLLBACK').run(); throw err; }
   };
 
+  store.fileHash = (path) =>
+    db.prepare('SELECT hash FROM files WHERE path = ?').get(path)?.hash ?? null;
+  attachReadHelpers(store, db, hasFts);
+  store.resolvePending = () => {
+    // Invalidate edges whose resolved target no longer exists (its defining
+    // file was reindexed or deleted). Without this an incremental sync keeps a
+    // stale dst_id forever, so callers/callees/trace/impact silently drop the
+    // edge — diverging from what a full rebuild would produce.
+    db.prepare(`
+      UPDATE edges SET dst_id = NULL
+      WHERE dst_id IS NOT NULL AND dst_id NOT IN (SELECT id FROM nodes)`).run();
+    // Pass A — prefer an exact qualified match. A qualified call target like
+    // "filesink.New" links straight to the node whose qname is "filesink.New".
+    db.prepare(`
+      UPDATE edges SET dst_id = (
+        SELECT n.id FROM nodes n WHERE n.qname = dst_name LIMIT 1
+      )
+      WHERE dst_id IS NULL AND dst_name IS NOT NULL
+        AND (SELECT count(*) FROM nodes n WHERE n.qname = dst_name) = 1`).run();
+    // Pass B — fall back to a unique bare-name match only when no qualified
+    // candidate exists (e.g. a method call left bare, or a non-Go language).
+    // The "exactly one" guard is preserved: a genuinely ambiguous bare name
+    // stays NULL rather than linking to a guessed target (no false edges).
+    db.prepare(`
+      UPDATE edges SET dst_id = (
+        SELECT n.id FROM nodes n WHERE n.name = dst_name LIMIT 1
+      )
+      WHERE dst_id IS NULL AND dst_name IS NOT NULL
+        AND (SELECT count(*) FROM nodes n WHERE n.qname = dst_name) = 0
+        AND (SELECT count(*) FROM nodes n WHERE n.name = dst_name) = 1`).run();
+  };
+  store.markSchemaCurrent = () => store.setMeta('schema_version', SCHEMA_VERSION);
+
+  if (store.getMeta('schema_version') === null) {
+    store.setMeta('schema_version', SCHEMA_VERSION);
+    store.setMeta('created_at', '');
+  }
+  return store;
+}
+
+// Read/query helpers shared by the read-write and read-only stores.
+function attachReadHelpers(store, db, hasFts) {
   store.search = (query, { kind, lang } = {}) => {
     const q = String(query);
     let rows = [];
     if (hasFts) {
-      // Prefix-match each term so `search render` finds `renderComponent` — fts5
-      // tokens aren't split on camelCase, so a bare phrase only matches whole
-      // identifiers. Quote each term to neutralize fts5 operators.
       const expr = q.trim().split(/\s+/).filter(Boolean)
         .map((t) => `"${t.replace(/"/g, '""')}"*`).join(' ');
       if (expr) {
@@ -127,17 +167,12 @@ export function openStore(dbPath) {
                            WHERE nodes_fts MATCH ?`).all(expr);
       }
     }
-    // Substring fallback (no-fts builds, and infix matches like `Component` that a
-    // prefix query can't reach). Only runs on an empty fts result, so the common
-    // case stays on the fast indexed path.
     if (!hasFts || rows.length === 0) {
       const like = `%${q}%`;
       rows = db.prepare(`SELECT * FROM nodes WHERE name LIKE ? OR qname LIKE ?`).all(like, like);
     }
     return rows.filter((r) => (!kind || r.kind === kind) && (!lang || r.lang === lang)).slice(0, 100);
   };
-  store.fileHash = (path) =>
-    db.prepare('SELECT hash FROM files WHERE path = ?').get(path)?.hash ?? null;
   store.node = (idOrQname) =>
     db.prepare('SELECT * FROM nodes WHERE id = ? OR qname = ? LIMIT 1').get(idOrQname, idOrQname) ?? null;
   store.callers = (name) => db.prepare(`
@@ -147,10 +182,6 @@ export function openStore(dbPath) {
     SELECT DISTINCT d.* FROM edges e JOIN nodes s ON s.id = e.src_id
     JOIN nodes d ON d.id = e.dst_id WHERE s.name = ? OR s.qname = ?`).all(name, name);
   store.files = (prefix) => {
-    // Normalize the prefix so the repo root can be typed the way users expect.
-    // File paths are stored repo-relative with NO leading "./", so ".", "./" and
-    // "" all mean "match everything", and a leading "./" on any prefix is stripped
-    // ("./internal/" behaves like "internal/").
     let p = prefix == null ? '' : String(prefix);
     if (p === '.' || p === './') p = '';
     else if (p.startsWith('./')) p = p.slice(2);
@@ -166,7 +197,6 @@ export function openStore(dbPath) {
     schema_version: store.getMeta('schema_version'),
     fts: hasFts,
   });
-
   const MAX_DEPTH = 50;
   store.impact = (name) => {
     const target = store.node(name);
@@ -201,40 +231,28 @@ export function openStore(dbPath) {
     }
     return null;
   };
-  store.resolvePending = () => {
-    // Invalidate edges whose resolved target no longer exists (its defining
-    // file was reindexed or deleted). Without this an incremental sync keeps a
-    // stale dst_id forever, so callers/callees/trace/impact silently drop the
-    // edge — diverging from what a full rebuild would produce.
-    db.prepare(`
-      UPDATE edges SET dst_id = NULL
-      WHERE dst_id IS NOT NULL AND dst_id NOT IN (SELECT id FROM nodes)`).run();
-    // Pass A — prefer an exact qualified match. A qualified call target like
-    // "filesink.New" links straight to the node whose qname is "filesink.New".
-    db.prepare(`
-      UPDATE edges SET dst_id = (
-        SELECT n.id FROM nodes n WHERE n.qname = dst_name LIMIT 1
-      )
-      WHERE dst_id IS NULL AND dst_name IS NOT NULL
-        AND (SELECT count(*) FROM nodes n WHERE n.qname = dst_name) = 1`).run();
-    // Pass B — fall back to a unique bare-name match only when no qualified
-    // candidate exists (e.g. a method call left bare, or a non-Go language).
-    // The "exactly one" guard is preserved: a genuinely ambiguous bare name
-    // stays NULL rather than linking to a guessed target (no false edges).
-    db.prepare(`
-      UPDATE edges SET dst_id = (
-        SELECT n.id FROM nodes n WHERE n.name = dst_name LIMIT 1
-      )
-      WHERE dst_id IS NULL AND dst_name IS NOT NULL
-        AND (SELECT count(*) FROM nodes n WHERE n.qname = dst_name) = 0
-        AND (SELECT count(*) FROM nodes n WHERE n.name = dst_name) = 1`).run();
-  };
   store.schemaStale = () => Number(store.getMeta('schema_version')) !== SCHEMA_VERSION;
-  store.markSchemaCurrent = () => store.setMeta('schema_version', SCHEMA_VERSION);
+}
 
-  if (store.getMeta('schema_version') === null) {
-    store.setMeta('schema_version', SCHEMA_VERSION);
-    store.setMeta('created_at', '');
-  }
+// Open an already-initialized DB for reads only — no WAL pragma, no DDL, no FTS
+// creation, no meta writes (all of which would fail on a read-only handle).
+// Used as a fallback when the normal (writable, WAL) open fails, e.g. on a
+// read-only filesystem, so a query can still answer (and the refresh degrades).
+function openReadOnly(DatabaseSync, dbPath) {
+  const db = new DatabaseSync(dbPath, { readOnly: true });
+  let hasFts = false;
+  try { db.prepare('SELECT 1 FROM nodes_fts LIMIT 1').get(); hasFts = true; } catch { hasFts = false; }
+
+  const readOnlyError = () => { throw new Error('p-graph: store is read-only'); };
+  const store = {
+    db, hasFts,
+    getMeta: (key) => db.prepare('SELECT value FROM meta WHERE key = ?').get(key)?.value ?? null,
+    fileHash: (path) => db.prepare('SELECT hash FROM files WHERE path = ?').get(path)?.hash ?? null,
+    close: () => db.close(),
+    setMeta: readOnlyError, clear: readOnlyError, upsertFile: readOnlyError,
+    removeFile: readOnlyError, replaceFileSymbols: readOnlyError,
+    resolvePending: readOnlyError, markSchemaCurrent: readOnlyError,
+  };
+  attachReadHelpers(store, db, hasFts);
   return store;
 }
