@@ -3,6 +3,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { openStore } from '../lib/destinations/local-sqlite.mjs';
 
 const CLI = join(process.cwd(), 'plugins/p-graph/tools/pgraph.mjs');
 
@@ -85,6 +86,20 @@ describe('cli auto-refresh', () => {
     const r = run(['callers', 'bar', '--json']);
     expect(JSON.parse(r.stdout).map((x) => x.name)).toEqual(['foo']); // still answers
     expect(r.stderr).toContain('cannot verify freshness');
+  }, 30000);
+
+  it('rebuilds when the stored schema is older than the code, even at zero drift', () => {
+    initRepo();
+    run(['index', '--full']);
+    // Simulate a plugin upgrade: mark the on-disk graph as an older schema.
+    const store = openStore(join(dir, '.pgraph', 'graph.db'));
+    store.setMeta('schema_version', '1');
+    store.close();
+    const r = run(['callers', 'bar', '--json']);
+    expect(r.stderr).toContain('rebuilding graph after schema upgrade');
+    expect(JSON.parse(r.stdout).map((x) => x.name)).toEqual(['foo']); // answers off the rebuilt graph
+    // schema is now current, so a second query is the fast path (no rebuild).
+    expect(run(['callers', 'bar', '--json']).stderr).not.toContain('rebuilding');
   }, 30000);
 
   it('status does not reindex', () => {

@@ -11,7 +11,12 @@ function loadDatabaseSync() {
 // 3: added the field_types table + edges.field_key/method columns for Go
 // struct-field method-call resolution (recv.field.Method()). New columns/table
 // only exist after a rebuild, so a stale DB must fully reindex.
-export const SCHEMA_VERSION = 3;
+// 4: Go grouped `type ( … )` blocks and `type X = Y` aliases now index one node
+// per spec with correct pkg-qualified qnames (previously a grouped block dropped
+// its whole file or mangled qnames). Existing Go graphs have missing/wrong nodes
+// until rebuilt, so bump to force a full reindex. No DDL change — an old DB opens
+// read-write cleanly and rebuilds; no read-only degrade.
+export const SCHEMA_VERSION = 4;
 
 const DDL = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);

@@ -22,36 +22,46 @@ function walk(root, dir, ignorePatterns, acc) {
   return acc;
 }
 
+// Parse and store one file. Returns the number of nodes indexed (>= 0), or
+// `null` when the file is unsupported or unchanged since the last index (so a
+// caller can tell "indexed, produced nothing" from "not indexed at all").
 export async function indexFile(root, store, rel) {
   const cfg = resolveLang(rel);
-  if (!cfg) return false;
+  if (!cfg) return null;
   const source = readFileSync(join(root, rel), 'utf-8');
   const hash = createHash('sha1').update(source).digest('hex');
   // Skip files whose content is unchanged since the last index. `indexFull`
   // calls store.clear() first (files table truncated), so fileHash is null there
   // and every file is fully parsed; only incremental runs skip.
-  if (store.fileHash?.(rel) === hash) return false;
+  if (store.fileHash?.(rel) === hash) return null;
   const { nodes, edges, fieldTypes } = await extract({ file: rel, lang: cfg.lang, langId: cfg.langId, scm: cfg.query, source });
   store.upsertFile(rel, hash, cfg.lang);
   store.replaceFileSymbols(rel, nodes, edges, fieldTypes);
-  return true;
+  return nodes.length;
 }
 
 export async function indexFull({ root, store, ignorePatterns, onError }) {
   store.clear(); // truncate so files deleted since the last index don't survive
   const files = walk(root, root, ignorePatterns, []);
   let skipped = 0;
+  // `errored`: files whose parse/store threw (dropped from the graph entirely).
+  // `zeroNode`: files that indexed cleanly but produced no symbols — a legit
+  // empty file, or a whole-file extraction gap worth surfacing (see index cmd).
+  const errored = [];
+  const zeroNode = [];
   for (const rel of files) {
     try {
-      await indexFile(root, store, rel);
+      const nodeCount = await indexFile(root, store, rel);
+      if (nodeCount === 0) zeroNode.push(rel);
     } catch (err) {
       skipped++;
+      errored.push({ file: rel, error: String(err?.message ?? err) });
       onError?.(rel, err);
     }
   }
   store.resolvePending();
   store.markSchemaCurrent?.(); // a full rebuild brings the DB to the current schema
-  return { files: files.length - skipped, skipped };
+  return { files: files.length - skipped, skipped, errored, zeroNode };
 }
 
 // Pure parser — testable without a real repo.
@@ -99,12 +109,17 @@ export async function indexChanged({ root, store, ignorePatterns, changedFiles, 
   const change = provider();
   if (!change) return indexFull({ root, store, ignorePatterns, onError });
   let n = 0, skipped = 0;
+  const errored = [];
+  const zeroNode = [];
   for (const rel of change.modified) {
     if (isIgnored(rel, ignorePatterns) || !resolveLang(rel)) continue;
     try {
-      if (await indexFile(root, store, rel)) n++;
+      const nodeCount = await indexFile(root, store, rel);
+      if (nodeCount !== null) n++;
+      if (nodeCount === 0) zeroNode.push(rel);
     } catch (err) {
       skipped++;
+      errored.push({ file: rel, error: String(err?.message ?? err) });
       onError?.(rel, err);
     }
   }
@@ -114,5 +129,5 @@ export async function indexChanged({ root, store, ignorePatterns, changedFiles, 
   // skip the (full-table) resolvePending scan — this keeps repeat queries over a
   // stable dirty tree cheap.
   if (n > 0 || change.deleted.length > 0) store.resolvePending();
-  return { changed: n, deleted: change.deleted.length, skipped };
+  return { changed: n, deleted: change.deleted.length, skipped, errored, zeroNode };
 }

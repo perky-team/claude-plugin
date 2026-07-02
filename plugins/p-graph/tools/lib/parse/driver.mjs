@@ -118,6 +118,23 @@ export async function extract({ file, lang, langId, scm, source }) {
     });
   }
 
+  // Collapse defs that occupy the exact same span into one, keeping the most
+  // specific kind. A grouped Go `type_spec` matches both its shape-specific rule
+  // (struct/interface) and the generic `@definition.type` rule, so the same node
+  // is captured twice; without this the two identical-span defs would look like
+  // parent/child to `within()` and produce a bogus `X.X` qname (and an undefined
+  // container_id that then fails the DB insert, dropping the whole file).
+  const KIND_SPECIFICITY = { struct: 3, interface: 3, enum: 3, class: 3, type: 2, function: 1, method: 1 };
+  const bySpan = new Map();
+  for (const d of defs) {
+    const span = `${d.startLine}:${d.startCol}:${d.endLine}:${d.endCol}`;
+    const prev = bySpan.get(span);
+    if (!prev || (KIND_SPECIFICITY[d.kind] ?? 0) > (KIND_SPECIFICITY[prev.kind] ?? 0)) bySpan.set(span, d);
+  }
+  const dedupedDefs = [...bySpan.values()];
+  defs.length = 0;
+  defs.push(...dedupedDefs);
+
   defs.sort((a, b) => a.startLine - b.startLine || b.endLine - a.endLine);
   const ordSeen = new Map();
   for (const def of defs) {
@@ -150,7 +167,11 @@ export async function extract({ file, lang, langId, scm, source }) {
     const key = `${def.qname}|${def.kind}`;
     const ord = ordSeen.get(key) ?? 0; ordSeen.set(key, ord + 1);
     def.id = nodeId(file, def.qname, def.kind, ord);
-    def.container_id = parent ? parent.id : null;
+    // `?? null`: never bind `undefined` to the DB. Parents always precede their
+    // children after the span-dedup + sort above, so parent.id is set here; the
+    // guard is defense-in-depth so a future capture-shape change can't resurface
+    // the whole-file-drop that an undefined container_id caused.
+    def.container_id = parent?.id ?? null;
   }
 
   const nodes = defs.map((d) => ({

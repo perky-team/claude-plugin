@@ -11,7 +11,20 @@ export async function runCommand(ctx) {
       : await indexChanged({ root, store, ignorePatterns });
     const sha = headSha(root);
     if (sha) store.setMeta('indexed_sha', sha);
-    return opts.json ? emitJson({ ok: true, ...res, indexed_sha: sha }) : out(`indexed: ${JSON.stringify(res)}`);
+    if (opts.json) return emitJson({ ok: true, ...res, indexed_sha: sha });
+    // Summary line, then name any file that threw or produced zero nodes so a
+    // whole-file extraction drop is visible instead of hiding inside `skipped`.
+    const { errored = [], zeroNode = [], ...counts } = res;
+    out(`indexed: ${JSON.stringify(counts)}`);
+    if (errored.length) {
+      out(`errored (${errored.length}) — dropped from the graph:`);
+      errored.forEach((e) => out(`  ${e.file}: ${e.error}`));
+    }
+    if (zeroNode.length) {
+      out(`zero nodes (${zeroNode.length}) — indexed but produced no symbols:`);
+      zeroNode.forEach((f) => out(`  ${f}`));
+    }
+    return;
   }
 
   if (command === 'status') {
