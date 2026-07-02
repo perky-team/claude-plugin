@@ -3,7 +3,34 @@
 > Marketplace tag → p-flow plugin version → date → headline.
 > Authored 2026-05-27; backfilled from `v4.6.0` onward (the first p-flow release on the marketplace was `v3.1.0` with `plugins/p-flow 0.1.0` — a minimal `init` skill; see `git log v4.5.0..v4.6.0 -- plugins/p-flow/`).
 
-## Unreleased — `plugins/p-flow 1.5.0` — canonical mode drops plan.md entirely
+## Unreleased — `plugins/p-flow 1.6.0` — canonical status lifecycle (todo → in_progress → done)
+
+- **In canonical mode (p-tasks present), the execution skills now use the full three-state
+  status lifecycle instead of only flipping `todo → done`.** This makes the tracker show what is
+  *currently* being worked, and turns an interrupted run into a recoverable signal.
+  - `executing-plan` — sets the step's sub-task `--status in_progress` right **before implementing**
+    it, and the parent task `in_progress` on the first step. `done` still only on a green
+    `verification-before-completion` (unchanged).
+  - `subagent-driven-development` — sets the step's sub-task `in_progress` right **before
+    dispatching** its implementer subagent (parent on the first step); `done` only after the
+    per-step review passes.
+  - `receiving-code-review` — sets a review follow-up sub-task `in_progress` when work on it
+    begins; `done` on resolution (`--resolution` for reject/defer, as before).
+- **Interrupt / resume semantics.** On resume, an `in_progress` sub-task means the previous run was
+  **interrupted** mid-step — the skills now reconcile it (inspect git + step artifacts, verify
+  against the acceptance criterion, then finish or redo cleanly) instead of assuming it finished or
+  blindly re-running it. The ledger now carries three meaningful states: `todo` = not started,
+  `in_progress` = interrupted mid-step, `done` = verified-complete.
+- **Reference.** `skills/_shared/ptasks-bridge.md` gains a `## Status lifecycle` section that is the
+  canonical description the skills point to. `using-p-flow` and the README describe it too.
+- **Legacy mode unchanged.** plan.md `- [ ]` / `- [x]` checkboxes are binary and cannot express
+  in-progress; the legacy flow stays byte-for-byte the same. The gap (no interrupt signal) is noted
+  in the docs as a reason the canonical/p-tasks flow is preferable.
+- Cost: one extra `p-tasks:set --status in_progress` per step. Tests: new
+  `tests/p-flow-ptasks-status-lifecycle.test.ts` (structural) + a lifecycle/interrupt-resume case in
+  `tests/p-flow-ptasks-recipe.test.ts` (executable spec against the real p-tasks CLI).
+
+## `plugins/p-flow 1.5.0` (marketplace `v5.10.0`) — canonical mode drops plan.md entirely
 
 - **When p-tasks is present ("canonical mode"), p-flow no longer creates or requires
   `specs/<slug>/plan.md` at all.** p-tasks is now the single artifact for the step list, review

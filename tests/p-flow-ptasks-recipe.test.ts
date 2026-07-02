@@ -102,4 +102,43 @@ describe('p-flow → p-tasks bridge recipe (real CLI)', () => {
     // --- Title-resolution sanity: the closed task resolves by slug, unambiguously ---
     expect(ptasks(dir, ['summary']).out.items).toEqual([{ id: 't-1', title: SLUG }]);
   });
+
+  it('status lifecycle: in_progress marks the live step, and survives as an interrupt signal on resume', () => {
+    const SLUG = 'lifecycle-feature';
+    expect(ptasks(dir, ['init']).status).toBe(0);
+    expect(ptasks(dir, ['add', 'task', '--title', SLUG]).out).toMatchObject({ id: 't-1', status: 'todo' });
+    for (const t of ['Step 1', 'Step 2', 'Step 3']) {
+      ptasks(dir, ['add', 'sub-task', 't-1', '--title', t, '--origin', 'plan']);
+    }
+
+    // --- executing-plan / SDD recipe: begin step 1 → parent + sub-task in_progress ---
+    expect(ptasks(dir, ['set', 't-1', '--status', 'in_progress']).status).toBe(0);   // parent on first step
+    expect(ptasks(dir, ['set', 'st-1', '--status', 'in_progress']).status).toBe(0);  // the live step
+    let walk = ptasks(dir, ['list', 't-1']).out.items;
+    // exactly ONE sub-task in_progress while it is worked; the rest still todo
+    expect(walk.filter((i: any) => i.status === 'in_progress').map((i: any) => i.id)).toEqual(['st-1']);
+    expect(walk.filter((i: any) => i.status === 'todo').map((i: any) => i.id)).toEqual(['st-2', 'st-3']);
+    expect(ptasks(dir, ['list', 't-1']).status).toBe(0); // parent walk still resolves
+
+    // --- step 1 passes → done; step 2 begins ---
+    expect(ptasks(dir, ['set', 'st-1', '--status', 'done']).status).toBe(0);
+    expect(ptasks(dir, ['set', 'st-2', '--status', 'in_progress']).status).toBe(0);
+
+    // *** INTERRUPTION *** — the run dies here. st-2 is left in_progress.
+    walk = ptasks(dir, ['list', 't-1']).out.items;
+
+    // --- resume recipe: the ledger has three meaningful states ---
+    const byStatus = (s: string) => walk.filter((i: any) => i.status === s).map((i: any) => i.id);
+    expect(byStatus('done')).toEqual(['st-1']);           // verified-complete: do NOT re-dispatch
+    expect(byStatus('in_progress')).toEqual(['st-2']);    // INTERRUPTED mid-step: reconcile, don't assume done
+    expect(byStatus('todo')).toEqual(['st-3']);           // genuinely untouched
+    // The interrupted step is distinguishable from a never-started one — the
+    // whole point: pre-fix it would have been `todo`, identical to st-3.
+    expect(walk.find((i: any) => i.id === 'st-2').status).not.toBe('todo');
+
+    // --- after reconciling st-2, finish normally ---
+    expect(ptasks(dir, ['set', 'st-2', '--status', 'done']).status).toBe(0);
+    expect(ptasks(dir, ['set', 'st-3', '--status', 'done']).status).toBe(0);
+    expect(ptasks(dir, ['list', 't-1']).out.items.every((i: any) => i.status === 'done')).toBe(true);
+  });
 });

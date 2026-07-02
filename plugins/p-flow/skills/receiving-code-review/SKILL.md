@@ -26,6 +26,10 @@ Treat every review finding as a hypothesis, not a directive. For each one — ve
 
 ## Procedure
 
+### 0. Mark the follow-up `in_progress` (canonical mode)
+
+When you **start working** a review follow-up sub-task (`origin: code-review:*` / `task-review:*`) — before verifying it below — set it in flight via the Skill tool: `p-tasks:set <st-id> --status in_progress`. This shows which finding is being worked and, if the run is interrupted, marks it as started-not-finished rather than untouched (reconcile it on resume — see `${CLAUDE_SKILL_DIR}/../_shared/ptasks-bridge.md` § Status lifecycle). On resolution you move it to `done` (step 3). **Legacy mode / external PR comments** have no `in_progress` state — skip this. When processing several findings, mark one `in_progress` at a time as you get to it.
+
 ### 1. Verify the finding is correct
 
 For each finding, ask:
@@ -62,6 +66,7 @@ For each finding, ask:
 
 - **Never blindly fix.** Every fix must be preceded by verification that the issue is real.
 - **Never silently reject.** Every rejection must be explicit and recorded — a `resolution` on the sub-task (canonical mode), an inline annotation in plan.md (legacy mode), or a written reply for external reviews.
+- **Move the follow-up through `in_progress` (canonical mode).** Set it `in_progress` when you start working it and `done` on resolution — don't jump `todo → done`. An `in_progress` follow-up found on resume was interrupted; reconcile before closing.
 - **Never argue tone, argue facts.** "This is wrong" is not feedback; show evidence (file:line, test output, spec citation).
 - **Reviewer might be wrong.** Both `code-reviewer` and `task-reviewer` templates have ~20% scope leakage on Sonnet (see `plugins/p-flow/README.md` "Known limitations"). Read findings critically.
 

@@ -13,7 +13,7 @@ Execute the approved plan one step at a time, but delegate each step to a **fres
 ## When to use
 
 - The plan is approved and its steps are mostly independent, and you want per-step context isolation + automatic review checkpoints without leaving this session.
-- Resuming a partially-done plan — pick up at the first step that isn't done.
+- Resuming a partially-done plan — pick up at the first step that isn't done. In canonical mode, first **reconcile** any `in_progress` sub-task (it was interrupted mid-step, not finished — see "progress ledger" below).
 
 **Don't use when:**
 
@@ -37,7 +37,13 @@ Run the p-tasks gate in `${CLAUDE_SKILL_DIR}/../_shared/ptasks-bridge.md`:
 - **p-tasks absent (legacy mode)** → the step list is the `## Steps` checklist in `plan.md`; you check off `- [x]` there.
 - **p-tasks present (canonical mode)** → the step list lives in p-tasks. Resolve the parent by title == `<slug>` and enumerate `origin: plan` sub-tasks in document order via the Skill tool `p-tasks:list <parent>`; you mark each `--status done`.
 
-This is also your **progress ledger**: after any compaction, trust the ledger (`p-tasks:list` or the plan.md checkboxes) and `git log` over your own recollection — steps recorded done are DONE, do not re-dispatch them.
+This is also your **progress ledger**: after any compaction, trust the ledger (`p-tasks:list` or the plan.md checkboxes) and `git log` over your own recollection. In canonical mode the ledger has **three meaningful states**, and on resume you must read them correctly:
+
+- **`done`** → verified-complete (spec ✅, no open Blockers). Do NOT re-dispatch it.
+- **`todo`** → genuinely untouched. Dispatch it normally.
+- **`in_progress`** → the previous run was **INTERRUPTED** after this step began (its implementer may have partly run, or the crash hit mid-review). Do **not** assume it's done, and do **not** blindly re-dispatch it from scratch. **Reconcile first:** read `git log` / the working tree and any `.p-flow/sdd/task-<n>-*` artifacts for partial work, verify against the sub-task's acceptance, then finish + review it or redo it cleanly — only then `--status done`.
+
+Legacy plan.md checkboxes are binary (`- [ ]` / `- [x]`) — an interrupted step looks identical to an unstarted one, so just re-run the first unchecked step. See `${CLAUDE_SKILL_DIR}/../_shared/ptasks-bridge.md` § Status lifecycle.
 
 ## Workspace
 
@@ -59,7 +65,7 @@ For each step that is not done, **in order, one at a time**:
 
 3. **Write the task brief.** Extract this step's full text (title, acceptance criterion, expected files, and any TDD sub-bullets) into `.p-flow/sdd/task-<n>-brief.md`. Record `BASE` = current HEAD (`git rev-parse HEAD`).
 
-4. **Dispatch the implementer.** Use the `Task` tool with `subagent_type: general-purpose` and `model` chosen per **Model selection**. Build the prompt by reading `${CLAUDE_SKILL_DIR}/implementer-prompt.md` and filling its placeholders — pass the brief path and a report path (`.p-flow/sdd/task-<n>-report.md`), not the pasted step text. Add only: where this step fits, interfaces/decisions from earlier steps, and your resolution of any ambiguity.
+4. **Mark the step `in_progress`, then dispatch the implementer.** Immediately **before dispatching**, set the sub-task in flight via the Skill tool: `p-tasks:set <st-id> --status in_progress` (canonical mode); on the **first** step also move the parent if still `todo`: `p-tasks:set <parent> --status in_progress` (no cascade — set it once). If the dispatch is interrupted, this leaves the step marked interrupted rather than untouched. (Legacy mode has no `in_progress` — skip this.) Then use the `Task` tool with `subagent_type: general-purpose` and `model` chosen per **Model selection**. Build the prompt by reading `${CLAUDE_SKILL_DIR}/implementer-prompt.md` and filling its placeholders — pass the brief path and a report path (`.p-flow/sdd/task-<n>-report.md`), not the pasted step text. Add only: where this step fits, interfaces/decisions from earlier steps, and your resolution of any ambiguity.
 
 5. **Handle the implementer's status** (see **Handling implementer status**). Only a `DONE` (or resolved `DONE_WITH_CONCERNS`) proceeds to review.
 
@@ -77,9 +83,9 @@ For each step that is not done, **in order, one at a time**:
 
 8. **Review loop.** If the reviewer reports spec ❌ or any Blocker: dispatch ONE fix subagent (same `general-purpose` + implementer contract) with the complete findings list, appending its fix report to the same report file. Rebuild the package (step 6) and re-review. Repeat until spec ✅ with no open Blockers. Resolve any ⚠️ "cannot verify from diff" items yourself — you hold the cross-step context.
 
-9. **Record completion.**
+9. **Record completion.** Only after spec ✅ with no open Blockers (the per-step review passed).
    - **Legacy mode:** edit `plan.md`, flip this step's `- [ ]` to `- [x]`. Touch only this checkbox.
-   - **Canonical mode:** via the Skill tool, `p-tasks:set <st-id> --status done`.
+   - **Canonical mode:** via the Skill tool, `p-tasks:set <st-id> --status done` (moves the sub-task `in_progress → done`).
 
 When every step is done:
 
@@ -111,6 +117,7 @@ An omitted `model` silently inherits the session's model (often the most expensi
 - **One implementer at a time.** Parallel implementers conflict on the working tree.
 - **Hand artifacts over as files.** Never paste a step's full text or a diff into a dispatch prompt — pass the brief/package/report paths.
 - **Mark done only on green.** A step is done only after spec ✅ and no open Blockers (for a code step, that includes the implementer's own passing tests).
+- **Set `in_progress` before dispatching (canonical mode).** Move the sub-task `todo → in_progress` right before you dispatch its implementer (and the parent on the first step). Never dispatch a step whose sub-task is still `todo`, and never jump `todo → done`. On resume, an `in_progress` sub-task means interrupted — reconcile it, don't re-dispatch blindly.
 - **Every dispatch names a model.** See Model selection.
 - **Don't pre-judge for the reviewer.** Never tell a reviewer what not to flag or pre-rate a finding's severity — adjudicate in the review loop.
 - **Respect the p-tasks gate.** Steps and statuses live where the gate says (p-tasks or plan.md checkboxes); don't invent a second store.

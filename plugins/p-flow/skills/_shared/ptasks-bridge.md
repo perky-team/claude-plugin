@@ -69,6 +69,55 @@ sub-tasks. When finishing, enumerate the still-open sub-tasks with `p-tasks:list
 and close each explicitly with `p-tasks:set <st-id> --status done` — otherwise they dangle
 open in `list`/`next`.
 
+## Status lifecycle (canonical mode)
+
+p-tasks statuses are three-state — `todo | in_progress | done` — and p-flow drives **all
+three**. This section is the canonical reference; `executing-plan`,
+`subagent-driven-development`, and `receiving-code-review` point here rather than
+re-describing it.
+
+**The ledger has three meaningful states:**
+
+| Status | Meaning | On resume |
+|---|---|---|
+| `todo` | **not started** — genuinely untouched | safe to start fresh |
+| `in_progress` | work **began** but is not verified-complete | it was **INTERRUPTED** mid-step — reconcile; do **not** treat it as done and do **not** blindly re-run it from scratch |
+| `done` | acceptance criterion met **and** verified green | complete — never re-dispatch |
+
+**Transitions — who sets what, and when:**
+
+- **Sub-task → `in_progress` the moment work on it BEGINS**, via the Skill tool
+  `p-tasks:set <st-id> --status in_progress`:
+  - `executing-plan` — right **before implementing** the step.
+  - `subagent-driven-development` — right **before dispatching** the implementer subagent
+    for that step.
+  - `receiving-code-review` — when it **starts working** a review follow-up sub-task
+    (before verifying the finding).
+- **Parent task → `in_progress` when the FIRST sub-task starts**, if the parent is still
+  `todo`: `p-tasks:set <parent> --status in_progress`. There is no cascade (see above), so
+  set it explicitly, once, on the first step.
+- **Sub-task → `done` ONLY when the acceptance criterion is met and verified green** —
+  `p-tasks:set <st-id> --status done`. For a reviewed step, only after its per-step review
+  passes; for a review follow-up, on resolution (add `--resolution "rejected|deferred:
+  <reason>"` for a reject/defer, as today). `task-end` still closes the parent and any
+  remaining sub-tasks at the end (unchanged — no cascade means it must close each).
+
+**Interrupt / resume (the important part).** On resume, read `p-tasks:list <parent>`
+**first**. A sub-task left `in_progress` was **INTERRUPTED**, not finished. Do **not** treat
+it as done, and do **not** blindly re-run it from scratch. **Reconcile first:** inspect git
+(`git log`, working tree) and any step artifacts for partial work, verify what exists
+against the sub-task's acceptance criterion, then either finish/verify it or redo it
+cleanly — and only then set `--status done`. A `todo` sub-task is genuinely untouched; a
+`done` one is verified-complete and must not be re-dispatched. Trust this ledger over your
+own recollection after compaction — it now carries three meaningful states, not two.
+
+**Legacy plan.md is binary — unchanged.** The legacy `- [ ]` / `- [x]` checkboxes are
+two-state and **cannot express "in progress"**: an interrupted legacy step is
+indistinguishable from a never-started one. Legacy behaviour stays byte-for-byte the same
+(checkboxes remain binary, no `in_progress`); this three-state lifecycle applies to
+**canonical mode only**. That gap — no interrupt signal — is a concrete reason the
+canonical/p-tasks flow is preferable to legacy plan.md.
+
 ## Confirmation rules
 
 - `Read` `<root>/docs/tasks/.ptasks.json`. If its `primary` (or a mirror) destination is
