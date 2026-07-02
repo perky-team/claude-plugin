@@ -170,6 +170,16 @@ made while uncommitted edits sit in the working tree would reparse the entire
 dirty set — a performance cliff during normal development. The hash skip restores
 "negligible overhead when nothing actually changed" even for a dirty tree.
 
+**Skip `resolvePending` when nothing was reparsed.** `indexChanged` currently calls
+`store.resolvePending()` (three full-table `UPDATE`s over `edges`) unconditionally
+at the end. With the hash skip, a repeat query over a stable dirty tree reparses no
+files — yet `resolvePending` would still scan every edge each time (hundreds of ms
+on a large graph, for no reason). Change `indexChanged` to run `resolvePending`
+only when at least one file was reparsed or deleted (`n > 0 || deleted > 0`). This
+is safe: edge resolution only changes when nodes are added or removed, which
+requires a file change; with no file change the resolution state is already
+stable. `/p-graph:sync` behaviour is unchanged whenever there are real changes.
+
 ### 5. CLI wiring — `tools/pgraph.mjs`
 
 - Parse `--stale-ok` (already handled generically by `parseArgs` as a boolean).
@@ -206,10 +216,14 @@ query command
 
 ## Error handling / graceful degradation
 
-A query must always return an answer. Every refresh failure path (lock timeout,
-non-git repo, read-only `.pgraph`, a changed file that fails to parse, any
-exception) falls back to answering from the existing graph and printing the
-staleness banner. The refresh is best-effort; the query is not.
+A query must always return an answer. The **entire freshness gate is wrapped
+end-to-end in try/catch** — any unexpected error (drift computation, filtering,
+lock handling, reindex) degrades to answering from the current graph rather than
+crashing the query. Every refresh failure path (lock timeout, non-git repo,
+read-only `.pgraph`, a changed file that fails to parse, any exception) falls back
+to answering from the existing graph and printing the staleness banner (the
+unknown-drift banner when drift could not be determined). The refresh is
+best-effort; the query is not.
 
 ## Testing
 
