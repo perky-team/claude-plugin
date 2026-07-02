@@ -3,6 +3,22 @@
 > Marketplace tag → p-flow plugin version → date → headline.
 > Authored 2026-05-27; backfilled from `v4.6.0` onward (the first p-flow release on the marketplace was `v3.1.0` with `plugins/p-flow 0.1.0` — a minimal `init` skill; see `git log v4.5.0..v4.6.0 -- plugins/p-flow/`).
 
+## `plugins/p-flow 1.8.0` (marketplace `v5.15.0`) — task-end clears the SDD workspace after push
+
+- **`/p-flow:task-end` now clears the `subagent-driven-development` workspace (`.p-flow/sdd/`) once the
+  branch is confirmed pushed.** The skill's briefs, diffs, and reports (`task-<n>-brief.md`,
+  `task-<n>-report.md`, `review-<n>.diff`, …) used to pile up across tasks and sessions — the folder
+  is git-ignored, so nothing ever removed them. They now get cleared at the natural end of a task.
+- **Only after a successful push, never before.** Those artifacts double as the resume journal for an
+  interrupted SDD run (the resume path reads `.p-flow/sdd/task-<n>-*` to reconcile an `in_progress`
+  step), so `subagent-driven-development` itself must not delete them. A successful push is the one
+  point where the run is finished and there is nothing left to resume; if the push failed or was never
+  reached, the cleanup is skipped and the journal is preserved.
+- **Safe and idempotent.** `.p-flow/sdd/.gitignore` (which holds `*`) is kept so the folder stays
+  invisible to git; a missing `.p-flow/sdd/` (inline `executing-plan` was used) is a silent no-op; and
+  `.claude/.p-flow-state/` (the verification marker) is never touched. The user gets one line stating
+  how many files were removed.
+
 ## `plugins/p-flow 1.7.1` (marketplace `v5.14.1`) — SDD model-selection floor
 
 - **`subagent-driven-development` §Model selection now states the cheap-tier floor explicitly.** The

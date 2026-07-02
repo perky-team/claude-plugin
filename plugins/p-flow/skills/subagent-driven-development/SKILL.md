@@ -53,7 +53,7 @@ Create `.p-flow/sdd/` at the repo root once, with a self-ignoring `.gitignore`:
 mkdir -p .p-flow/sdd && printf '*\n' > .p-flow/sdd/.gitignore
 ```
 
-All briefs, diffs, and reports go here so they never enter your context or `git status`.
+All briefs, diffs, and reports go here so they never enter your context or `git status`. These artifacts are **temporary** and double as the resume journal (see the "progress ledger" above) — do **not** delete them mid-run. `/p-flow:task-end` clears the workspace (keeping `.gitignore`) after a successful push, the one point where the run is finished and there is nothing left to resume.
 
 ## Procedure
 

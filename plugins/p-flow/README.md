@@ -8,7 +8,7 @@ Disciplined task development flow for Claude Code: skills + subagents that walk 
 |---|---|
 | `/p-flow:init` | Bootstrap p-flow into a new repo. Phase 1 — scaffold rules, templates, secret-deny-list. Phase 2 — brainstorm initial feature list with the user and create stub specs in `specs/<slug>/`. One-time per repo (state-machine guard). |
 | `/p-flow:task-start <slug> [--worktree]` | Open a new task: ask branch type, create `<type>/<slug>` branch (and optional worktree), open `specs/<slug>/`, invoke brainstorming. |
-| `/p-flow:task-end` | Finalize: pre-check the plan and verification marker, push the branch, recommend an MR with copy-ready `gh` and `glab` commands. |
+| `/p-flow:task-end` | Finalize: pre-check the plan and verification marker, push the branch, recommend an MR with copy-ready `gh` and `glab` commands, and — only after a successful push — clear the `subagent-driven-development` workspace (`.p-flow/sdd/`, keeping its `.gitignore`). |
 
 ## Discovery
 
@@ -24,7 +24,7 @@ To disable: remove the `SessionStart` entry from `hooks/hooks.json`, or globally
 | `task-brainstorming` | Right after `/p-flow:task-start`. Produces `specs/<slug>/{specification.md, feature.feature?, adr.md?}`. |
 | `writing-plan` | After spec is approved. Produces the plan as 5–15 steps, each with an acceptance criterion — p-tasks sub-tasks when p-tasks is present (no plan.md), or `specs/<slug>/plan.md` when absent. In legacy mode it offers a TDD-aligned template (default for code tasks) and a generic template (docs/research). |
 | `executing-plan` | After the plan is approved, to implement **inline in this session**. Walks the steps in order — invokes `test-driven-development` for code steps and `verification-before-completion` after each, marking done only on green. The inline execution loop between `writing-plan` and `task-end`. |
-| `subagent-driven-development` | After the plan is approved, when you want **per-step context isolation**. Dispatches a fresh implementer subagent per step, a per-step review (spec compliance + code quality) after each, and a broad whole-branch review at the end — hands artifacts over as files so the controller's context stays clean. The isolated alternative to `executing-plan`; shares the same p-tasks / checkbox ledger. |
+| `subagent-driven-development` | After the plan is approved, when you want **per-step context isolation**. Dispatches a fresh implementer subagent per step, a per-step review (spec compliance + code quality) after each, and a broad whole-branch review at the end — hands artifacts over as files (under `.p-flow/sdd/`) so the controller's context stays clean. The isolated alternative to `executing-plan`; shares the same p-tasks / checkbox ledger. Those artifacts are temporary — `/p-flow:task-end` clears them after a successful push. |
 | `test-driven-development` | Before writing production code. Enforces RED-GREEN-REFACTOR (failing test first, minimal code, verify). Pairs with `verification-before-completion` ("before code" gate vs "before claiming done" gate). |
 | `verification-before-completion` | Before any "done" claim or commit. Quotes test/lint output. Writes a state marker so `task-end` knows verification ran. |
 | `systematic-debugging` | When verification fails or behaviour is unexpected, before proposing a fix. Reproduce → one falsifiable hypothesis → test it → narrow (bisect) → fix the root cause → re-verify. `executing-plan` routes here on a red step. |

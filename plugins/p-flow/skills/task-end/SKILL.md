@@ -2,7 +2,7 @@
 name: task-end
 description: Exit point of the p-flow task development flow. Runs pre-checks (no main branch, no uncommitted changes, plan steps checked, verification marker fresh), pushes the branch, and prints ready-to-copy MR creation commands for both GitHub (`gh`) and GitLab (`glab`). Never runs `gh` or `glab` itself. Usage `/p-flow:task-end`.
 argument-hint: (no arguments)
-allowed-tools: Bash(git status:*) Bash(git rev-parse:*) Bash(git log:*) Bash(git diff:*) Bash(git push:*) Bash(git branch:*) Bash(git merge-base:*) Bash(git worktree:*) Bash(git remote:*) Bash(test:*) Bash(grep:*) Read Glob
+allowed-tools: Bash(git status:*) Bash(git rev-parse:*) Bash(git log:*) Bash(git diff:*) Bash(git push:*) Bash(git branch:*) Bash(git merge-base:*) Bash(git worktree:*) Bash(git remote:*) Bash(test:*) Bash(grep:*) Bash(find:*) Bash(rm:*) Read Glob
 ---
 
 # /p-flow:task-end
@@ -131,6 +131,29 @@ task-end deliberately offers no options menu (no "merge / open PR / cleanup / ca
     On an explicit **yes**: via the Skill tool, invoke `p-wiki:compile` once per chosen source file (prefer `specs/<slug>/adr.md`; fall back to `specs/<slug>/specification.md`; **never** `plan.md`). Use `compile`, **not** `ingest` — the spec files are in-repo, and `ingest` refuses in-repo paths. `compile` is idempotent, so re-running updates the derived pages rather than duplicating them. Report how many pages were created/updated.
 
     On **no**, or if no `<slug>` was resolved: skip. Like step 11, this never blocks the push or the MR recommendation. When both step 11 and step 12 fire, offer p-tasks first, then p-wiki — they are independent.
+
+## SDD workspace cleanup
+
+13. **Clear the `subagent-driven-development` workspace.** This runs **only when the branch is confirmed on the remote** — either the push in step 6 succeeded, or step 5 found the branch already up to date. A successful push is the one point where the task is finished and there is nothing left to resume. If the push failed, or you never reached step 6 for any reason — **skip this step entirely** and say nothing: `.p-flow/sdd/` is the recovery journal for an interrupted `subagent-driven-development` run (its resume path reads `.p-flow/sdd/task-<n>-*`), so deleting it before a clean finish would destroy that journal.
+
+    - **No `.p-flow/sdd/` directory** → no-op, say nothing. This task used `executing-plan` (inline), not SDD, so there is no workspace to clear. (Guard with `test -d .p-flow/sdd`.)
+    - **Directory exists** → remove every file and sub-directory **under** `.p-flow/sdd/`, but **keep `.p-flow/sdd/.gitignore`** (it holds `*`, which is what keeps the folder invisible to git — deleting it would make stray artifacts show up in `git status`). First list the entries you're about to remove so you can report a count, then delete them.
+
+    Use whichever command fits the environment — both preserve `.gitignore`; adapt the syntax to the shell (this repo runs on Windows/PowerShell, but the same skill runs on POSIX shells too):
+
+    ```bash
+    # POSIX / git-bash: delete everything under the folder except .gitignore
+    find .p-flow/sdd -mindepth 1 -name .gitignore -prune -o -exec rm -rf {} +
+    ```
+
+    ```powershell
+    # Windows PowerShell equivalent
+    Get-ChildItem .p-flow/sdd -Force -Exclude .gitignore | Remove-Item -Recurse -Force
+    ```
+
+    Do **not** touch `.claude/.p-flow-state/` — that is the verification marker from pre-check 4, unrelated to SDD artifacts.
+
+    Then print **one** line, substituting the real count, e.g.: *"Cleared the SDD workspace — removed 7 file(s) from `.p-flow/sdd/` (kept `.gitignore`)."* If the directory was absent, print nothing.
 
 ## What this skill does NOT do
 
