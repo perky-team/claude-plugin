@@ -78,10 +78,10 @@ Then loop, `pass = 1..3`:
 1. Dispatch via the `Task` tool with `subagent_type: general-purpose`. The prompt is the content of `${CLAUDE_SKILL_DIR}/spec-auditor.md`, followed by: the paths of every file in `specs/<slug>/`, and — on passes after the first — the user's answers to any questions raised so far.
 2. The subagent fixes what it can unambiguously fix (all severities) and returns `### Fixed` / `### Blockers remaining` / `### Questions for the user`.
 3. Act on the result:
-   - **Questions present** → ask the user **one at a time**, collect answers, and re-dispatch with them **without advancing `pass`** (a question round is not a wasted pass — the subagent still has to apply the resolution).
+   - **Questions present** → ask the user **one at a time**, collect answers, and re-dispatch with them **without advancing `pass`** (a question round is not a wasted pass — the subagent still has to apply the resolution). Guard against a stuck loop: if a re-dispatch raises a question the user has **already answered** (no forward progress), stop re-dispatching and carry that Blocker to §6 instead.
    - **No questions and no Blockers remaining** → the spec is clean. Exit the loop.
    - **No questions but Blockers remain** → advance `pass` and re-dispatch (a fresh pass catches regressions the fixes introduced).
-4. **Cap: 3 passes.** If Blockers still remain after pass 3, stop looping and carry the remaining list into §6 — never loop indefinitely.
+4. **Cap: 3 passes** of Blocker-fixing (question rounds are user-gated, not counted against the cap). If Blockers still remain after pass 3, stop looping and carry the remaining list into §6 — the loop never runs unattended without either converging or handing back to the user.
 
 **Only Blockers drive the loop.** Suggestions and Nits are fixed in-pass but never keep the loop running.
 

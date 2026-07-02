@@ -34,4 +34,12 @@ describe('p-flow spec audit subagent', () => {
     expect(skill).toMatch(/3 passes/);
     expect(skill).toMatch(/Only Blockers drive the loop/i);
   });
+
+  it('§5 and spec-auditor share the exact three return-section headings', () => {
+    const auditor = readFileSync(join(skillDir, 'spec-auditor.md'), 'utf-8');
+    for (const heading of ['### Fixed', '### Blockers remaining', '### Questions for the user']) {
+      expect(auditor, `spec-auditor.md missing ${heading}`).toContain(heading);
+      expect(skill, `SKILL.md §5 missing ${heading}`).toContain(heading);
+    }
+  });
 });
