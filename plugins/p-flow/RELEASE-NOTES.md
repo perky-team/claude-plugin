@@ -3,6 +3,29 @@
 > Marketplace tag → p-flow plugin version → date → headline.
 > Authored 2026-05-27; backfilled from `v4.6.0` onward (the first p-flow release on the marketplace was `v3.1.0` with `plugins/p-flow 0.1.0` — a minimal `init` skill; see `git log v4.5.0..v4.6.0 -- plugins/p-flow/`).
 
+## `plugins/p-flow 1.9.0` (marketplace `v5.16.0`) — SDD is the default execution mode; live native task-list
+
+- **`writing-plan` now recommends `subagent-driven-development` by default.** After the plan is approved,
+  the hand-off is a numbered menu the user can answer with a single digit — `1` (SDD, separate agents,
+  the recommended default) or `2` (`executing-plan`, inline in this session). A bare approval also picks
+  SDD. The rationale: by the time the plan exists, the context is already heavy (brainstorm + spec +
+  plan), so a fresh implementer subagent per step keeps the main context clean. No `AskUserQuestion` —
+  plain prose. `using-p-flow`, the README, and the contributor `CLAUDE.md` all now name SDD the default.
+- **`executing-plan` and `subagent-driven-development` maintain the native task list.** Both skills now
+  mirror the step ledger onto Claude Code's built-in task list (the `TodoWrite` tool, toggled with
+  `Ctrl+T`): one todo per step, flipped `in_progress` at step start and `completed` when the step
+  verifies green. The durable ledger (p-tasks sub-tasks / `plan.md` checkboxes) stays the source of
+  truth — the todo list is a live view. In SDD only the controller touches it; subagents never do.
+  `TodoWrite` added to both skills' `allowed-tools`.
+- **Audit fixes across the plugin.** `subagent-driven-development` marks the diff-range bases as
+  substituted SHAs (`<BASE>`/`<MERGE_BASE>`) so the review-package git commands can't be copied
+  verbatim into a failing `git log BASE..HEAD`; `writing-plan` + `pgraph-bridge` now say where impact
+  notes go in canonical mode (`specification.md`'s `## Risks`, since there is no `plan.md`); the README
+  no longer claims a non-existent reviewer agent frontmatter; and several doc/wording inconsistencies
+  (`verification-before-completion` marker path in its description, `task-end` parent/slug phrasing,
+  `spec-auditor` task-type framing, `pwiki-bridge` legacy-only `plan.md` note, template count in
+  `CLAUDE.md`) were corrected.
+
 ## `plugins/p-flow 1.8.0` (marketplace `v5.15.0`) — task-end clears the SDD workspace after push
 
 - **`/p-flow:task-end` now clears the `subagent-driven-development` workspace (`.p-flow/sdd/`) once the
