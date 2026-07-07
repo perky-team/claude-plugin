@@ -48,8 +48,9 @@ When p-graph is active and the spec touches **existing** code, before finalising
 3. **Fold the result into the plan:**
    - Let the impact set inform **step granularity** — a change with many downstream callers
      usually needs more, smaller steps, not one big one.
-   - Record notable downstream callers / affected modules under the plan's canonical `## Risks`
-     section, so review and verification know what to watch.
+   - Record notable downstream callers / affected modules under the canonical `## Risks` section —
+     the plan's in legacy mode, or (canonical mode, where there is no `plan.md`) the `## Risks`
+     section of `specs/<slug>/specification.md` — so review and verification know what to watch.
 
 This is a **best-effort aid**, never a precondition: if the graph is absent, stale and can't be
 refreshed, or the task is greenfield (no existing code to analyse), decompose the plan normally.

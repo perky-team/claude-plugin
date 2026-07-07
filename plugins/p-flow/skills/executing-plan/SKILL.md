@@ -1,7 +1,7 @@
 ---
 name: executing-plan
 description: Use after the plan is approved and you are about to implement it. Drives the steps in order — one at a time — invoking test-driven-development for code steps and verification-before-completion after each, marking a step done only when its acceptance criterion is met. Steps live in plan.md `## Steps` (legacy) or, when p-tasks is present, as its sub-tasks. The execution loop between writing-plan and task-end.
-allowed-tools: Read Edit Bash Glob Grep
+allowed-tools: Read Edit Bash Glob Grep TodoWrite
 ---
 
 # executing-plan
@@ -46,6 +46,16 @@ Before picking up, read `p-tasks:list <parent>`. Statuses are the source of trut
 - **`in_progress`** → the previous run was **INTERRUPTED** while working this step. Do **not** assume it finished, and do **not** blindly redo it from scratch. **Reconcile first:** inspect `git log` and the working tree (and any partial edits) for what already landed, verify it against the sub-task's `acceptance`, then either finish + verify it or redo it cleanly — and only then `p-tasks:set <st-id> --status done`. See `${CLAUDE_SKILL_DIR}/../_shared/ptasks-bridge.md` § Status lifecycle.
 
 Legacy mode has no `in_progress`: an interrupted step is indistinguishable from an unstarted one (both `- [ ]`), so just re-run the first unchecked step.
+
+## Progress checklist (native task list)
+
+Alongside the durable ledger, maintain Claude Code's **native task list** (the `TodoWrite` tool — the user toggles it with `Ctrl+T`) as a live mirror, so the user watches steps tick off as they complete:
+
+- **At the start**, once the step list is built, create one todo item per plan step, in order, titled after the step. All start `pending`.
+- **When you begin a step** (procedure step 1), set its todo to `in_progress` (both modes — the todo list has an in-progress state even though legacy plan.md checkboxes don't).
+- **When you record completion** (procedure step 6, verified green), set its todo to `completed`.
+
+The todo list is a **view, not the source of truth** — the `plan.md` `## Steps` checkboxes (legacy) or the p-tasks sub-tasks (canonical) stay canonical: they carry acceptance/files/resolutions and survive across sessions. If the two ever disagree, reconcile the todo list to the ledger. Keep exactly one todo `in_progress` at a time. On resume, rebuild the todo list from the ledger (`p-tasks:list` / the checkboxes) before continuing.
 
 ## Procedure
 

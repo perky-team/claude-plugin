@@ -71,7 +71,7 @@ Source-file selection — offer only files that exist, in this priority:
 - `specs/<slug>/adr.md` — **preferred.** Architectural decisions are prime durable knowledge.
 - `specs/<slug>/specification.md` — offer when there is no `adr.md`, or when the spec itself
   carries reusable knowledge worth keeping.
-- **Never** compile `plan.md` — it is execution bookkeeping, not durable knowledge.
+- **Never** compile `plan.md` (legacy mode only — canonical mode has none) — it is execution bookkeeping, not durable knowledge.
 
 On an explicit **yes**: via the Skill tool, invoke `p-wiki:compile` once per chosen file with
 the in-repo path (e.g. `p-wiki:compile specs/<slug>/adr.md`). Report how many pages were

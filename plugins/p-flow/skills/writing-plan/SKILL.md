@@ -34,7 +34,7 @@ Turn the brainstorm artifact into a concrete, ordered plan. Where the plan lives
    Wait for explicit answer before proceeding. In **canonical mode** the variant also sets the default `kind` per step: a TDD plan's steps are `kind: code` (they describe function/endpoint/class behaviour); a generic plan's steps are `kind: non-code` (docs/config/research). Override per step where a TDD plan contains a docs-only step or vice versa.
 3. **Decompose into 5–15 steps.** If you find yourself with more than 15, stop and tell the user the work is too large for one plan — suggest splitting into sub-tasks, each via its own `/p-flow:task-start`. (In canonical mode the count is the number of sub-tasks you will create; the 5–15 guard still applies.)
 
-   **(optional) Consult p-graph for impact.** Run the gate in `${CLAUDE_SKILL_DIR}/../_shared/pgraph-bridge.md`. If a code graph is **not** active, decompose normally — say nothing. If it **is** active and the spec touches existing code, use the graph (per the repo's `.claude/rules/p-graph.md`) to find the impact set: let downstream callers inform step granularity, and record notable affected modules under `## Risks`. Best-effort only — never a precondition.
+   **(optional) Consult p-graph for impact.** Run the gate in `${CLAUDE_SKILL_DIR}/../_shared/pgraph-bridge.md`. If a code graph is **not** active, decompose normally — say nothing. If it **is** active and the spec touches existing code, use the graph (per the repo's `.claude/rules/p-graph.md`) to find the impact set: let downstream callers inform step granularity, and record notable affected modules under `## Risks` — the plan's in legacy mode, or (canonical mode, where there is no `plan.md`) the `## Risks` section of `specs/<slug>/specification.md`. Best-effort only — never a precondition.
 4. **Every step must have an acceptance criterion.** Concrete and checkable: "tests `X.py::test_foo` and `X.py::test_bar` pass", "endpoint `GET /foo` returns 200 with body matching schema Y", "file `bar.ts` exports the function `baz`". Refuse to write a step without one — ask the user for a criterion instead. For TDD plans, each step also captures the `Test first` / `Implement` / `Verify` shape (in legacy mode as sub-bullets; in canonical mode folded into the sub-task's `acceptance`).
 
 5. **Materialise the steps.**
@@ -49,7 +49,19 @@ Turn the brainstorm artifact into a concrete, ordered plan. Where the plan lives
 
 6. **Self-review:** scan for placeholders (`TBD`, `TODO`, leftover `<...>` markers, internal contradictions). In legacy mode also check every step has an AC; in canonical mode check every sub-task was created with an `--acceptance`. Fix inline.
 7. **Show to user.** Legacy mode: *"Plan written to `specs/<slug>/plan.md`. Review and tell me what to amend before we move to execution."* Canonical mode: report how many sub-tasks were created in the `<slug>` task, and that the plan lives entirely in p-tasks (no `plan.md`) with the narrative in `specification.md` — walk the steps with `/p-tasks:list`.
-8. **Hand off to execution.** Once the user has approved the plan, offer the two execution modes: *"Ready to implement? I can run `executing-plan` (inline — I implement in this session, TDD per code step, verify after each) or `subagent-driven-development` (a fresh implementer subagent per step, reviewed after each, keeping the main context clean). Which do you prefer?"* On a choice → invoke the chosen skill via the Skill tool. On **no** → stop here; the user can resume later (either skill picks up at the first unfinished step). Do not start writing code from this skill.
+8. **Hand off to execution — recommend `subagent-driven-development` by default.** Once the user has approved the plan, present the two execution modes as a numbered menu the user can answer with a single digit. By this point the context is already heavy (brainstorm + spec + plan), so inline execution would run on a crowded context; a fresh implementer subagent per step keeps the main context clean — so SDD is option **1** and the recommended default. Say (in prose, no `AskUserQuestion`):
+
+   > Plan approved. How do you want to execute it?
+   > 1. **`subagent-driven-development`** — separate agents (a fresh implementer subagent per step, reviewed after each; keeps this crowded post-brainstorm context clean). *Recommended.*
+   > 2. **`executing-plan`** — in the current session (I implement inline, TDD per code step, verify after each).
+   >
+   > Reply **1** or **2** (or just approve — I'll go with **1**).
+
+   - `1` / bare yes / approval / "go" → invoke `subagent-driven-development` via the Skill tool (the recommended default).
+   - `2` / "inline" / an explicit ask for `executing-plan` → invoke `executing-plan` via the Skill tool instead.
+   - **no** / "later" → stop here; the user can resume later (either skill picks up at the first unfinished step).
+
+   Do not start writing code from this skill.
 
 ## Plan templates
 

@@ -1,7 +1,7 @@
 ---
 name: subagent-driven-development
 description: Use to execute an approved plan in the current session by dispatching a fresh implementer subagent per step, a per-step review (spec compliance + code quality) after each, and a broad whole-branch review at the end. The isolated alternative to executing-plan — fresh context per step, artifacts handed over as files so the controller's context stays clean. Steps come from plan.md `## Steps` (legacy) or p-tasks sub-tasks (canonical).
-allowed-tools: Read Write Edit Bash(git rev-parse:*) Bash(git log:*) Bash(git diff:*) Bash(git status:*) Bash(git merge-base:*) Bash(git rev-list:*) Bash(mkdir:*) Task Skill
+allowed-tools: Read Write Edit Bash(git rev-parse:*) Bash(git log:*) Bash(git diff:*) Bash(git status:*) Bash(git merge-base:*) Bash(git rev-list:*) Bash(mkdir:*) Task Skill TodoWrite
 ---
 
 # subagent-driven-development
@@ -55,6 +55,16 @@ mkdir -p .p-flow/sdd && printf '*\n' > .p-flow/sdd/.gitignore
 
 All briefs, diffs, and reports go here so they never enter your context or `git status`. These artifacts are **temporary** and double as the resume journal (see the "progress ledger" above) — do **not** delete them mid-run. `/p-flow:task-end` clears the workspace (keeping `.gitignore`) after a successful push, the one point where the run is finished and there is nothing left to resume.
 
+## Progress checklist (native task list)
+
+As the controller you also maintain Claude Code's **native task list** (the `TodoWrite` tool — the user toggles it with `Ctrl+T`) as a live mirror of the step list, so the user can watch progress tick off while implementers run in isolated contexts:
+
+- **At the start**, once the step list is built (procedure step 1), create one todo item per step, in order, titled after the step. All start `pending`.
+- **Before you dispatch a step's implementer** (procedure step 4), set its todo to `in_progress`.
+- **When you record completion** (procedure step 9, after the per-step review passes), set its todo to `completed`.
+
+Only **you** (the controller) touch this list — **subagents never do**; they receive a single task brief, not the plan. The durable ledger (p-tasks sub-tasks / `plan.md` checkboxes) stays the source of truth; the todo list only mirrors it. Keep exactly one todo `in_progress` at a time. On resume, rebuild the todo list from the ledger before continuing.
+
 ## Procedure
 
 1. **Read the plan once. Note the global constraints** (exact values/formats/relationships from the spec) — you will hand these to reviewers verbatim. Build the ordered step list per Mode.
@@ -63,7 +73,7 @@ All briefs, diffs, and reports go here so they never enter your context or `git 
 
 For each step that is not done, **in order, one at a time**:
 
-3. **Write the task brief.** Extract this step's full text (title, acceptance criterion, expected files, and any TDD sub-bullets) into `.p-flow/sdd/task-<n>-brief.md`. Record `BASE` = current HEAD (`git rev-parse HEAD`).
+3. **Write the task brief.** Extract this step's full text (title, acceptance criterion, expected files, and any TDD sub-bullets) into `.p-flow/sdd/task-<n>-brief.md`. Record the step's base SHA: run `git rev-parse HEAD` and note the value (call it `<BASE>`) — you substitute this SHA literally into the diff commands in step 6, since shell variables do not persist across separate commands.
 
 4. **Mark the step `in_progress`, then dispatch the implementer.** Immediately **before dispatching**, set the sub-task in flight via the Skill tool: `p-tasks:set <st-id> --status in_progress` (canonical mode); on the **first** step also move the parent if still `todo`: `p-tasks:set <parent> --status in_progress` (no cascade — set it once). If the dispatch is interrupted, this leaves the step marked interrupted rather than untouched. (Legacy mode has no `in_progress` — skip this.) Then use the `Task` tool with `subagent_type: general-purpose` and `model` chosen per **Model selection**. Build the prompt by reading `${CLAUDE_SKILL_DIR}/implementer-prompt.md` and filling its placeholders — pass the brief path and a report path (`.p-flow/sdd/task-<n>-report.md`), not the pasted step text. Add only: where this step fits, interfaces/decisions from earlier steps, and your resolution of any ambiguity.
 
@@ -72,12 +82,12 @@ For each step that is not done, **in order, one at a time**:
 6. **Build the review package.** Write the commit list, stat, and full diff for `BASE..HEAD` to a file:
 
    ```
-   git log --oneline BASE..HEAD > .p-flow/sdd/review-<n>.diff
-   git diff --stat BASE..HEAD >> .p-flow/sdd/review-<n>.diff
-   git diff -U10 BASE..HEAD >> .p-flow/sdd/review-<n>.diff
+   git log --oneline <BASE>..HEAD > .p-flow/sdd/review-<n>.diff
+   git diff --stat <BASE>..HEAD >> .p-flow/sdd/review-<n>.diff
+   git diff -U10 <BASE>..HEAD >> .p-flow/sdd/review-<n>.diff
    ```
 
-   Use the `BASE` you recorded in step 3 — never `HEAD~1` (it drops all but the last commit of a multi-commit step). If redirection isn't available, run each `git` command and `Write` the combined output to the file.
+   Substitute the `<BASE>` SHA you recorded in step 3 (there is no git ref named `BASE`) — never `HEAD~1` (it drops all but the last commit of a multi-commit step). If redirection isn't available, run each `git` command and `Write` the combined output to the file.
 
 7. **Dispatch the task reviewer.** `Task` + `general-purpose` + `model` per role. Read `${CLAUDE_SKILL_DIR}/task-reviewer-prompt.md`, fill it with the brief path, the report path, the review-package path, and the global constraints verbatim. The reviewer returns a spec-compliance verdict + `Blockers / Suggestions / Nits`.
 
@@ -89,7 +99,7 @@ For each step that is not done, **in order, one at a time**:
 
 When every step is done:
 
-10. **Final whole-branch review.** Build a package for `MERGE_BASE..HEAD` (`git merge-base <base> HEAD`). Dispatch `general-purpose` with the canonical template `${CLAUDE_SKILL_DIR}/../requesting-code-review/code-reviewer.md` + the package path. If it returns findings, dispatch ONE fix subagent with the complete list (not one per finding), then re-verify. Log the outcomes as review follow-ups the same way `requesting-code-review` does (via the p-tasks gate).
+10. **Final whole-branch review.** Build a package for `<MERGE_BASE>..HEAD`, where `<MERGE_BASE>` is the SHA that `git merge-base <base> HEAD` prints — substitute it literally, the same way you did for `<BASE>` in step 6. Dispatch `general-purpose` with the canonical template `${CLAUDE_SKILL_DIR}/../requesting-code-review/code-reviewer.md` + the package path. If it returns findings, dispatch ONE fix subagent with the complete list (not one per finding), then re-verify. Log the outcomes as review follow-ups the same way `requesting-code-review` does (via the p-tasks gate).
 
 11. **Hand off.** Tell the user the plan is fully implemented and reviewed. Suggest `/p-flow:task-end` to push and recommend an MR. Do not push yourself.
 
