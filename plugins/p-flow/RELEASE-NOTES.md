@@ -3,6 +3,16 @@
 > Marketplace tag → p-flow plugin version → date → headline.
 > Authored 2026-05-27; backfilled from `v4.6.0` onward (the first p-flow release on the marketplace was `v3.1.0` with `plugins/p-flow 0.1.0` — a minimal `init` skill; see `git log v4.5.0..v4.6.0 -- plugins/p-flow/`).
 
+## `plugins/p-flow 1.9.1` (marketplace `v5.16.1`) — TDD vs generic plan choice is a digit-menu with per-option recommendation
+
+- **`writing-plan` step 2 now presents the plan-variant choice as a numbered menu.** Instead of a single
+  one-line suggestion (*"I'd suggest a TDD/generic plan, confirm or override?"*), it shows both options —
+  `1. TDD plan` and `2. Generic plan` — each stating whether it's recommended **for this spec** and the
+  concrete reason drawn from the spec's own content, with exactly one marked `*Recommended*` (per the
+  existing feature-file / behaviour-in-AC heuristic). The user answers with a single digit, or a bare
+  approval takes the recommended one. No `AskUserQuestion` — plain prose. The heuristic and templates are
+  unchanged; only the prompt presentation changed.
+
 ## `plugins/p-flow 1.9.0` (marketplace `v5.16.0`) — SDD is the default execution mode; live native task-list
 
 - **`writing-plan` now recommends `subagent-driven-development` by default.** After the plan is approved,

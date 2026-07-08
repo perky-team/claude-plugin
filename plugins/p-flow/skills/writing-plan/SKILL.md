@@ -24,14 +24,19 @@ Turn the brainstorm artifact into a concrete, ordered plan. Where the plan lives
    - **p-tasks absent** → *legacy mode*: the step list is a `## Steps` checklist written into `specs/<slug>/plan.md` (steps 3–8 below, "legacy mode" branch). Behave exactly as before — say nothing about p-tasks.
    - **p-tasks present** → *canonical mode*: p-tasks is the single source of truth for the step list. You will create the parent task + one sub-task per step there. **Do NOT write `plan.md`** — nothing in canonical mode creates or requires it; the narrative already lives in `specs/<slug>/specification.md` and a concise Overview goes into the parent task's `--description`. Follow the "canonical mode" branch in steps 3–8.
 
-2. **Detect plan type and ask the user.** Examine the spec to suggest a variant:
-   - If `specs/<slug>/feature.feature` exists OR `specification.md` Acceptance Criteria mention function / endpoint / class / handler / script behaviours → suggest **TDD plan** (template: `${CLAUDE_SKILL_DIR}/../_shared/templates/plan-tdd.template.md`).
-   - Otherwise → suggest **generic plan** (template: `${CLAUDE_SKILL_DIR}/../_shared/templates/plan-generic.template.md`).
+2. **Detect plan type and ask the user.** First decide which variant fits *this* spec:
+   - If `specs/<slug>/feature.feature` exists OR `specification.md` Acceptance Criteria mention function / endpoint / class / handler / script behaviours → the recommended variant is **TDD plan** (template: `${CLAUDE_SKILL_DIR}/../_shared/templates/plan-tdd.template.md`).
+   - Otherwise → the recommended variant is **generic plan** (template: `${CLAUDE_SKILL_DIR}/../_shared/templates/plan-generic.template.md`).
 
-   Ask the user (in prose, no AskUserQuestion):
-   *"Based on the spec, I'd suggest a **<TDD|generic>** plan. Confirm, or override with the other variant?"*
+   Then present **both** variants as a numbered menu the user answers with a single digit (in prose, no `AskUserQuestion`). For each option state whether you recommend it **for this spec** and the concrete reason — mark exactly one `*Recommended*` (the variant chosen by the heuristic above). Say:
 
-   Wait for explicit answer before proceeding. In **canonical mode** the variant also sets the default `kind` per step: a TDD plan's steps are `kind: code` (they describe function/endpoint/class behaviour); a generic plan's steps are `kind: non-code` (docs/config/research). Override per step where a TDD plan contains a docs-only step or vice versa.
+   > Which plan variant?
+   > 1. **TDD plan** — <recommend or not, with the reason drawn from *this* spec: e.g. "AC describe testable `GET /foo` behaviour, so RED→GREEN per step is worth it" / "no testable behaviour to drive tests from, so it'd add ceremony without payoff">
+   > 2. **Generic plan** — <recommend or not, with the reason drawn from *this* spec: e.g. "the work is docs/config/research with no function-level behaviour to test-drive" / "the spec has concrete endpoint/class behaviour that TDD would pin down better">
+   >
+   > Reply **1** or **2** (or just approve — I'll go with the recommended one).
+
+   Fill the two reasons from the actual spec content — never leave the placeholder text. Wait for an explicit answer (a digit or approval) before proceeding. In **canonical mode** the variant also sets the default `kind` per step: a TDD plan's steps are `kind: code` (they describe function/endpoint/class behaviour); a generic plan's steps are `kind: non-code` (docs/config/research). Override per step where a TDD plan contains a docs-only step or vice versa.
 3. **Decompose into 5–15 steps.** If you find yourself with more than 15, stop and tell the user the work is too large for one plan — suggest splitting into sub-tasks, each via its own `/p-flow:task-start`. (In canonical mode the count is the number of sub-tasks you will create; the 5–15 guard still applies.)
 
    **(optional) Consult p-graph for impact.** Run the gate in `${CLAUDE_SKILL_DIR}/../_shared/pgraph-bridge.md`. If a code graph is **not** active, decompose normally — say nothing. If it **is** active and the spec touches existing code, use the graph (per the repo's `.claude/rules/p-graph.md`) to find the impact set: let downstream callers inform step granularity, and record notable affected modules under `## Risks` — the plan's in legacy mode, or (canonical mode, where there is no `plan.md`) the `## Risks` section of `specs/<slug>/specification.md`. Best-effort only — never a precondition.
