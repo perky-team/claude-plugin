@@ -138,7 +138,11 @@ Run immediately after Step 6:
    user rules in `~/.claude/CLAUDE.md`.
 3. `git tag vA.B.C`
 4. `git push` then `git push --tags` (two separate invocations — never
-   `--follow-tags` or other shortcuts that silently bundle).
+   `--follow-tags` or other shortcuts that silently bundle). The `/release`
+   invocation is the go-ahead to tag and push — do not add your own extra
+   "can I push now?" question on top of it; the Step 6 announcement is a
+   statement, not a question. Proceed to execute the release you were asked
+   to cut.
 5. Run `git status` to confirm clean state and report:
    "Released `vA.B.C`. <N> plugin(s) bumped. Tag pushed."
 
@@ -155,6 +159,7 @@ error, and ask before retrying. Never `--force` push and never `--no-verify`.
 | Fixing the test instead of the plugin when they disagree | Tests are the spec. Edit the plugin. Only edit the test if the user confirms the test is wrong. |
 | Running `npm test` once and assuming it's deterministic | E2e tests spawn processes; re-run on transient failures before declaring a blocker. |
 | Tagging silently with no announcement | Step 6 announcement is still mandatory — the user must see the version line and reasoning before the push happens, even though no confirmation is required. |
+| Adding an extra "can I push?" question after the Step 6 announcement | The `/release` invocation is the authorization and the announcement is a statement, not a question. Proceed to execute; don't re-litigate the release you were told to cut. |
 
 ## Red flags — STOP and reconsider
 
