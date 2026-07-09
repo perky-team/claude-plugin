@@ -3,6 +3,17 @@
 > Marketplace tag → p-flow plugin version → date → headline.
 > Authored 2026-05-27; backfilled from `v4.6.0` onward (the first p-flow release on the marketplace was `v3.1.0` with `plugins/p-flow 0.1.0` — a minimal `init` skill; see `git log v4.5.0..v4.6.0 -- plugins/p-flow/`).
 
+## `plugins/p-flow 1.9.2` (marketplace `v5.16.2`) — native task-list works on current Claude Code (Task tools, not just legacy TodoWrite)
+
+- **`executing-plan` and `subagent-driven-development` no longer depend on the phased-out `TodoWrite`
+  tool.** Recent Claude Code versions default to the new task-list tools (`TaskCreate` / `TaskUpdate` /
+  `TaskList`) and disable `TodoWrite` unless `CLAUDE_CODE_ENABLE_TASKS=0` is set — so both skills, which
+  named only `TodoWrite`, silently created no list and `Ctrl+T` showed nothing. The native-task-list
+  sections are now tool-independent: prefer the `Task*` tools when available, fall back to `TodoWrite`
+  only when they are not, never use both, and never skip the list because one tool is missing.
+  `TaskCreate TaskUpdate TaskList` added to both skills' `allowed-tools` alongside `TodoWrite`. No
+  behaviour change beyond the list now actually appearing.
+
 ## `plugins/p-flow 1.9.1` (marketplace `v5.16.1`) — TDD vs generic plan choice is a digit-menu with per-option recommendation
 
 - **`writing-plan` step 2 now presents the plan-variant choice as a numbered menu.** Instead of a single

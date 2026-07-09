@@ -1,7 +1,7 @@
 ---
 name: subagent-driven-development
 description: Use to execute an approved plan in the current session by dispatching a fresh implementer subagent per step, a per-step review (spec compliance + code quality) after each, and a broad whole-branch review at the end. The isolated alternative to executing-plan — fresh context per step, artifacts handed over as files so the controller's context stays clean. Steps come from plan.md `## Steps` (legacy) or p-tasks sub-tasks (canonical).
-allowed-tools: Read Write Edit Bash(git rev-parse:*) Bash(git log:*) Bash(git diff:*) Bash(git status:*) Bash(git merge-base:*) Bash(git rev-list:*) Bash(mkdir:*) Task Skill TodoWrite
+allowed-tools: Read Write Edit Bash(git rev-parse:*) Bash(git log:*) Bash(git diff:*) Bash(git status:*) Bash(git merge-base:*) Bash(git rev-list:*) Bash(mkdir:*) Task Skill TaskCreate TaskUpdate TaskList TodoWrite
 ---
 
 # subagent-driven-development
@@ -57,13 +57,13 @@ All briefs, diffs, and reports go here so they never enter your context or `git 
 
 ## Progress checklist (native task list)
 
-As the controller you also maintain Claude Code's **native task list** (the `TodoWrite` tool — the user toggles it with `Ctrl+T`) as a live mirror of the step list, so the user can watch progress tick off while implementers run in isolated contexts:
+As the controller you also maintain Claude Code's **native task list** — the panel the user toggles with `Ctrl+T` — as a live mirror of the step list, so the user can watch progress tick off while implementers run in isolated contexts. Use whichever task-list tools your Claude Code exposes: on recent versions that is **`TaskCreate`** (add a task) + **`TaskUpdate`** (change its status); older versions have the legacy **`TodoWrite`** tool (whole-list rewrite) instead. Prefer the `Task*` tools when they are available and fall back to `TodoWrite` only when they are not — do not use both, and do not silently skip this because one tool is missing.
 
-- **At the start**, once the step list is built (procedure step 1), create one todo item per step, in order, titled after the step. All start `pending`.
-- **Before you dispatch a step's implementer** (procedure step 4), set its todo to `in_progress`.
-- **When you record completion** (procedure step 9, after the per-step review passes), set its todo to `completed`.
+- **At the start**, once the step list is built (procedure step 1), create one task per step, in order, titled after the step. All start in the not-started state (`todo` / `pending`).
+- **Before you dispatch a step's implementer** (procedure step 4), set its task to `in_progress`.
+- **When you record completion** (procedure step 9, after the per-step review passes), set its task to `completed`.
 
-Only **you** (the controller) touch this list — **subagents never do**; they receive a single task brief, not the plan. The durable ledger (p-tasks sub-tasks / `plan.md` checkboxes) stays the source of truth; the todo list only mirrors it. Keep exactly one todo `in_progress` at a time. On resume, rebuild the todo list from the ledger before continuing.
+Only **you** (the controller) touch this list — **subagents never do**; they receive a single task brief, not the plan. The durable ledger (p-tasks sub-tasks / `plan.md` checkboxes) stays the source of truth; the native task list only mirrors it. Keep exactly one task `in_progress` at a time. On resume, rebuild the task list from the ledger before continuing.
 
 ## Procedure
 

@@ -1,7 +1,7 @@
 ---
 name: executing-plan
 description: Use after the plan is approved and you are about to implement it. Drives the steps in order — one at a time — invoking test-driven-development for code steps and verification-before-completion after each, marking a step done only when its acceptance criterion is met. Steps live in plan.md `## Steps` (legacy) or, when p-tasks is present, as its sub-tasks. The execution loop between writing-plan and task-end.
-allowed-tools: Read Edit Bash Glob Grep TodoWrite
+allowed-tools: Read Edit Bash Glob Grep TaskCreate TaskUpdate TaskList TodoWrite
 ---
 
 # executing-plan
@@ -49,13 +49,13 @@ Legacy mode has no `in_progress`: an interrupted step is indistinguishable from 
 
 ## Progress checklist (native task list)
 
-Alongside the durable ledger, maintain Claude Code's **native task list** (the `TodoWrite` tool — the user toggles it with `Ctrl+T`) as a live mirror, so the user watches steps tick off as they complete:
+Alongside the durable ledger, maintain Claude Code's **native task list** — the panel the user toggles with `Ctrl+T` — as a live mirror, so the user watches steps tick off as they complete. Use whichever task-list tools your Claude Code exposes: on recent versions that is **`TaskCreate`** (add a task) + **`TaskUpdate`** (change its status); older versions have the legacy **`TodoWrite`** tool (whole-list rewrite) instead. Prefer the `Task*` tools when they are available and fall back to `TodoWrite` only when they are not — do not use both, and do not silently skip this because one tool is missing.
 
-- **At the start**, once the step list is built, create one todo item per plan step, in order, titled after the step. All start `pending`.
-- **When you begin a step** (procedure step 1), set its todo to `in_progress` (both modes — the todo list has an in-progress state even though legacy plan.md checkboxes don't).
-- **When you record completion** (procedure step 6, verified green), set its todo to `completed`.
+- **At the start**, once the step list is built, create one task per plan step, in order, titled after the step. All start in the not-started state (`todo` / `pending`).
+- **When you begin a step** (procedure step 1), set its task to `in_progress` (both modes — the task list has an in-progress state even though legacy plan.md checkboxes don't).
+- **When you record completion** (procedure step 6, verified green), set its task to `completed`.
 
-The todo list is a **view, not the source of truth** — the `plan.md` `## Steps` checkboxes (legacy) or the p-tasks sub-tasks (canonical) stay canonical: they carry acceptance/files/resolutions and survive across sessions. If the two ever disagree, reconcile the todo list to the ledger. Keep exactly one todo `in_progress` at a time. On resume, rebuild the todo list from the ledger (`p-tasks:list` / the checkboxes) before continuing.
+The native task list is a **view, not the source of truth** — the `plan.md` `## Steps` checkboxes (legacy) or the p-tasks sub-tasks (canonical) stay canonical: they carry acceptance/files/resolutions and survive across sessions. If the two ever disagree, reconcile the task list to the ledger. Keep exactly one task `in_progress` at a time. On resume, rebuild the task list from the ledger (`p-tasks:list` / the checkboxes) before continuing.
 
 ## Procedure
 
