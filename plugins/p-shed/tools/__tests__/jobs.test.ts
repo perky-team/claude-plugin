@@ -34,6 +34,27 @@ describe('setJob', () => {
     expect(jobs).toHaveLength(1);
     expect(jobs[0]).toMatchObject({ id: 'a', schedule: '0 * * * *', enabled: false });
   });
+  it('partial update retains existing fields', () => {
+    setJob(root, { id: 'a', schedule: '* * * * *', prompt: 'first' });
+    const res = setJob(root, { id: 'a', enabled: false });
+    expect(res.created).toBe(false);
+    const jobs = readJobs(root).jobs;
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]).toMatchObject({ id: 'a', schedule: '* * * * *', prompt: 'first', enabled: false });
+  });
+  it('new job missing prompt throws ValidationError', () => {
+    expect(() => setJob(root, { schedule: '* * * * *' })).toThrow(ValidationError);
+  });
+  it('slug collision yields distinct ids', () => {
+    const res1 = setJob(root, { schedule: '* * * * *', prompt: 'Do the Thing!' });
+    const res2 = setJob(root, { schedule: '* * * * *', prompt: 'Do The Thing' });
+    expect(res1.id).toBe('do-the-thing');
+    expect(res2.id).toBe('do-the-thing-2');
+    const jobs = readJobs(root).jobs;
+    expect(jobs).toHaveLength(2);
+    expect(jobs.map((j) => j.id)).toContain('do-the-thing');
+    expect(jobs.map((j) => j.id)).toContain('do-the-thing-2');
+  });
 });
 
 describe('rmJob', () => {
