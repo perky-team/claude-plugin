@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import yaml from './vendor/js-yaml.mjs';
 
@@ -8,7 +8,7 @@ export function paths(root) {
     dir,
     jobs: join(dir, 'jobs.yml'),
     config: join(dir, 'config.json'),
-    state: join(dir, 'state.json'),
+    stateDir: join(dir, 'state'),
     logsDir: join(dir, 'logs'),
     runDir: join(dir, 'run'),
   };
@@ -41,17 +41,36 @@ export function readConfig(root) {
   }
 }
 
-export function readState(root) {
-  const p = paths(root).state;
-  if (!existsSync(p)) return { jobs: {} };
-  try {
-    const data = JSON.parse(readFileSync(p, 'utf-8'));
-    return { jobs: data.jobs ?? {} };
-  } catch {
-    return { jobs: {} };
-  }
+export function readJobState(root, id) {
+  const p = join(paths(root).stateDir, `${id}.json`);
+  if (!existsSync(p)) return null;
+  try { return JSON.parse(readFileSync(p, 'utf-8')); }
+  catch { return null; } // corrupt/truncated (e.g. killed mid-write) -> treat as no state
 }
 
-export function writeState(root, state) {
-  writeFile(paths(root).state, JSON.stringify(state, null, 2) + '\n');
+export function writeJobState(root, id, st) {
+  writeFile(join(paths(root).stateDir, `${id}.json`), JSON.stringify(st, null, 2) + '\n');
+}
+
+export function removeJobState(root, id) {
+  rmSync(join(paths(root).stateDir, `${id}.json`), { force: true });
+}
+
+export function listStateIds(root) {
+  const dir = paths(root).stateDir;
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .map((f) => /^(.+)\.json$/.exec(f))
+    .filter(Boolean)
+    .map((m) => m[1]);
+}
+
+// Aggregate view (tolerant of corrupt files), used for reads/asserts.
+export function readState(root) {
+  const jobs = {};
+  for (const id of listStateIds(root)) {
+    const st = readJobState(root, id);
+    if (st) jobs[id] = st;
+  }
+  return { jobs };
 }

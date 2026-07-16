@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { paths, readJobs, readConfig, readState, writeState } from './io.mjs';
+import { paths, readJobs, readConfig, readJobState, writeJobState, removeJobState, listStateIds } from './io.mjs';
 import { parseCron, isDue } from './cron.mjs';
 import { runJob as realRunJob } from './launch.mjs';
 import { appendLog as realAppendLog, rotateLogs as realRotateLogs } from './logs.mjs';
@@ -30,7 +30,7 @@ function readPid(root, id) {
 
 export async function tick({ root, now = Date.now(), deps = {} }) {
   const d = {
-    readJobs, readConfig, readState, writeState,
+    readJobs, readConfig, readJobState, writeJobState, removeJobState, listStateIds,
     runJob: realRunJob, appendLog: realAppendLog, rotateLogs: realRotateLogs,
     isPidAlive, writePid: (id, pid) => writePid(root, id, pid), removePid: (id) => removePid(root, id),
     ...deps,
@@ -39,15 +39,14 @@ export async function tick({ root, now = Date.now(), deps = {} }) {
   d.rotateLogs(root, now);
   const { defaults, jobs } = d.readJobs(root);
   const config = d.readConfig(root);
-  const state = d.readState(root);
   const results = [];
 
   for (const job of jobs) {
     if (job.enabled === false) continue;
-    const st = state.jobs[job.id];
+    const st = d.readJobState(root, job.id); // fresh per-job read
 
     if (!st || st.lastRun == null) {
-      state.jobs[job.id] = { lastRun: now, lastExit: null, pid: null };
+      d.writeJobState(root, job.id, { lastRun: now, lastExit: null, pid: null });
       results.push({ id: job.id, action: 'baselined' });
       continue;
     }
@@ -60,17 +59,16 @@ export async function tick({ root, now = Date.now(), deps = {} }) {
       continue;
     }
 
-    const r = await d.runJob({ job, defaults, claudeBin: config.claudeBin, onSpawn: (pid) => { if (pid) d.writePid(job.id, pid); } });
-    state.jobs[job.id] = { lastRun: now, lastExit: r.exit, pid: null };
+    const r = await d.runJob({ job, defaults, claudeBin: config.claudeBin, onSpawn: (p) => { if (p) d.writePid(job.id, p); } });
+    d.writeJobState(root, job.id, { lastRun: now, lastExit: r.exit, pid: null });
     d.appendLog(root, { ts: now, job: job.id, exit: r.exit, timedOut: r.timedOut, durationMs: r.durationMs }, now);
     d.removePid(job.id);
     results.push({ id: job.id, action: 'launched', exit: r.exit, timedOut: r.timedOut });
   }
 
-  for (const id of Object.keys(state.jobs)) {
-    if (!jobs.some((j) => j.id === id)) delete state.jobs[id];
+  // Orphan prune: drop state files for jobs no longer in jobs.yml.
+  for (const id of d.listStateIds(root)) {
+    if (!jobs.some((j) => j.id === id)) d.removeJobState(root, id);
   }
-
-  d.writeState(root, state);
   return results;
 }

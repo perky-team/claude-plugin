@@ -34,7 +34,7 @@ Tool: `node tools/pshed.mjs <command>` (all support `--json`; exit `0` ok / `1` 
 |---|---|---|
 | `jobs.yml` | git | `version`, `defaults`, `jobs[]{ id, schedule, enabled, cwd?, prompt, timeoutSec?, permissionMode?, allowedTools? }` |
 | `config.json` | gitignore | `{ nodeBin, claudeBin }` (resolved at init) |
-| `state.json` | gitignore | per-job `{ lastRun, lastExit, pid }` |
+| `state/<id>.json` | gitignore | per-job `{ lastRun, lastExit, pid }` — one file per job (no shared state file) |
 | `logs/<date>.jsonl` | gitignore | one record per run; auto-rotated (7-day retention) |
 | `run/<id>.pid` | gitignore | duplicate-guard pidfile |
 

@@ -19,7 +19,7 @@ If `.pshed/` exists, stop and tell the user: "p-shed already initialized here. E
 Run `git rev-parse --show-toplevel` to find the repo root and use that as `<root>` — the p-shed home. This must match how the CLI resolves its root (it walks up from the current directory to the nearest `.git`), otherwise `.pshed/` could end up in a subdirectory the CLI never looks at. If the command fails (not a git repo), fall back to the current working directory as `<root>`. (Jobs run relative to their own `cwd`; this folder just holds the scheduler state.)
 
 ## Step 3 — Create the layout
-Create `.pshed/`, `.pshed/logs/`, `.pshed/run/`.
+Create `.pshed/`, `.pshed/state/`, `.pshed/logs/`, `.pshed/run/`.
 
 Write `.pshed/jobs.yml` (tracked in git):
     version: 1
@@ -30,8 +30,8 @@ Write `.pshed/jobs.yml` (tracked in git):
       allowedTools: "Read,Write,Edit,Bash(git *)"
     jobs: []
 
-Write `.pshed/state.json` (gitignored):
-    { "jobs": {} }
+`.pshed/state/` starts empty — each job gets its own `<id>.json` file the first
+time it ticks (gitignored).
 
 Resolve the binaries and write `.pshed/config.json` (gitignored). Resolve `claude`'s
 absolute path (`which claude` on POSIX, `where claude` on Windows); if it cannot be
@@ -41,7 +41,7 @@ resolved, write `"claude"` and warn the user that `p-shed:start` needs `claude` 
 ## Step 4 — gitignore the volatile parts
 Ensure these lines exist in `<folder>/.gitignore` (append if missing). Keep `jobs.yml` tracked.
     .pshed/config.json
-    .pshed/state.json
+    .pshed/state/
     .pshed/logs/
     .pshed/run/
 

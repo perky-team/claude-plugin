@@ -2,7 +2,7 @@ import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { readJobs, writeJobs, readState, writeState, readConfig, paths } from '../lib/io.mjs';
+import { readJobs, writeJobs, readState, readJobState, writeJobState, readConfig, paths } from '../lib/io.mjs';
 
 let root: string;
 beforeEach(() => { root = mkdtempSync(join(tmpdir(), 'pshed-io-')); });
@@ -17,19 +17,35 @@ describe('io', () => {
     writeJobs(root, data);
     expect(readJobs(root)).toEqual(data);
   });
-  it('state round-trips through JSON', () => {
-    writeState(root, { jobs: { a: { lastRun: 111, lastExit: 0, pid: null } } });
-    expect(readState(root)).toEqual({ jobs: { a: { lastRun: 111, lastExit: 0, pid: null } } });
+  it('job state round-trips through JSON', () => {
+    const st = { lastRun: 111, lastExit: 0, pid: null };
+    writeJobState(root, 'a', st);
+    expect(readJobState(root, 'a')).toEqual(st);
+  });
+  it('readJobState returns null for a job with no state file', () => {
+    expect(readJobState(root, 'missing')).toBeNull();
+  });
+  it('readState aggregates multiple per-job state files', () => {
+    writeJobState(root, 'a', { lastRun: 111, lastExit: 0, pid: null });
+    writeJobState(root, 'b', { lastRun: 222, lastExit: 1, pid: null });
+    expect(readState(root)).toEqual({
+      jobs: {
+        a: { lastRun: 111, lastExit: 0, pid: null },
+        b: { lastRun: 222, lastExit: 1, pid: null },
+      },
+    });
   });
   it('readConfig defaults nodeBin/claudeBin', () => {
     expect(readConfig(root)).toEqual({ nodeBin: 'node', claudeBin: 'claude' });
   });
   it('paths are under <root>/.pshed', () => {
     expect(paths(root).jobs).toBe(join(root, '.pshed', 'jobs.yml'));
+    expect(paths(root).stateDir).toBe(join(root, '.pshed', 'state'));
   });
-  it('readState tolerates a corrupt/truncated state.json', () => {
-    mkdirSync(paths(root).dir, { recursive: true });
-    writeFileSync(paths(root).state, '{ not json', 'utf-8');
+  it('readJobState tolerates a corrupt/truncated state file, and readState omits it', () => {
+    mkdirSync(paths(root).stateDir, { recursive: true });
+    writeFileSync(join(paths(root).stateDir, 'x.json'), '{ bad', 'utf-8');
+    expect(readJobState(root, 'x')).toBeNull();
     expect(readState(root)).toEqual({ jobs: {} });
   });
   it('readConfig tolerates a corrupt config.json', () => {

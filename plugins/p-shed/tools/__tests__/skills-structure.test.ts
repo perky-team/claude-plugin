@@ -13,7 +13,7 @@ describe('p-shed skills', () => {
   });
   it('init scaffolds the required files and gitignores volatile ones, without writing a rule', () => {
     const init = read('init');
-    for (const token of ['.pshed/jobs.yml', '.pshed/state.json', '.pshed/logs/', '.pshed/run/', '.gitignore']) {
+    for (const token of ['.pshed/jobs.yml', '.pshed/state/', '.pshed/logs/', '.pshed/run/', '.gitignore']) {
       expect(init).toContain(token);
     }
     expect(init.toLowerCase()).not.toContain('.claude/rules');
