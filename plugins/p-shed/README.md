@@ -59,3 +59,11 @@ Example `jobs.yml`:
   instructions in the prompt.
 - Requires the OS scheduler (`schtasks` on Windows, user `crontab` on Linux/macOS) and
   `node` + `claude` resolvable at install time.
+- **Windows: the tick runs in your interactive session.** A brief console window may
+  appear each minute, and jobs run only while you are logged on. Running hidden and
+  when logged off needs a Task Scheduler "run whether logged on or not" (S4U) entry,
+  which requires admin rights — out of scope for the simple `schtasks` installer here.
+- **Windows: keep prompts to plain text.** Each launch goes through `cmd.exe`, so a
+  prompt containing raw shell metacharacters — especially `%NAME%` (environment-
+  variable expansion), and `&`/`|`/`<`/`>` in a prompt with no surrounding spaces — can
+  be mangled before it reaches `claude`. Ordinary sentence prompts are unaffected.
