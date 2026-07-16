@@ -30,4 +30,33 @@ describe('rotateLogs', () => {
     expect(existsSync(join(dir, '2026-07-01.jsonl'))).toBe(false);
     expect(existsSync(join(dir, '2026-07-16.jsonl'))).toBe(true);
   });
+
+  it('keeps files at exact boundary (7 days old), deletes beyond (8+ days)', () => {
+    const dir = paths(root).logsDir;
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, '2026-07-09.jsonl'), 'x\n');   // exactly 7 days old
+    writeFileSync(join(dir, '2026-07-08.jsonl'), 'x\n');   // 8 days old
+    const deleted = rotateLogs(root, day('2026-07-16'), 7);
+    expect(deleted).toEqual(['2026-07-08.jsonl']);
+    expect(existsSync(join(dir, '2026-07-09.jsonl'))).toBe(true);
+    expect(existsSync(join(dir, '2026-07-08.jsonl'))).toBe(false);
+  });
+
+  it('returns empty array when logs directory does not exist', () => {
+    const deleted = rotateLogs(root, day('2026-07-16'), 7);
+    expect(deleted).toEqual([]);
+  });
+
+  it('ignores non-dated and non-jsonl files, deletes only matching pattern', () => {
+    const dir = paths(root).logsDir;
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'cron.log'), 'x\n');           // non-matching name
+    writeFileSync(join(dir, 'notes.txt'), 'x\n');          // non-matching name
+    writeFileSync(join(dir, '2026-01-01.jsonl'), 'x\n');   // very old dated file
+    const deleted = rotateLogs(root, day('2026-07-16'), 7);
+    expect(deleted).toEqual(['2026-01-01.jsonl']);
+    expect(existsSync(join(dir, 'cron.log'))).toBe(true);
+    expect(existsSync(join(dir, 'notes.txt'))).toBe(true);
+    expect(existsSync(join(dir, '2026-01-01.jsonl'))).toBe(false);
+  });
 });

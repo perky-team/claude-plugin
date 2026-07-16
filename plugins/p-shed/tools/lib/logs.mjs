@@ -15,7 +15,7 @@ export function appendLog(root, record, nowMs) {
 export function rotateLogs(root, nowMs, retentionDays = 7) {
   const dir = paths(root).logsDir;
   if (!existsSync(dir)) return [];
-  const cutoff = nowMs - retentionDays * 24 * 60 * 60 * 1000;
+  const cutoff = Date.parse(dateStr(nowMs) + 'T00:00:00Z') - retentionDays * 24 * 60 * 60 * 1000;
   const deleted = [];
   for (const name of readdirSync(dir)) {
     const m = /^(\d{4}-\d{2}-\d{2})\.jsonl$/.exec(name);
