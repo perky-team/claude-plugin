@@ -11,7 +11,7 @@ export function buildArgs(job, defaults) {
 export function killTree(pid) {
   if (!pid) return;
   if (process.platform === 'win32') {
-    spawn('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' });
+    spawn('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' }).on('error', () => {});
   } else {
     try { process.kill(-pid, 'SIGKILL'); }
     catch { try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ } }
@@ -40,10 +40,14 @@ export function runJob({ job, defaults, claudeBin, spawnFn = spawn, killFn = kil
     // the pidfile only after the run would let overlapping ticks double-launch long jobs.
     if (onSpawn) onSpawn(child.pid);
     let timedOut = false;
+    let settled = false;
+    const finish = (result) => { if (settled) return; settled = true; clearTimeout(timer); resolve(result); };
     const timer = setTimeout(() => { timedOut = true; killFn(child.pid); }, timeoutSec * 1000);
-    child.on('exit', (code) => {
-      clearTimeout(timer);
-      resolve({ pid: child.pid, exit: timedOut ? null : code, timedOut, durationMs: now() - start });
-    });
+    child.on('exit', (code) => finish({ pid: child.pid, exit: timedOut ? null : code, timedOut, durationMs: now() - start }));
+    // A spawn failure (bad binary, missing cwd, EACCES) emits 'error'; without this
+    // listener Node throws and crashes the whole tick, and the promise would hang
+    // because 'exit' may never fire. Resolve with a failure result so the tick logs it
+    // and the next tick recovers.
+    child.on('error', (err) => finish({ pid: child.pid ?? null, exit: null, timedOut, error: err?.message ?? String(err), durationMs: now() - start }));
   });
 }

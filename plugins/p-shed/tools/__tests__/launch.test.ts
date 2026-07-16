@@ -40,4 +40,24 @@ describe('runJob', () => {
     await expect(p).resolves.toMatchObject({ timedOut: true, exit: null });
     vi.useRealTimers();
   });
+
+  it('calls onSpawn with the child pid right after spawn, before exit', async () => {
+    const child: any = new EventEmitter();
+    child.pid = 55;
+    const spawnFn = vi.fn(() => child);
+    const onSpawn = vi.fn();
+    const p = runJob({ job: { prompt: 'go' }, defaults, claudeBin: 'claude', spawnFn, onSpawn, now: () => 0 });
+    expect(onSpawn).toHaveBeenCalledWith(55);   // fired synchronously, before we emit exit
+    child.emit('exit', 0);
+    await p;
+  });
+
+  it('resolves (does not hang or throw) when the child emits error', async () => {
+    const child: any = new EventEmitter();
+    child.pid = undefined;
+    const spawnFn = vi.fn(() => child);
+    const p = runJob({ job: { prompt: 'go' }, defaults, claudeBin: 'bad', spawnFn, now: () => 0 });
+    child.emit('error', new Error('spawn ENOENT'));
+    await expect(p).resolves.toMatchObject({ exit: null, timedOut: false });
+  });
 });
