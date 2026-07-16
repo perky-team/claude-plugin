@@ -12,6 +12,9 @@ function fieldMatcher(field, min, max) {
     if (Number.isNaN(lo) || Number.isNaN(hi) || Number.isNaN(step) || step < 1) {
       throw new Error(`invalid cron field: ${field}`);
     }
+    if (lo < min || hi > max || lo > hi) {
+      throw new Error(`invalid cron field: ${field}`);
+    }
     return { lo, hi, step };
   });
   return (v) => ranges.some(({ lo, hi, step }) => v >= lo && v <= hi && (v - lo) % step === 0);

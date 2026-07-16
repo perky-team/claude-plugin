@@ -39,6 +39,7 @@ describe('posix crontab transforms', () => {
     expect(line).toContain(root);
     expect(line).toContain('tick');
     expect(line).toContain(marker);
+    expect(line).not.toContain('>>');
   });
   it('applyCrontab is idempotent', () => {
     const line = crontabLine({ root, nodeBin, toolPath });

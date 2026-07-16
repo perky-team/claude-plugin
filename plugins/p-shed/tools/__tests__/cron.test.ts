@@ -7,6 +7,16 @@ describe('parseCron', () => {
   it('rejects non-5-field expressions', () => {
     expect(() => parseCron('* * * *')).toThrow();
   });
+  it('rejects out-of-range field values', () => {
+    expect(() => parseCron('60 * * * *')).toThrow();
+    expect(() => parseCron('* 24 * * *')).toThrow();
+  });
+  it('still parses valid crons', () => {
+    expect(() => parseCron('*/15 * * * *')).not.toThrow();
+    expect(() => parseCron('0 9-17 * * *')).not.toThrow();
+    expect(() => parseCron('1,3 * * * *')).not.toThrow();
+    expect(() => parseCron('0 0 * * *')).not.toThrow();
+  });
 });
 
 describe('matches', () => {

@@ -16,7 +16,7 @@ Run `node --version`. If it fails or the major version is < 18, stop and tell th
 If `.pshed/` exists, stop and tell the user: "p-shed already initialized here. Edit `.pshed/jobs.yml` to change jobs, or remove `.pshed/` to reset." Do not proceed.
 
 ## Step 2 — Resolve the folder
-Use the current working directory as the p-shed home. (Jobs run relative to their own `cwd`; this folder just holds the scheduler state.)
+Run `git rev-parse --show-toplevel` to find the repo root and use that as `<root>` — the p-shed home. This must match how the CLI resolves its root (it walks up from the current directory to the nearest `.git`), otherwise `.pshed/` could end up in a subdirectory the CLI never looks at. If the command fails (not a git repo), fall back to the current working directory as `<root>`. (Jobs run relative to their own `cwd`; this folder just holds the scheduler state.)
 
 ## Step 3 — Create the layout
 Create `.pshed/`, `.pshed/logs/`, `.pshed/run/`.

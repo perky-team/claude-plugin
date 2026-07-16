@@ -10,11 +10,10 @@ let root: string;
 beforeEach(() => { root = mkdtempSync(join(tmpdir(), 'pshed-e2e-')); });
 afterEach(() => { rmSync(root, { recursive: true, force: true }); });
 
-const runCli = (args: string[], claudeBin?: string) =>
+const runCli = (args: string[]) =>
   execFileSync('node', [CLI, ...args, '--json'], {
     encoding: 'utf-8',
     cwd: root,
-    env: { ...process.env, ...(claudeBin ? { PSHED_CLAUDE_BIN: claudeBin } : {}) },
   });
 
 describe('cli e2e', () => {

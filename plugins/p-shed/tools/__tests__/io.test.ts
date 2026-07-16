@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readJobs, writeJobs, readState, writeState, readConfig, paths } from '../lib/io.mjs';
@@ -26,5 +26,15 @@ describe('io', () => {
   });
   it('paths are under <root>/.pshed', () => {
     expect(paths(root).jobs).toBe(join(root, '.pshed', 'jobs.yml'));
+  });
+  it('readState tolerates a corrupt/truncated state.json', () => {
+    mkdirSync(paths(root).dir, { recursive: true });
+    writeFileSync(paths(root).state, '{ not json', 'utf-8');
+    expect(readState(root)).toEqual({ jobs: {} });
+  });
+  it('readConfig tolerates a corrupt config.json', () => {
+    mkdirSync(paths(root).dir, { recursive: true });
+    writeFileSync(paths(root).config, '{ not json', 'utf-8');
+    expect(readConfig(root)).toEqual({ nodeBin: 'node', claudeBin: 'claude' });
   });
 });

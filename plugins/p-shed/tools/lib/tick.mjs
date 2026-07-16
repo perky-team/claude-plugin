@@ -67,6 +67,10 @@ export async function tick({ root, now = Date.now(), deps = {} }) {
     results.push({ id: job.id, action: 'launched', exit: r.exit, timedOut: r.timedOut });
   }
 
+  for (const id of Object.keys(state.jobs)) {
+    if (!jobs.some((j) => j.id === id)) delete state.jobs[id];
+  }
+
   d.writeState(root, state);
   return results;
 }

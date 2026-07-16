@@ -34,14 +34,22 @@ export function readConfig(root) {
   const p = paths(root).config;
   const base = { nodeBin: 'node', claudeBin: 'claude' };
   if (!existsSync(p)) return base;
-  return { ...base, ...JSON.parse(readFileSync(p, 'utf-8')) };
+  try {
+    return { ...base, ...JSON.parse(readFileSync(p, 'utf-8')) };
+  } catch {
+    return base;
+  }
 }
 
 export function readState(root) {
   const p = paths(root).state;
   if (!existsSync(p)) return { jobs: {} };
-  const data = JSON.parse(readFileSync(p, 'utf-8'));
-  return { jobs: data.jobs ?? {} };
+  try {
+    const data = JSON.parse(readFileSync(p, 'utf-8'));
+    return { jobs: data.jobs ?? {} };
+  } catch {
+    return { jobs: {} };
+  }
 }
 
 export function writeState(root, state) {

@@ -81,6 +81,20 @@ describe('tick', () => {
     expect(deps.removePid).toHaveBeenCalledWith('a');
   });
 
+  it('prunes state entries for jobs no longer in jobs.yml', async () => {
+    writeJobs(root, { version: 1, defaults: {}, jobs: [{ id: 'a', schedule: '*/15 * * * *', enabled: true, prompt: 'go' }] });
+    writeState(root, {
+      jobs: {
+        ghost: { lastRun: 1, lastExit: 0, pid: null },
+        a: { lastRun: new Date(2026, 6, 16, 1, 5).getTime(), lastExit: 0, pid: null },
+      },
+    });
+    const deps = fakeDeps();
+    await tick({ root, now: NOW, deps });
+    expect(readState(root).jobs.ghost).toBeUndefined();
+    expect(readState(root).jobs.a).toBeDefined();
+  });
+
   it('skips a disabled job silently', async () => {
     writeJobs(root, { version: 1, defaults: {}, jobs: [
       { id: 'off', schedule: '* * * * *', enabled: false, prompt: 'x' },

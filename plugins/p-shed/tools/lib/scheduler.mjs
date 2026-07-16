@@ -20,7 +20,7 @@ export function buildRemove({ platform, root }) {
 
 // POSIX crontab: minimal env is handled by absolute paths; cd sets the working dir.
 export function crontabLine({ root, nodeBin, toolPath }) {
-  return `* * * * * cd "${root}" && "${nodeBin}" "${toolPath}" tick >> "${root}/.pshed/logs/cron.log" 2>&1 # ${taskName(root)}`;
+  return `* * * * * cd "${root}" && "${nodeBin}" "${toolPath}" tick > "${root}/.pshed/logs/cron.log" 2>&1 # ${taskName(root)}`;
 }
 
 export function applyCrontab(existing, line, marker) {
