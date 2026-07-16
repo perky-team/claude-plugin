@@ -870,7 +870,7 @@ git commit -m "feat(p-shed): run logs with 7-day rotation"
 - Test: `plugins/p-shed/tools/__tests__/launch.test.ts`
 
 **Interfaces:**
-- Produces: `buildArgs(job, defaults) => string[]` (assembles `-p <prompt> --output-format json --permission-mode <mode>` plus `--allowedTools <list>` when set); `killTree(pid) => void`; `runJob({ job, defaults, claudeBin, spawnFn?, killFn?, now? }) => Promise<{ pid, exit, timedOut, durationMs }>` (spawns `claudeBin` with `buildArgs`, in `job.cwd ?? defaults.cwd ?? '.'`; on timeout calls `killFn(pid)` and resolves with `timedOut: true, exit: null`).
+- Produces: `buildArgs(job, defaults) => string[]` (assembles `-p <prompt> --output-format json --permission-mode <mode>` plus `--allowedTools <list>` when set; `<mode>` falls back to `acceptEdits` so an empty `defaults` never yields an `undefined` argv entry); `killTree(pid) => void`; `runJob({ job, defaults, claudeBin, spawnFn?, killFn?, now?, onSpawn? }) => Promise<{ pid, exit, timedOut, durationMs }>` (spawns `claudeBin` with `buildArgs`, in `job.cwd ?? defaults.cwd ?? '.'`; calls `onSpawn(childPid)` **immediately after spawn** — used by `tick` to write the pidfile before the run finishes; on timeout calls `killFn(pid)` and resolves with `timedOut: true, exit: null`).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -933,7 +933,7 @@ Expected: FAIL (cannot resolve `../lib/launch.mjs`).
 import { spawn } from 'node:child_process';
 
 export function buildArgs(job, defaults) {
-  const mode = job.permissionMode ?? defaults.permissionMode;
+  const mode = job.permissionMode ?? defaults.permissionMode ?? 'acceptEdits';
   const allowed = job.allowedTools ?? defaults.allowedTools;
   const args = ['-p', job.prompt, '--output-format', 'json', '--permission-mode', mode];
   if (allowed) args.push('--allowedTools', allowed);
@@ -950,7 +950,7 @@ export function killTree(pid) {
   }
 }
 
-export function runJob({ job, defaults, claudeBin, spawnFn = spawn, killFn = killTree, now = Date.now }) {
+export function runJob({ job, defaults, claudeBin, spawnFn = spawn, killFn = killTree, now = Date.now, onSpawn }) {
   return new Promise((resolve) => {
     const start = now();
     const args = buildArgs(job, defaults);
@@ -967,6 +967,10 @@ export function runJob({ job, defaults, claudeBin, spawnFn = spawn, killFn = kil
       stdio: 'ignore',
       windowsHide: true,
     });
+    // Publish the pidfile NOW (before awaiting exit) so a concurrent minute-tick sees a
+    // live run and skips it. The duplicate guard must hold for the whole run — writing
+    // the pidfile only after the run would let overlapping ticks double-launch long jobs.
+    if (onSpawn) onSpawn(child.pid);
     let timedOut = false;
     const timer = setTimeout(() => { timedOut = true; killFn(child.pid); }, timeoutSec * 1000);
     child.on('exit', (code) => {
@@ -999,7 +1003,7 @@ git commit -m "feat(p-shed): launch claude -p with timeout and process-tree kill
 
 **Interfaces:**
 - Consumes: `readJobs`, `readConfig`, `readState`, `writeState`, `paths` (io); `parseCron`, `isDue` (cron); `runJob` (launch); `appendLog`, `rotateLogs` (logs).
-- Produces: `isPidAlive(pid) => boolean`; `tick({ root, now?, deps? }) => Promise<Array<{ id, action: 'launched'|'skipped'|'baselined'|'not-due', exit?, timedOut? }>>`. `deps` defaults to the real modules but is injectable for tests: `{ readJobs, readConfig, readState, writeState, runJob, appendLog, rotateLogs, isPidAlive, writePid, removePid }`. Behavior: rotate logs first; for each job — a job with no prior state is **baselined** (record `lastRun = now`, do not launch); a disabled job is skipped silently; a job whose pidfile pid is alive → `skipped`; a due job → launch via `runJob`, then persist `lastRun/lastExit`, append a log record, remove the pidfile; a job that is enabled but not due → `not-due`.
+- Produces: `isPidAlive(pid) => boolean`; `tick({ root, now?, deps? }) => Promise<Array<{ id, action: 'launched'|'skipped'|'baselined'|'not-due', exit?, timedOut? }>>`. `deps` defaults to the real modules but is injectable for tests: `{ readJobs, readConfig, readState, writeState, runJob, appendLog, rotateLogs, isPidAlive, writePid, removePid }`. Behavior: rotate logs first; for each job — a job with no prior state is **baselined** (record `lastRun = now`, do not launch); a disabled job is skipped silently; a job whose pidfile pid is alive → `skipped`; a due job → launch via `runJob` (which writes the pidfile at spawn via `onSpawn`, so a concurrent minute-tick during a long run skips it), then persist `lastRun/lastExit`, append a log record, remove the pidfile; a job that is enabled but not due → `not-due`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1149,8 +1153,7 @@ export async function tick({ root, now = Date.now(), deps = {} }) {
       continue;
     }
 
-    const r = await d.runJob({ job, defaults, claudeBin: config.claudeBin });
-    if (r.pid) d.writePid(job.id, r.pid);
+    const r = await d.runJob({ job, defaults, claudeBin: config.claudeBin, onSpawn: (pid) => { if (pid) d.writePid(job.id, pid); } });
     state.jobs[job.id] = { lastRun: now, lastExit: r.exit, pid: null };
     d.appendLog(root, { ts: now, job: job.id, exit: r.exit, timedOut: r.timedOut, durationMs: r.durationMs }, now);
     d.removePid(job.id);
@@ -1605,7 +1608,7 @@ Report the printed JSON. This is idempotent — removing an absent entry is fine
 ---
 name: job
 description: Add, modify, or delete a scheduled job in `.pshed/jobs.yml` (cron schedule + folder + prompt). Use when the user says "add a job", "schedule a run", "change the schedule", "disable a job", or "delete a job".
-argument-hint: [add|edit|rm] ...
+argument-hint: --schedule <cron> --prompt <text> [--id <id>]
 allowed-tools: Bash(node:*) Read
 ---
 
