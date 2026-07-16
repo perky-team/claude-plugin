@@ -68,4 +68,28 @@ describe('tick', () => {
     await tick({ root, now: NOW, deps });
     expect(deps.rotateLogs).toHaveBeenCalledOnce();
   });
+
+  it('writes the pidfile at spawn (onSpawn) and removes it after a launch', async () => {
+    writeJobs(root, { version: 1, defaults: {}, jobs: [{ id: 'a', schedule: '*/15 * * * *', enabled: true, prompt: 'go' }] });
+    writeState(root, { jobs: { a: { lastRun: new Date(2026, 6, 16, 1, 5).getTime(), lastExit: 0, pid: null } } });
+    const deps = fakeDeps({
+      runJob: vi.fn(async ({ onSpawn }) => { onSpawn?.(999); return { pid: 999, exit: 0, timedOut: false, durationMs: 5 }; }),
+    });
+    const res = await tick({ root, now: NOW, deps });
+    expect(res).toEqual([{ id: 'a', action: 'launched', exit: 0, timedOut: false }]);
+    expect(deps.writePid).toHaveBeenCalledWith('a', 999);
+    expect(deps.removePid).toHaveBeenCalledWith('a');
+  });
+
+  it('skips a disabled job silently', async () => {
+    writeJobs(root, { version: 1, defaults: {}, jobs: [
+      { id: 'off', schedule: '* * * * *', enabled: false, prompt: 'x' },
+      { id: 'on', schedule: '*/15 * * * *', enabled: true, prompt: 'go' },
+    ] });
+    writeState(root, { jobs: { on: { lastRun: new Date(2026, 6, 16, 1, 5).getTime(), lastExit: 0, pid: null } } });
+    const deps = fakeDeps();
+    const res = await tick({ root, now: NOW, deps });
+    expect(res.find((r) => r.id === 'off')).toBeUndefined();
+    expect(res).toEqual([{ id: 'on', action: 'launched', exit: 0, timedOut: false }]);
+  });
 });
