@@ -11,7 +11,7 @@ Open Claude Code CLI and add this repository as a marketplace, then install any 
 /plugin install <plugin-name>@perky.team
 ```
 
-`<plugin-name>` is one of `p-wiki`, `p-flow`, `p-tasks`, `p-statusline`, `p-graph` (see below).
+`<plugin-name>` is one of `p-wiki`, `p-flow`, `p-tasks`, `p-statusline`, `p-graph`, `p-shed` (see below).
 
 From a non-GitHub git host:
 
@@ -81,6 +81,12 @@ A local code knowledge graph with a bundled `pgraph` CLI. Indexes the project (T
 
 Skills: `init`, `sync`, `help`.
 
+### [`p-shed`](./plugins/p-shed/)
+
+Scheduler/launcher for Claude Code headless runs. `p-shed` schedules jobs (cron timer + folder + prompt) and, on each due minute, launches `claude -p` in the job's folder. It is a pure scheduler: it does not store or resolve work items and installs no rules — what to do lives entirely in each job's prompt and in the target folder.
+
+Skills: `init`, `start`, `stop`, `job`.
+
 ## Tests
 
 Static validation of `marketplace.json`, every `plugin.json`, every `SKILL.md`, and template references.
@@ -136,13 +142,18 @@ Complements `npm test`: tests catch structural drift in our manifests/skills, `v
 │   │   ├── README.md
 │   │   ├── skills/
 │   │   └── statusline/      ← the renderer script copied to ~/.claude/p-statusline/
-│   └── p-graph/             ← local code knowledge graph (tree-sitter → SQLite)
+│   ├── p-graph/             ← local code knowledge graph (tree-sitter → SQLite)
+│   │   ├── .claude-plugin/
+│   │   │   └── plugin.json
+│   │   ├── README.md
+│   │   ├── docs/superpowers/  ← per-plugin design spec + implementation plan
+│   │   ├── skills/
+│   │   └── tools/           ← the pgraph CLI + vendored web-tree-sitter + grammars
+│   └── p-shed/              ← scheduler/launcher for Claude Code headless runs
 │       ├── .claude-plugin/
 │       │   └── plugin.json
 │       ├── README.md
-│       ├── docs/superpowers/  ← per-plugin design spec + implementation plan
-│       ├── skills/
-│       └── tools/           ← the pgraph CLI + vendored web-tree-sitter + grammars
+│       └── skills/
 └── README.md                ← this file
 ```
 
