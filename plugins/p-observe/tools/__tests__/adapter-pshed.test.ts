@@ -54,3 +54,22 @@ describe('pshed adapter status', () => {
     expect(adapter.status().running).toContain('daily');
   });
 });
+
+describe('pshed adapter run-dir scan', () => {
+  it('emits job.launched again when a pidfile reappears after removal', () => {
+    const { p, events, adapter } = setup();
+    mkdirSync(p.pshedRunDir, { recursive: true });
+    // prime prevPids as empty (nothing running at start)
+    // first launch:
+    writeFileSync(join(p.pshedRunDir, 'daily.pid'), '1');
+    adapter._scanRun();
+    // run finishes, pidfile removed:
+    rmSync(join(p.pshedRunDir, 'daily.pid'), { force: true });
+    adapter._scanRun();
+    // next scheduled run relaunches:
+    writeFileSync(join(p.pshedRunDir, 'daily.pid'), '2');
+    adapter._scanRun();
+    const launches = events.filter((e) => e.kind === 'job.launched' && e.entity === 'daily');
+    expect(launches).toHaveLength(2);
+  });
+});

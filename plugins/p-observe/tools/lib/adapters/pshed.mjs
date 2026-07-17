@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { makeEvent } from '../event.mjs';
 import { watchPath } from '../watch.mjs';
@@ -30,6 +30,14 @@ function readLines(file) {
 export function createPshedAdapter({ paths, emit }) {
   const offsets = new Map(); // logfile -> lines already emitted
   let watchers = [];
+  let prevPids = new Set();
+
+  function scanRun() {
+    if (!existsSync(paths.pshedRunDir)) return;
+    const cur = new Set(readdirSync(paths.pshedRunDir).filter((n) => /\.pid$/.test(n)));
+    for (const name of cur) if (!prevPids.has(name)) emit(makeEvent('p-shed', 'job.launched', name.replace(/\.pid$/, ''), 'launched'));
+    prevPids = cur;
+  }
 
   function emitNewLogLines() {
     const dir = paths.pshedLogsDir;
@@ -47,24 +55,19 @@ export function createPshedAdapter({ paths, emit }) {
   return {
     backfill() {
       const file = join(paths.pshedLogsDir, `${today()}.jsonl`);
-      for (const rec of readLines(file)) emit(recordToEvent(rec));
-      offsets.set(file, readLines(file).length);
+      const recs = readLines(file);
+      for (const rec of recs) emit(recordToEvent(rec));
+      offsets.set(file, recs.length);
     },
     start() {
       if (existsSync(paths.pshedLogsDir)) watchers.push(watchPath(paths.pshedLogsDir, emitNewLogLines));
       if (existsSync(paths.pshedRunDir)) {
-        const known = new Set(existsSync(paths.pshedRunDir) ? readdirSync(paths.pshedRunDir) : []);
-        watchers.push(watchPath(paths.pshedRunDir, () => {
-          for (const name of readdirSync(paths.pshedRunDir)) {
-            if (!known.has(name) && /\.pid$/.test(name)) {
-              known.add(name);
-              emit(makeEvent('p-shed', 'job.launched', name.replace(/\.pid$/, ''), 'launched'));
-            }
-          }
-        }));
+        prevPids = new Set(readdirSync(paths.pshedRunDir).filter((n) => /\.pid$/.test(n)));
+        watchers.push(watchPath(paths.pshedRunDir, scanRun));
       }
     },
     stop() { for (const w of watchers) w.close(); watchers = []; },
+    _scanRun: scanRun,
     status() {
       const running = existsSync(paths.pshedRunDir)
         ? readdirSync(paths.pshedRunDir).filter((n) => /\.pid$/.test(n)).map((n) => n.replace(/\.pid$/, ''))
