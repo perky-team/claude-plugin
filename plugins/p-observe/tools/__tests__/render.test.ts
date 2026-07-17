@@ -14,6 +14,12 @@ describe('formatLine', () => {
   it('has no ANSI escapes when color is false', () => {
     expect(formatLine(ev, { color: false })).not.toMatch(/\[/);
   });
+  it('emits real ANSI escape sequences when color is true', () => {
+    const line = formatLine(ev, { color: true });
+    expect(line.startsWith('\x1b[')).toBe(true);
+    expect(line.endsWith('\x1b[0m')).toBe(true);
+    expect(line).toContain(ev.summary);
+  });
 });
 
 describe('formatStatus', () => {

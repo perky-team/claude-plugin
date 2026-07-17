@@ -12,5 +12,5 @@ export function formatLine(event, { color = false } = {}) {
   const plugin = event.plugin.padEnd(8);
   const body = `${hhmmss(event.ts)}  ${plugin} ${glyph} ${event.entity !== '-' ? event.entity + '  ' : ''}${event.summary}`;
   if (!color) return body;
-  return `[${COLOR[event.severity] ?? 36}m${body}[0m`;
+  return `\x1b[${COLOR[event.severity] ?? 36}m${body}\x1b[0m`;
 }
