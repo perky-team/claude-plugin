@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadConfig, paths } from '../lib/config.mjs';
@@ -45,5 +45,16 @@ describe('pwiki adapter', () => {
     const { p, a } = mk();
     writeFileSync(p.pwikiConfig, JSON.stringify({ primary: 'confluence', mirrors: [] }));
     expect(a.enabled()).toBe(false);
+  });
+
+  it('emits wiki.reindex only when index.json mtime changes', () => {
+    const { p, events, a } = mk();
+    a._checkReindex();                       // no index.json yet -> nothing
+    writeFileSync(p.wikiIndexJson, '{}');
+    a._checkReindex();                       // first observation -> seed, no emit
+    const future = new Date(Date.now() + 2000);
+    utimesSync(p.wikiIndexJson, future, future); // simulate regeneration (new mtime)
+    a._checkReindex();
+    expect(events.filter((e) => e.kind === 'wiki.reindex')).toHaveLength(1);
   });
 });

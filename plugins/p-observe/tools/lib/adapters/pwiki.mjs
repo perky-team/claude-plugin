@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, statSync } from 'node:fs';
-import { join, relative, basename } from 'node:path';
+import { join, basename } from 'node:path';
 import { makeEvent } from '../event.mjs';
 import { watchPath, safeRead } from '../watch.mjs';
 
@@ -27,6 +27,21 @@ function walkMd(dir, acc = []) {
 export function createPwikiAdapter({ paths, emit }) {
   let snap = new Map(); // absPath -> { conflict:boolean, raw:boolean }
   let watchers = [];
+  let lastIndexMtime = null;
+
+  function indexMtime() {
+    try { return statSync(paths.wikiIndexJson).mtimeMs; } catch { return null; }
+  }
+
+  function checkReindex() {
+    const m = indexMtime();
+    if (m === null) return;                                   // no index.json
+    if (lastIndexMtime === null) { lastIndexMtime = m; return; } // first observation -> seed, no emit
+    if (m !== lastIndexMtime) {
+      lastIndexMtime = m;
+      emit(makeEvent('p-wiki', 'wiki.reindex', 'index.json', 'index regenerated', {}));
+    }
+  }
 
   function scan() {
     const map = new Map();
@@ -52,6 +67,7 @@ export function createPwikiAdapter({ paths, emit }) {
 
   return {
     _scanNow: scanNow, // test seam
+    _checkReindex: checkReindex, // test seam
     enabled() {
       const r = safeRead(paths.pwikiConfig, JSON.parse);
       if (r.ok && r.value.primary === 'confluence') {
@@ -60,13 +76,14 @@ export function createPwikiAdapter({ paths, emit }) {
       }
       return true;
     },
-    backfill() { snap = scan(); },
+    backfill() { snap = scan(); lastIndexMtime = indexMtime(); },
     start() {
       if (existsSync(paths.wikiPagesDir)) watchers.push(watchPath(paths.wikiPagesDir, scanNow));
       if (existsSync(paths.wikiRawDir)) watchers.push(watchPath(paths.wikiRawDir, scanNow));
-      if (existsSync(paths.wikiDir)) watchers.push(watchPath(paths.wikiDir, () => {
-        if (existsSync(paths.wikiIndexJson)) emit(makeEvent('p-wiki', 'wiki.reindex', 'index.json', 'index regenerated', {}));
-      }));
+      if (existsSync(paths.wikiDir)) {
+        if (lastIndexMtime === null) lastIndexMtime = indexMtime();
+        watchers.push(watchPath(paths.wikiDir, checkReindex));
+      }
     },
     stop() { for (const w of watchers) w.close(); watchers = []; },
     status() {
