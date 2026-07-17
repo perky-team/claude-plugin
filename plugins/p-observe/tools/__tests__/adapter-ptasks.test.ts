@@ -44,17 +44,59 @@ describe('ptasks adapter diff', () => {
     ]);
   });
 
-  it('does not throw or advance baseline on a torn read', () => {
+  it('does not throw or advance baseline on a torn read (non-YAML-shaped)', () => {
     const cfg = loadConfig(root); const p = paths(root, cfg);
     writeTasks(p, TASKS);
     const events: any[] = [];
     const a = createPtasksAdapter({ root, paths: p, cfg, emit: (e) => events.push(e) });
     a.backfill();
-    writeTasks(p, '{ half writ'); // torn/partial
+    writeTasks(p, '{ half writ'); // torn/partial, no trailing newline
     expect(() => a._diffNow()).not.toThrow();
     expect(events).toEqual([]); // baseline unchanged
     writeTasks(p, TASKS.replace('status: todo', 'status: done'));
     a._diffNow();
-    expect(events).toHaveLength(1); // diff still correct against the original baseline
+    expect(events).toHaveLength(1); // diff still correct against the ORIGINAL baseline
+  });
+
+  it('does not emit a spurious task.removed on a YAML-shaped mid-field truncation', () => {
+    const cfg = loadConfig(root); const p = paths(root, cfg);
+    writeTasks(p, TASKS);
+    const events: any[] = [];
+    const a = createPtasksAdapter({ root, paths: p, cfg, emit: (e) => events.push(e) });
+    a.backfill(); // seeds baseline with TASK-1 + TASK-2
+    // Mid-field truncation: cut at "stat" before "us: in_progress", no trailing newline.
+    const torn = `version: 1
+tasks:
+  - id: TASK-1
+    title: A
+    status: todo
+  - id: TASK-2
+    title: B
+    stat`;
+    writeTasks(p, torn);
+    expect(() => a._diffNow()).not.toThrow();
+    expect(events).toEqual([]); // no spurious task.removed for TASK-2, baseline unchanged
+    writeTasks(p, TASKS.replace('status: todo', 'status: done'));
+    a._diffNow();
+    expect(events).toHaveLength(1); // diff still correct against the ORIGINAL baseline
+  });
+
+  it('still emits task.removed for a real, complete removal', () => {
+    const cfg = loadConfig(root); const p = paths(root, cfg);
+    writeTasks(p, TASKS);
+    const events: any[] = [];
+    const a = createPtasksAdapter({ root, paths: p, cfg, emit: (e) => events.push(e) });
+    a.backfill(); // seeds baseline with TASK-1 + TASK-2
+    const complete = `version: 1
+tasks:
+  - id: TASK-1
+    title: A
+    status: todo
+`; // complete file (ends with newline) that legitimately omits TASK-2
+    writeTasks(p, complete);
+    a._diffNow();
+    expect(events).toEqual([
+      expect.objectContaining({ plugin: 'p-tasks', kind: 'task.removed', entity: 'TASK-2' }),
+    ]);
   });
 });

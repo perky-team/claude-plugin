@@ -4,18 +4,12 @@ import { makeEvent } from '../event.mjs';
 import { watchPath, safeRead } from '../watch.mjs';
 
 // Zero-dep tolerant extractor: pair each `id:` with the nearest following `status:`
-// within the same list item. Good enough for diffing without a YAML parser.
+// within the same list item. Never throws — returns a (possibly empty) Map.
+// Torn-read detection is handled by the adapter's read gate, NOT here.
 export function readTaskStates(text) {
   const map = new Map();
-  const lines = text.split('\n');
   let pendingId = null;
-
-  // Detect obviously corrupted files (torn reads starting with JSON/invalid markers)
-  if (text.length > 0 && (text.startsWith('{') || text.startsWith('['))) {
-    throw new Error('Invalid task file format (looks like corrupted JSON)');
-  }
-
-  for (const line of lines) {
+  for (const line of text.split('\n')) {
     const idM = /(?:^|\s)-?\s*id:\s*["']?([^"'\s]+)/.exec(line);
     if (idM) { pendingId = idM[1]; continue; }
     const stM = /(?:^|\s)status:\s*["']?([A-Za-z_]+)/.exec(line);
@@ -28,10 +22,17 @@ export function createPtasksAdapter({ paths, emit }) {
   let baseline = new Map();
   let watcher = null;
 
-  const parse = (text) => readTaskStates(text);
-
   function readNow() {
-    return safeRead(paths.tasksFile, parse); // {ok, value} | {ok:false}
+    const raw = safeRead(paths.tasksFile, (s) => s); // {ok:false} only if the file is missing/unreadable
+    if (!raw.ok) return { ok: false };
+    const text = raw.value;
+    // Complete tasks.yml (js-yaml dump) is non-empty and ends with a newline.
+    // Empty or mid-line-truncated read => torn write; skip this tick, keep baseline.
+    // Residual limitation: a truncation landing exactly on a line boundary that drops
+    // trailing whole tasks still passes this gate; rarer than a mid-line cut and self-heals
+    // on the next real change.
+    if (text.length === 0 || !text.endsWith('\n')) return { ok: false };
+    return { ok: true, value: readTaskStates(text) };
   }
 
   function diffNow() {
