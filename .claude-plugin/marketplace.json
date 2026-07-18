@@ -35,6 +35,11 @@
       "name": "p-shed",
       "source": "./plugins/p-shed",
       "description": "Scheduler/launcher for Claude Code headless runs: cron-scheduled `claude -p` launches with timeout, duplicate guard, catch-up, and log rotation. Skills: init, start, stop, job."
+    },
+    {
+      "name": "p-observe",
+      "source": "./plugins/p-observe",
+      "description": "Zero-touch realtime observability: watches p-shed/p-tasks/p-graph/p-wiki runtime state and emits a normalized human-readable event stream (pobserve watch/status/capture). Skills: init, watch, help."
     }
   ]
 }
