@@ -18,11 +18,14 @@ export function buildAdapters({ root, cfg, paths, detected, emit }) {
 }
 
 export function runBackfill(adapters, { paths, emit }) {
+  // Always seed adapter baselines from current FS state (pshed also emits its own
+  // log history here; ptasks/pgraph/pwiki backfill is pure seeding, no events).
+  for (const ad of Object.values(adapters)) ad.backfill();
+  // If a journal exists, also replay it for display/history (in-memory only —
+  // these events must NOT be written back to the journal; see pobserve.mjs ordering).
   if (existsSync(paths.journalFile)) {
     for (const e of replayJournal(paths.journalFile)) emit(e);
-    return;
   }
-  for (const ad of Object.values(adapters)) ad.backfill();
 }
 
 export function startAll(adapters) { for (const ad of Object.values(adapters)) ad.start(); }

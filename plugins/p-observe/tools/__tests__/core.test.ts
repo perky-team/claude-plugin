@@ -1,9 +1,11 @@
-import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
+import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadConfig, paths, detectPlugins } from '../lib/config.mjs';
 import { buildAdapters, runBackfill, collectStatus } from '../lib/core.mjs';
+import { createBus } from '../lib/bus.mjs';
+import { appendJournal } from '../lib/journal.mjs';
 
 let root: string;
 beforeEach(() => { root = mkdtempSync(join(tmpdir(), 'pobs-core-')); });
@@ -31,6 +33,50 @@ describe('runBackfill', () => {
     const adapters = buildAdapters({ root, cfg, paths: p, detected, emit: (e) => events.push(e) });
     runBackfill(adapters, { paths: p, cfg, emit: (e) => events.push(e) });
     expect(events.map((e) => e.kind)).toContain('job.finished');
+  });
+
+  it('does not write the journal (only emits)', () => {
+    const cfg = loadConfig(root); const p = paths(root, cfg);
+    mkdirSync(p.journalDir, { recursive: true });
+    const e1 = { ts: 1, plugin: 'p-shed', kind: 'job.finished', entity: 'a', severity: 'ok', summary: 'x', data: {} };
+    const e2 = { ts: 2, plugin: 'p-shed', kind: 'job.finished', entity: 'b', severity: 'ok', summary: 'y', data: {} };
+    writeFileSync(p.journalFile, [e1, e2].map((e) => JSON.stringify(e)).join('\n') + '\n');
+    const adapters = buildAdapters({ root, cfg, paths: p, detected: { pshed: false, ptasks: false, pgraph: false, wiki: false }, emit: () => {} });
+    const events: any[] = [];
+    runBackfill(adapters, { paths: p, cfg, emit: (e) => events.push(e) });
+    expect(events).toHaveLength(2);
+    const lines = readFileSync(p.journalFile, 'utf-8').split('\n').filter(Boolean);
+    expect(lines).toHaveLength(2);
+  });
+
+  it('does not self-amplify the journal across the CLI subscribe ordering', () => {
+    const cfg = loadConfig(root); const p = paths(root, cfg);
+    mkdirSync(p.journalDir, { recursive: true });
+    const e1 = { ts: 1, plugin: 'p-shed', kind: 'job.finished', entity: 'a', severity: 'ok', summary: 'x', data: {} };
+    const e2 = { ts: 2, plugin: 'p-shed', kind: 'job.finished', entity: 'b', severity: 'ok', summary: 'y', data: {} };
+    writeFileSync(p.journalFile, [e1, e2].map((e) => JSON.stringify(e)).join('\n') + '\n');
+    const adapters = buildAdapters({ root, cfg, paths: p, detected: { pshed: false, ptasks: false, pgraph: false, wiki: false }, emit: () => {} });
+    const bus = createBus({ size: 500 });
+    // Journal subscriber NOT yet attached: replay must not be re-appended.
+    runBackfill(adapters, { paths: p, cfg, emit: bus.push });
+    // Now attach the journal subscriber, matching the fixed CLI ordering.
+    bus.subscribe((e) => appendJournal(p.journalFile, e));
+    const live = { ts: 3, plugin: 'p-shed', kind: 'job.finished', entity: 'c', severity: 'ok', summary: 'z', data: {} };
+    bus.push(live);
+    const lines = readFileSync(p.journalFile, 'utf-8').split('\n').filter(Boolean);
+    expect(lines).toHaveLength(3);
+  });
+
+  it('always seeds adapters even when a journal is present', () => {
+    const cfg = loadConfig(root); const p = paths(root, cfg);
+    mkdirSync(p.journalDir, { recursive: true });
+    writeFileSync(p.journalFile, JSON.stringify({ ts: 1, plugin: 'p-shed', kind: 'job.finished', entity: 'a', severity: 'ok', summary: 'x', data: {} }) + '\n');
+    const stub = { backfill: vi.fn(), start() {}, stop() {}, status() { return {}; } };
+    const adapters = { pshed: stub };
+    const events: any[] = [];
+    runBackfill(adapters, { paths: p, cfg, emit: (e) => events.push(e) });
+    expect(stub.backfill).toHaveBeenCalledTimes(1);
+    expect(events).toHaveLength(1);
   });
 });
 

@@ -31,12 +31,11 @@ function parseOpts(argv) {
   return o;
 }
 
-function assemble(root, emit) {
-  const cfg = loadConfig(root);
+function assemble(root, cfg, emit) {
   const paths = resolvePaths(root, cfg);
   const detected = detectPlugins(root, cfg);
   const adapters = buildAdapters({ root, cfg, paths, detected, emit });
-  return { cfg, paths, adapters };
+  return { paths, adapters };
 }
 
 async function main(argv) {
@@ -46,25 +45,26 @@ async function main(argv) {
   const root = process.cwd();
   const opts = parseOpts(argv.slice(1));
 
+  const cfg = loadConfig(root);
+
   if (command === 'status') {
-    const { adapters } = assemble(root, () => {});
+    const { adapters } = assemble(root, cfg, () => {});
     for (const ad of Object.values(adapters)) ad.backfill(); // seed snapshots
     process.stdout.write(formatStatus(collectStatus(adapters)) + '\n');
     return 0;
   }
 
   // watch / capture: build bus first, then adapters that emit into it.
-  const cfg0 = loadConfig(root);
-  const bus = createBus({ size: cfg0.bufferSize });
-  const { paths, adapters } = assemble(root, bus.push);
+  const bus = createBus({ size: cfg.bufferSize });
+  const { paths, adapters } = assemble(root, cfg, bus.push);
 
-  const journalOn = command === 'capture' || opts.journal === true || cfg0.journal === true;
-  if (journalOn) bus.subscribe((e) => appendJournal(paths.journalFile, e));
+  const journalOn = command === 'capture' || opts.journal === true || cfg.journal === true;
 
   if (command === 'watch') {
-    const minSev = SEV_ORDER[opts.severity] ?? 0;
+    const minSev = typeof opts.severity === 'string' ? (SEV_ORDER[opts.severity] ?? 0) : 0;
+    // Registered BEFORE runBackfill so backfilled/replayed history is displayed.
     bus.subscribe((e) => {
-      if (opts.plugin && e.plugin !== opts.plugin && e.plugin !== `p-${opts.plugin}`) return;
+      if (typeof opts.plugin === 'string' && e.plugin !== opts.plugin && e.plugin !== `p-${opts.plugin}`) return;
       if (SEV_ORDER[e.severity] < minSev) return;
       process.stdout.write(formatLine(e, { color: opts.color }) + '\n');
     });
@@ -72,7 +72,12 @@ async function main(argv) {
     process.stderr.write('pobserve capture: journaling events (Ctrl-C to stop)\n');
   }
 
-  runBackfill(adapters, { paths, cfg: cfg0, emit: bus.push });
+  runBackfill(adapters, { paths, cfg, emit: bus.push });
+
+  // Registered AFTER runBackfill: only live events reach the journal, so
+  // replayed/seeded history is never re-appended (no self-amplification on restart).
+  if (journalOn) bus.subscribe((e) => appendJournal(paths.journalFile, e));
+
   startAll(adapters);
 
   await new Promise((resolve) => {
