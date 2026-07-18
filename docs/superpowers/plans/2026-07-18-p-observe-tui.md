@@ -283,7 +283,8 @@ git commit -m "feat(p-observe): TUI raw-stdin key decoder"
   - `pagesList(events) → [{ id, conflict, count, lastSummary }]`.
   - `graphHistory(events) → [{ ts, summary, severity }]` (p-graph events, newest last).
   - `eventsFor(events, plugin) → event[]` filter helper.
-  - `overviewRollup(status) → [{ plugin, line }]` reusing existing status wording.
+
+  (Overview rollups reuse the existing `formatStatus` from `lib/render/status.mjs` directly — no dedicated derive function.)
 
 - [ ] **Step 1: Write the failing test**
 
