@@ -1,4 +1,3 @@
-import { existsSync } from 'node:fs';
 import { createPshedAdapter } from './adapters/pshed.mjs';
 import { createPtasksAdapter } from './adapters/ptasks.mjs';
 import { createPgraphAdapter } from './adapters/pgraph.mjs';
@@ -21,11 +20,10 @@ export function runBackfill(adapters, { paths, emit }) {
   // Always seed adapter baselines from current FS state (pshed also emits its own
   // log history here; ptasks/pgraph/pwiki backfill is pure seeding, no events).
   for (const ad of Object.values(adapters)) ad.backfill();
-  // If a journal exists, also replay it for display/history (in-memory only —
-  // these events must NOT be written back to the journal; see pobserve.mjs ordering).
-  if (existsSync(paths.journalFile)) {
-    for (const e of replayJournal(paths.journalFile)) emit(e);
-  }
+  // Also replay the journal (across all dated files) for display/history (in-memory
+  // only — these events must NOT be written back to the journal; see pobserve.mjs
+  // ordering). replayJournal returns [] when the journal dir is absent.
+  for (const e of replayJournal(paths.journalDir)) emit(e);
 }
 
 export function startAll(adapters) { for (const ad of Object.values(adapters)) ad.start(); }

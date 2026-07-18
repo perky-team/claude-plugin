@@ -71,7 +71,10 @@ export function createPwikiAdapter({ paths, emit }) {
     enabled() {
       const r = safeRead(paths.pwikiConfig, JSON.parse);
       if (r.ok && r.value.primary === 'confluence') {
-        const hasFsMirror = Array.isArray(r.value.mirrors) && r.value.mirrors.some((m) => /fs/.test(m));
+        // Enabled only if a mirror resolves to an fs-kind destination, not by name.
+        const dests = r.value.destinations ?? {};
+        const hasFsMirror = Array.isArray(r.value.mirrors) &&
+          r.value.mirrors.some((m) => (dests[m]?.kind ?? (m === 'fs' ? 'fs' : undefined)) === 'fs');
         return hasFsMirror;
       }
       return true;

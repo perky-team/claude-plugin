@@ -42,7 +42,6 @@ export function paths(root, cfg) {
     pwikiConfig: join(wikiDir, '.pwiki.json'),
     observeDir,
     journalDir: observeDir,
-    journalFile: join(observeDir, 'events.jsonl'),
   };
 }
 

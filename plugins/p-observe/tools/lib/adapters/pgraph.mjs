@@ -8,7 +8,7 @@ function defaultRunStatus(cfg) {
   return () => {
     if (!cfg.pgraphCli) return null;
     try {
-      const out = execFileSync(cfg.nodeBin, [cfg.pgraphCli, 'status', '--json'], { encoding: 'utf-8' });
+      const out = execFileSync(cfg.nodeBin, [cfg.pgraphCli, 'status', '--json'], { encoding: 'utf-8', timeout: 5000, maxBuffer: 8 * 1024 * 1024 });
       return JSON.parse(out);
     } catch { return null; }
   };

@@ -60,11 +60,12 @@ export function createPshedAdapter({ paths, emit }) {
       offsets.set(file, recs.length);
     },
     start() {
-      if (existsSync(paths.pshedLogsDir)) watchers.push(watchPath(paths.pshedLogsDir, emitNewLogLines));
-      if (existsSync(paths.pshedRunDir)) {
-        prevPids = new Set(readdirSync(paths.pshedRunDir).filter((n) => /\.pid$/.test(n)));
-        watchers.push(watchPath(paths.pshedRunDir, scanRun));
-      }
+      // watchPath falls back to polling when the target is missing (or fs.watch is
+      // unsupported), so a `.pshed/logs` or `.pshed/run` created after start() is
+      // still picked up — do not gate on existsSync here.
+      watchers.push(watchPath(paths.pshedLogsDir, emitNewLogLines));
+      prevPids = new Set(existsSync(paths.pshedRunDir) ? readdirSync(paths.pshedRunDir).filter((n) => /\.pid$/.test(n)) : []);
+      watchers.push(watchPath(paths.pshedRunDir, scanRun));
     },
     stop() { for (const w of watchers) w.close(); watchers = []; },
     _scanRun: scanRun,

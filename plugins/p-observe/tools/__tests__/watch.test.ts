@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { safeRead, watchPath } from '../lib/watch.mjs';
@@ -32,5 +32,17 @@ describe('watchPath', () => {
     await new Promise((r) => setTimeout(r, 120));
     w.close();
     expect(calls).toBe(1);
+  });
+
+  it('falls back to polling and still fires onChange when the target is created after watchPath starts', async () => {
+    const target = join(root, 'not-yet-created');
+    let calls = 0;
+    const w = watchPath(target, () => { calls++; }, { debounceMs: 5, pollMs: 30 });
+    await new Promise((r) => setTimeout(r, 40)); // let at least one poll tick pass while target is absent
+    mkdirSync(target, { recursive: true });
+    writeFileSync(join(target, 'f1'), 'a');
+    await new Promise((r) => setTimeout(r, 120)); // another couple of poll intervals
+    w.close();
+    expect(calls).toBeGreaterThan(0);
   });
 });

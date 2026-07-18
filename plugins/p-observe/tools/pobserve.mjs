@@ -3,7 +3,7 @@ import { createBus } from './lib/bus.mjs';
 import { buildAdapters, runBackfill, startAll, stopAll, collectStatus } from './lib/core.mjs';
 import { formatLine } from './lib/render/stream.mjs';
 import { formatStatus } from './lib/render/status.mjs';
-import { appendJournal } from './lib/journal.mjs';
+import { appendJournal, rotateJournal } from './lib/journal.mjs';
 
 const USAGE = `Usage: pobserve <command> [options]
 
@@ -16,7 +16,7 @@ Commands:
 Options:
   --plugin=<name>    filter to one plugin (watch)
   --severity=<lvl>   filter by min severity: ok|info|warn|error (watch)
-  --journal          also append events to .pobserve/events.jsonl (watch)
+  --journal          also append events to .pobserve/<YYYY-MM-DD>.jsonl (watch)
 `;
 
 const SEV_ORDER = { ok: 0, info: 1, warn: 2, error: 3 };
@@ -60,6 +60,8 @@ async function main(argv) {
 
   const journalOn = command === 'capture' || opts.journal === true || cfg.journal === true;
 
+  if (journalOn) rotateJournal(paths.journalDir, Date.now(), cfg.journalRetentionDays);
+
   if (command === 'watch') {
     const minSev = typeof opts.severity === 'string' ? (SEV_ORDER[opts.severity] ?? 0) : 0;
     // Registered BEFORE runBackfill so backfilled/replayed history is displayed.
@@ -76,7 +78,12 @@ async function main(argv) {
 
   // Registered AFTER runBackfill: only live events reach the journal, so
   // replayed/seeded history is never re-appended (no self-amplification on restart).
-  if (journalOn) bus.subscribe((e) => appendJournal(paths.journalFile, e));
+  if (journalOn) {
+    bus.subscribe((e) => {
+      try { appendJournal(paths.journalDir, e, Date.now()); }
+      catch (err) { process.stderr.write('pobserve: journal write failed: ' + err.message + '\n'); }
+    });
+  }
 
   startAll(adapters);
 
