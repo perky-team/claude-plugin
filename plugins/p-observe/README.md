@@ -19,7 +19,7 @@ normalized event stream. Its own writes go only under `.pobserve/` (gitignored).
 |---|---|
 | `pobserve watch` | Live merged event stream (`--plugin=`, `--severity=`, `--journal`). |
 | `pobserve status` | One-shot snapshot: counters, running jobs, failures. |
-| `pobserve capture` | Headless; keep running to persist the full offline timeline to `.pobserve/events.jsonl`. |
+| `pobserve capture` | Headless; keep running to persist the full offline timeline to per-day journal files in `.pobserve/` (e.g., `.pobserve/YYYY-MM-DD.jsonl`, retained for `journalRetentionDays` days). |
 
 Run via `node "${CLAUDE_PLUGIN_ROOT}/tools/pobserve.mjs" <command>`.
 

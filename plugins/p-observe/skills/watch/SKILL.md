@@ -14,7 +14,7 @@ node "${CLAUDE_PLUGIN_ROOT}/tools/pobserve.mjs" watch
 Options to offer:
 - `--plugin=shed|tasks|graph|wiki` — filter to one plugin.
 - `--severity=warn` — only warnings and errors.
-- `--journal` — also persist events to `.pobserve/events.jsonl`.
+- `--journal` — also persist events to per-day journal files in `.pobserve/` (e.g., `.pobserve/YYYY-MM-DD.jsonl`).
 
 For "what happened while I was away", prefer keeping `pobserve capture` running continuously (it
 persists the full timeline); a later `watch` backfills from that journal. Without a running capturer,
