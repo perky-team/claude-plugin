@@ -1,9 +1,12 @@
+import { fileURLToPath } from 'node:url';
+import { resolve } from 'node:path';
 import { loadConfig, detectPlugins, paths as resolvePaths } from './lib/config.mjs';
 import { createBus } from './lib/bus.mjs';
 import { buildAdapters, runBackfill, startAll, stopAll, collectStatus } from './lib/core.mjs';
 import { formatLine } from './lib/render/stream.mjs';
 import { formatStatus } from './lib/render/status.mjs';
 import { appendJournal, rotateJournal } from './lib/journal.mjs';
+import { runTui } from './lib/tui/driver.mjs';
 
 const USAGE = `Usage: pobserve <command> [options]
 
@@ -11,6 +14,7 @@ Commands:
   pobserve watch     Live merged event stream across observed plugins
   pobserve status    One-shot snapshot (counters + running/failed)
   pobserve capture   Headless: run the bus + on-disk journal, no UI
+  pobserve tui       k9s-style TUI: tabs + per-plugin master-detail
   help               Show this help
 
 Options:
@@ -20,7 +24,7 @@ Options:
 `;
 
 const SEV_ORDER = { ok: 0, info: 1, warn: 2, error: 3 };
-const KNOWN = new Set(['watch', 'status', 'capture', 'help']);
+export const KNOWN = new Set(['watch', 'status', 'capture', 'tui', 'help']);
 
 function parseOpts(argv) {
   const o = { color: process.stdout.isTTY };
@@ -62,6 +66,20 @@ async function main(argv) {
 
   if (journalOn) rotateJournal(paths.journalDir, Date.now(), cfg.journalRetentionDays);
 
+  if (command === 'tui') {
+    runBackfill(adapters, { paths, cfg, emit: bus.push });
+    if (journalOn) {
+      bus.subscribe((e) => {
+        try { appendJournal(paths.journalDir, e, Date.now()); }
+        catch (err) { process.stderr.write('pobserve: journal write failed: ' + err.message + '\n'); }
+      });
+    }
+    startAll(adapters);
+    await runTui({ bus, adapters, stdin: process.stdin, stdout: process.stdout, color: process.stdout.isTTY });
+    stopAll(adapters);
+    return 0;
+  }
+
   if (command === 'watch') {
     const minSev = typeof opts.severity === 'string' ? (SEV_ORDER[opts.severity] ?? 0) : 0;
     // Registered BEFORE runBackfill so backfilled/replayed history is displayed.
@@ -94,4 +112,7 @@ async function main(argv) {
   return 0;
 }
 
-main(process.argv.slice(2)).then((code) => process.exit(code ?? 0));
+const isMain = process.argv[1] && resolve(fileURLToPath(import.meta.url)) === resolve(process.argv[1]);
+if (isMain) {
+  main(process.argv.slice(2)).then((code) => process.exit(code ?? 0));
+}
