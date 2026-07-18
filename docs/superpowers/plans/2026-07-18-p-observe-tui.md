@@ -1179,6 +1179,7 @@ export function runTui(io) {
   const done = new Promise((r) => { resolveDone = r; });
 
   function paint() {
+    if (torn) return; // a bus-scheduled paint may fire after teardown; never write to a restored terminal
     scheduled = false;
     state = ingest(state, {
       events: bus.snapshot(),
