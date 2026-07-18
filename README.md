@@ -11,7 +11,7 @@ Open Claude Code CLI and add this repository as a marketplace, then install any 
 /plugin install <plugin-name>@perky.team
 ```
 
-`<plugin-name>` is one of `p-wiki`, `p-flow`, `p-tasks`, `p-statusline`, `p-graph`, `p-shed` (see below).
+`<plugin-name>` is one of `p-wiki`, `p-flow`, `p-tasks`, `p-statusline`, `p-graph`, `p-shed`, `p-observe` (see below).
 
 From a non-GitHub git host:
 
@@ -87,6 +87,12 @@ Scheduler/launcher for Claude Code headless runs. `p-shed` schedules jobs (cron 
 
 Skills: `init`, `start`, `stop`, `job`.
 
+### [`p-observe`](./plugins/p-observe/)
+
+Zero-touch realtime observability with a bundled `pobserve` CLI. Watches the runtime state of `p-shed`, `p-tasks`, `p-graph`, and `p-wiki` in the current repo — without modifying them — and emits a normalized, human-readable event stream (`pobserve watch`), a one-shot snapshot (`pobserve status`), and an opt-in headless journal (`pobserve capture`). Fully local, zero dependencies.
+
+Skills: `init`, `watch`, `help`.
+
 ## Tests
 
 Static validation of `marketplace.json`, every `plugin.json`, every `SKILL.md`, and template references.
@@ -149,11 +155,17 @@ Complements `npm test`: tests catch structural drift in our manifests/skills, `v
 │   │   ├── docs/superpowers/  ← per-plugin design spec + implementation plan
 │   │   ├── skills/
 │   │   └── tools/           ← the pgraph CLI + vendored web-tree-sitter + grammars
-│   └── p-shed/              ← scheduler/launcher for Claude Code headless runs
+│   ├── p-shed/              ← scheduler/launcher for Claude Code headless runs
+│   │   ├── .claude-plugin/
+│   │   │   └── plugin.json
+│   │   ├── README.md
+│   │   └── skills/
+│   └── p-observe/           ← zero-touch realtime observability (pobserve CLI)
 │       ├── .claude-plugin/
 │       │   └── plugin.json
 │       ├── README.md
-│       └── skills/
+│       ├── skills/
+│       └── tools/           ← the pobserve CLI (adapters, bus, journal, renderers)
 └── README.md                ← this file
 ```
 
