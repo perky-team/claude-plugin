@@ -2,6 +2,12 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Post-review deltas (applied after Task 12, commit `3b2be3a`)** — the final whole-branch review surfaced fixes not in the original task code, now landed on the branch:
+> - `reducer.mjs` filter mode also appends `digit:` tokens (so numeric substrings like `T1` are filterable) and treats `ctrl-c` as quit.
+> - Real follow-freeze: `initState` adds `freezeTs: null`; the `f` handler sets `freezeTs = follow ? null : state.seenTs`; `renderOverview` drops events with `ts > freezeTs` when frozen (footer `follow`/`paused` is now truthful).
+> - `driver.mjs` clears the screen on resize and brackets the session with `DISABLE_WRAP`/`ENABLE_WRAP` (new `ansi.mjs` constants) so full-width lines can't double-advance on Windows.
+> The task bodies below show the original TDD code; treat these deltas as the current source of truth where they differ.
+
 **Goal:** Add a k9s-style terminal UI (`pobserve tui`) to p-observe — tabbed Overview + per-plugin master-detail views over the existing event bus — as specified in §9 of `docs/superpowers/specs/2026-07-17-p-observe-design.md`.
 
 **Architecture:** The TUI is a second bus subscriber, not a separate program. All rendering is a pure function `render(state, {color}) → string[]`; all key handling is a pure reducer `reduce(state, token) → state`; entity lists are derived from the in-memory event buffer (`bus.snapshot()`) plus `collectStatus(adapters)`. A thin impure driver (`driver.mjs`) owns the terminal (alt-screen, raw stdin, resize, render throttling) and injects live data into the pure core each frame. This keeps the whole UI snapshot-testable without a real terminal (§12).
