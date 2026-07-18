@@ -44,6 +44,20 @@ describe('renderOverview', () => {
     expect(body).toContain('lint');
     expect(body).not.toContain('daily');
   });
+  it('hides events newer than freezeTs while paused, shows them once resumed', () => {
+    const s = initState({ tabs: ['overview'], width: 60, height: 10 });
+    const older = Date.parse('2026-07-18T10:00:00Z');
+    const newer = Date.parse('2026-07-18T10:05:00Z');
+    s.events = [ev({ ts: older, entity: 'daily', summary: 'exit 0' }), ev({ ts: newer, entity: 'lint', summary: 'exit 1' })];
+    s.follow = false;
+    s.freezeTs = older;
+    const paused = renderOverview(s, 60, 10, { color: false }).join('\n');
+    expect(paused).toContain('daily');
+    expect(paused).not.toContain('lint');
+    s.freezeTs = null;
+    const resumed = renderOverview(s, 60, 10, { color: false }).join('\n');
+    expect(resumed).toContain('lint');
+  });
 });
 
 describe('renderMasterDetail', () => {

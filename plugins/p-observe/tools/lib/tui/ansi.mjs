@@ -4,6 +4,8 @@ export const HIDE_CURSOR = '\x1b[?25l';
 export const SHOW_CURSOR = '\x1b[?25h';
 export const CLEAR = '\x1b[2J';
 export const HOME = '\x1b[H';
+export const DISABLE_WRAP = '\x1b[?7l';
+export const ENABLE_WRAP = '\x1b[?7h';
 
 const ANSI_RE = /\x1b\[[0-9;]*m/g;
 

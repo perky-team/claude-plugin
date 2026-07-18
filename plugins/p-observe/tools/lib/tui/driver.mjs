@@ -1,5 +1,5 @@
 import { collectStatus } from '../core.mjs';
-import { ENTER_ALT, EXIT_ALT, HIDE_CURSOR, SHOW_CURSOR, HOME, CLEAR } from './ansi.mjs';
+import { ENTER_ALT, EXIT_ALT, HIDE_CURSOR, SHOW_CURSOR, HOME, CLEAR, DISABLE_WRAP, ENABLE_WRAP } from './ansi.mjs';
 import { buildTabs, initState, ingest } from './state.mjs';
 import { reduce } from './reducer.mjs';
 import { decodeKeys } from './keys.mjs';
@@ -36,6 +36,7 @@ export function runTui(io) {
   }
   function onResize() {
     size = { width: stdout.columns || size.width, height: stdout.rows || size.height };
+    stdout.write(CLEAR);
     paint();
   }
 
@@ -47,13 +48,13 @@ export function runTui(io) {
     if (stdout.removeListener) stdout.removeListener('resize', onResize);
     try { if (stdin.setRawMode) stdin.setRawMode(false); } catch { /* not a TTY */ }
     if (stdin.pause) stdin.pause();
-    stdout.write(SHOW_CURSOR + EXIT_ALT);
+    stdout.write(ENABLE_WRAP + SHOW_CURSOR + EXIT_ALT);
   }
 
   // setup
   try { if (stdin.setRawMode) stdin.setRawMode(true); } catch { /* not a TTY */ }
   if (stdin.resume) stdin.resume();
-  stdout.write(ENTER_ALT + HIDE_CURSOR + CLEAR);
+  stdout.write(ENTER_ALT + HIDE_CURSOR + DISABLE_WRAP + CLEAR);
   stdin.on('data', onData);
   if (stdout.on) stdout.on('resize', onResize);
   unsub = bus.subscribe(schedule);

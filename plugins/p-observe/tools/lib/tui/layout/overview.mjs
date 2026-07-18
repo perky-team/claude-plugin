@@ -16,7 +16,9 @@ export function renderOverview(state, width, height, { color = false } = {}) {
   if (roll) for (const l of roll.split('\n')) lines.push(fit(l, width));
   lines.push(fit('─'.repeat(width), width));
   const streamHeight = Math.max(1, height - lines.length);
-  let stream = applyFilter(state.events, state.filter).map((e) => fit(formatLine(e, { color }), width));
+  let events = applyFilter(state.events, state.filter);
+  if (state.freezeTs != null) events = events.filter((e) => e.ts <= state.freezeTs);
+  let stream = events.map((e) => fit(formatLine(e, { color }), width));
   stream = stream.slice(-streamHeight); // tail: newest at the bottom
   for (const l of stream) lines.push(l);
   return lines.slice(0, height);

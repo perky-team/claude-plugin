@@ -21,6 +21,7 @@ export function initState({ tabs, width = 80, height = 24 }) {
     filterMode: false,
     filterDraft: '',
     follow: true,
+    freezeTs: null,
     badges: { 'p-shed': 0, 'p-tasks': 0, 'p-graph': 0, 'p-wiki': 0 },
     seenTs: 0,
     width,
