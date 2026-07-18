@@ -3,7 +3,7 @@
 Zero-touch observer. Key decisions:
 
 - **Never modify observed plugins.** Adapters only read `.pshed/`, `docs/tasks/`, `.pgraph/`,
-  `docs/wiki/`. All p-observe writes go under `.posebserve/`.
+  `docs/wiki/`. All p-observe writes go under `.pobserve/`.
 - **Never open `graph.db`.** That would force Node ≥ 22.5 and couple to p-graph's schema. The
   p-graph adapter only shells out to `pgraph status --json` and degrades to mtime-only when the
   CLI path is unset.

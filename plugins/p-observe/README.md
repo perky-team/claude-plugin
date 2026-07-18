@@ -4,7 +4,7 @@ A Claude Code plugin that gives a **realtime, human-readable view** of what the 
 plugins are doing at runtime — a `tail -f`-style stream plus a live snapshot — without modifying them.
 
 Zero-touch: it only reads `.pshed/`, `docs/tasks/`, `.pgraph/`, and `docs/wiki/`, and derives a
-normalized event stream. Its own writes go only under `.posebserve/` (gitignored).
+normalized event stream. Its own writes go only under `.pobserve/` (gitignored).
 
 ## Install
 
@@ -17,17 +17,17 @@ normalized event stream. Its own writes go only under `.posebserve/` (gitignored
 
 | Command | What it does |
 |---|---|
-| `posebserve watch` | Live merged event stream (`--plugin=`, `--severity=`, `--journal`). |
-| `posebserve status` | One-shot snapshot: counters, running jobs, failures. |
-| `posebserve capture` | Headless; keep running to persist the full offline timeline to `.posebserve/events.jsonl`. |
+| `pobserve watch` | Live merged event stream (`--plugin=`, `--severity=`, `--journal`). |
+| `pobserve status` | One-shot snapshot: counters, running jobs, failures. |
+| `pobserve capture` | Headless; keep running to persist the full offline timeline to `.pobserve/events.jsonl`. |
 
-Run via `node "${CLAUDE_PLUGIN_ROOT}/tools/posebserve.mjs" <command>`.
+Run via `node "${CLAUDE_PLUGIN_ROOT}/tools/pobserve.mjs" <command>`.
 
 ## Skills
 
 | Skill | What it does |
 |---|---|
-| `/p-observe:init` | Detect present plugins, resolve the p-graph CLI, write optional `.posebserve.json`. |
+| `/p-observe:init` | Detect present plugins, resolve the p-graph CLI, write optional `.pobserve.json`. |
 | `/p-observe:watch` | Launch the live stream. |
 | `/p-observe:help` | Command cheat-sheet. |
 

@@ -1,6 +1,6 @@
 ---
 name: init
-description: Initialize p-observe in the current repo — detect which observed plugins are present, resolve the p-graph CLI path for counts, and write an optional .posebserve.json. Use when the user says "init p-observe" or "set up plugin observability".
+description: Initialize p-observe in the current repo — detect which observed plugins are present, resolve the p-graph CLI path for counts, and write an optional .pobserve.json. Use when the user says "init p-observe" or "set up plugin observability".
 ---
 
 # /p-observe:init
@@ -25,15 +25,15 @@ ls ~/.claude/plugins/cache/*/p-graph/tools/pgraph.mjs \
 - Exactly one match → propose it as `pgraphCli` and ask the user to confirm.
 - Zero or multiple → ask the user to paste the path (or skip; the graph adapter then shows coarse "db changed" events without counts).
 
-## Step 4 — Write `.posebserve.json` (only if the user overrides a default)
+## Step 4 — Write `.pobserve.json` (only if the user overrides a default)
 Write only the keys that differ from defaults, e.g.:
 
 ```json
 { "pgraphCli": "/home/you/.claude/plugins/cache/perky-team/p-graph/tools/pgraph.mjs" }
 ```
 
-## Step 5 — Confirm `.posebserve/` is gitignored
-Ensure `<root>/.gitignore` contains `.posebserve/`. If not, add it.
+## Step 5 — Confirm `.pobserve/` is gitignored
+Ensure `<root>/.gitignore` contains `.pobserve/`. If not, add it.
 
 ## Step 6 — Offer next step
-Suggest `/p-observe:watch` (live) or a background `posebserve capture` for full offline capture.
+Suggest `/p-observe:watch` (live) or a background `pobserve capture` for full offline capture.
