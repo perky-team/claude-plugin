@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { join, dirname } from 'node:path';
+import { KNOWN } from '../pobserve.mjs';
 
 const CLI = join(dirname(fileURLToPath(import.meta.url)), '..', 'pobserve.mjs');
 const run = (args: string[]) => execFileSync('node', [CLI, ...args], { encoding: 'utf-8' });
@@ -15,5 +16,8 @@ describe('pobserve CLI entry', () => {
   });
   it('exits non-zero on unknown command', () => {
     expect(() => run(['bogus'])).toThrow();
+  });
+  it('recognizes tui as a known command', () => {
+    expect(KNOWN.has('tui')).toBe(true);
   });
 });
