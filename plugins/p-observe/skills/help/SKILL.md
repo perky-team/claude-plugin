@@ -15,6 +15,7 @@ p-observe is a **zero-touch** observer. It watches, but never modifies, the runt
 p-shed, p-tasks, p-graph, and p-wiki in the current repo, and prints a normalized event stream.
 
 - `pobserve watch` — live merged stream (`--plugin=`, `--severity=`, `--journal`).
+- `pobserve tui` — k9s-style TUI: tabs + per-plugin master-detail (`/`, `f`, `j/k`, `q`).
 - `pobserve status` — one-shot snapshot (counters + running/failed).
 - `pobserve capture` — headless; keep it running to persist the full offline timeline to per-day journal files in `.pobserve/` (e.g., `.pobserve/YYYY-MM-DD.jsonl`, retained for `journalRetentionDays` days).
 

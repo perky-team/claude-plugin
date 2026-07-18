@@ -251,7 +251,8 @@ richer p-shed events when the installed p-shed has it.
 
 **Skills:**
 - `/p-observe:init` — auto-detect present plugins; optionally scaffold `.pobserve.json`.
-- `/p-observe:watch` — launch the TUI (thin wrapper over `pobserve tui`).
+- `/p-observe:watch` — launch the live line stream (`pobserve watch`).
+- `/p-observe:tui` — launch the k9s-style TUI (`pobserve tui`).
 - `/p-observe:help` — cheat-sheet.
 
 ## 9. UI — k9s / lazygit style TUI
