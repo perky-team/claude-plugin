@@ -1070,7 +1070,7 @@ function footer(state, width) {
 
 export function render(state, { color = false } = {}) {
   const { width, height } = state;
-  const bodyHeight = Math.max(1, height - 2); // tab bar + footer
+  const bodyHeight = Math.max(0, height - 2); // tab bar + footer; 0 at height<=2 keeps footer as last line
   const lines = [renderTabBar(state, width, { color })];
   const body = state.tab === 'overview'
     ? renderOverview(state, width, bodyHeight, { color })
