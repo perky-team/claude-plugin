@@ -4,6 +4,7 @@ import { renderOverview } from '../lib/tui/layout/overview.mjs';
 import { initState } from '../lib/tui/state.mjs';
 import { renderMasterDetail } from '../lib/tui/layout/masterdetail.mjs';
 import { pshedBody, pgraphBody } from '../lib/tui/layout/plugins.mjs';
+import { render } from '../lib/tui/layout/frame.mjs';
 
 function st() {
   const s = initState({ tabs: ['overview', 'p-shed', 'p-wiki'], width: 60, height: 20 });
@@ -75,5 +76,30 @@ describe('per-plugin bodies', () => {
     const out = pgraphBody(s, 60, 8, { color: false });
     expect(out.join('\n')).toContain('120');
     expect(out.join('\n')).toContain('nodes');
+  });
+});
+
+describe('render (frame)', () => {
+  it('produces exactly height lines with tab bar and footer', () => {
+    const s = initState({ tabs: ['overview', 'p-shed'], width: 50, height: 12 });
+    s.status = { pshed: { running: [], jobs: {} } };
+    const out = render(s, { color: false });
+    expect(out).toHaveLength(12);
+    expect(out[0]).toContain('overview');
+    expect(out[11]).toMatch(/q quit|filter/i);
+  });
+  it('shows the filter prompt in the footer while typing', () => {
+    const s = initState({ tabs: ['overview'], width: 50, height: 8 });
+    s.filterMode = true; s.filterDraft = 'lin';
+    const out = render(s, { color: false });
+    expect(out[out.length - 1]).toContain('/lin');
+  });
+  it('keeps the footer as the last line at minimal height', () => {
+    const s = initState({ tabs: ['overview', 'p-shed'], width: 50, height: 2 });
+    s.status = { pshed: { running: [], jobs: {} } };
+    const out = render(s, { color: false });
+    expect(out).toHaveLength(2);
+    expect(out[0]).toContain('overview');       // tab bar
+    expect(out[1]).toMatch(/q quit|filter/i);   // footer preserved
   });
 });
