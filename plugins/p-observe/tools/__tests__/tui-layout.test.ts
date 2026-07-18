@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { renderTabBar } from '../lib/tui/layout/tabbar.mjs';
 import { renderOverview } from '../lib/tui/layout/overview.mjs';
 import { initState } from '../lib/tui/state.mjs';
+import { renderMasterDetail } from '../lib/tui/layout/masterdetail.mjs';
+import { pshedBody, pgraphBody } from '../lib/tui/layout/plugins.mjs';
 
 function st() {
   const s = initState({ tabs: ['overview', 'p-shed', 'p-wiki'], width: 60, height: 20 });
@@ -40,5 +42,38 @@ describe('renderOverview', () => {
     const body = renderOverview(s, 60, 10, { color: false }).join('\n');
     expect(body).toContain('lint');
     expect(body).not.toContain('daily');
+  });
+});
+
+describe('renderMasterDetail', () => {
+  it('renders list + detail, marks the selected row, clamps selection', () => {
+    const out = renderMasterDetail({
+      items: ['a', 'b', 'c'], selectedIdx: 99, detailLines: ['detail'], width: 40, height: 5, color: false,
+    });
+    expect(out).toHaveLength(5);
+    expect(out.join('\n')).toContain('c'); // clamp to last
+    expect(out.join('\n')).toContain('detail');
+    expect(out.some((l) => l.includes('>'))).toBe(true); // cursor marker
+  });
+});
+
+describe('per-plugin bodies', () => {
+  it('pshedBody lists jobs and shows the selected job detail', () => {
+    const s = initState({ tabs: ['overview', 'p-shed'], width: 60, height: 8 });
+    s.tab = 'p-shed';
+    s.status = { pshed: { running: ['build'], jobs: { lint: { lastExit: 1 } } } };
+    s.events = [ev({ plugin: 'p-shed', entity: 'lint', severity: 'error', summary: 'exit 1' })];
+    const out = pshedBody(s, 60, 8, { color: false });
+    expect(out.join('\n')).toContain('lint');
+    expect(out.join('\n')).toContain('build');
+  });
+  it('pgraphBody shows counters and reindex history (no list)', () => {
+    const s = initState({ tabs: ['overview', 'p-graph'], width: 60, height: 8 });
+    s.tab = 'p-graph';
+    s.status = { pgraph: { nodes: 120, drift: 0 } };
+    s.events = [ev({ plugin: 'p-graph', entity: '-', summary: '+3 nodes (120 total)' })];
+    const out = pgraphBody(s, 60, 8, { color: false });
+    expect(out.join('\n')).toContain('120');
+    expect(out.join('\n')).toContain('nodes');
   });
 });
