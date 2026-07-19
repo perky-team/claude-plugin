@@ -25,16 +25,22 @@ Invariants preserved across all adapters:
 - **Zero runtime deps.** No bare-package imports. YAML/JSON is read with Node built-ins + tolerant hand-written scanners (no importing p-shed's vendored js-yaml).
 - **Read-only, no cross-plugin coupling beyond current contract.** p-graph stays on `status --json` only.
 
+### Shared helper: tolerant scalar extractor
+
+`jobs.yml` and `tasks.yml` are both `js-yaml.dump` output, so a scalar field is one of: a plain/quoted single-line value (`model: sonnet`, `title: "Do X"`), or a **block scalar** where the `key:` line's value is an indicator (`|`, `|-`, `>`, `>-`) and the content follows on the next more-indented lines. A naive `key: value` scan therefore captures `|-` instead of the prompt's first line.
+
+Both the p-shed and p-tasks scanners use one shared helper (e.g. `firstScalarLine`) that, given a matched `key:` line: returns the inline value when it is not a block indicator; otherwise returns the first following indented content line (trimmed). Only the **first** content line is ever needed — detail panes truncate anyway. The helper never throws; on anything unexpected it returns an empty string.
+
 Layout is unchanged: the master/detail split stays as-is and new fields are truncated to the detail width via `fit()`. (A full-width detail layout was considered and declined — not worth the complexity for this pass.)
 
 ## Component designs
 
 ### 1. p-shed — prompt + model
 
-`status()` additionally reads `.pshed/jobs.yml` (path already exposed as `paths.pshedJobs`). Parsing uses a **tolerant zero-dep scanner** in the spirit of `readTaskStates`: walk lines, key per-job scalar fields (`prompt`, `model`, `schedule`, `enabled`, `timeoutSec`) to the enclosing `- id:` item.
+`status()` additionally reads `.pshed/jobs.yml` (path already exposed as `paths.pshedJobs`). Parsing uses a **tolerant zero-dep scanner** in the spirit of `readTaskStates`: walk lines, key per-job scalar fields (`prompt`, `model`, `schedule`, `enabled`, `timeoutSec`) to the enclosing `- id:` item, using the shared `firstScalarLine` helper for each field so block-scalar prompts yield their first content line (not the `|-` indicator).
 
 - Known limitation: for a multi-line block-scalar `prompt`, only the **first line** is captured. Acceptable for a detail pane; documented, not hidden.
-- Torn-read gate: on any parse failure keep the previous jobs map.
+- Torn-read gate: `pshed status()` reads the filesystem fresh on every call (it already does so for the run/state dirs), so the adapter closure caches the last successfully-parsed jobs map in a `lastJobsMeta` variable; on a failed/torn parse `status()` returns that cached map instead of an empty one.
 - `status()` return grows a `jobsMeta` map: `{ [id]: { prompt, model, schedule, enabled, timeoutSec } }`, merged alongside the existing `{ running, jobs }`.
 
 `pshedBody` detail pane adds, after the existing `job:` / `state:` lines:
@@ -44,10 +50,10 @@ Layout is unchanged: the master/detail split stays as-is and new fields are trun
 
 ### 2. p-tasks — title + description
 
-`readTaskStates` is generalized to `readTasks`: same tolerant, torn-read-safe line scanner, but it also captures `title` (single line) and `description` (first line(s)) per item, still pairing fields within a list item.
+`readTaskStates` is generalized to `readTasks`: same tolerant, torn-read-safe line scanner, but it also captures `title` and `description` per item via the shared `firstScalarLine` helper (so a block-scalar description yields its first line), still pairing fields within a list item.
 
-- `status()` returns a per-task map including `title` and `description` (existing `counts` retained).
-- The diff/event logic (`task.added`/`task.status`/`task.removed`) is unchanged — only the snapshot is enriched.
+- The adapter `baseline` changes from `Map<id, status>` to `Map<id, { status, title, description }>`. The diff/event logic (`task.added`/`task.status`/`task.removed`) still keys on `status` only, so events are unchanged — only the snapshot is enriched. The existing torn-read gate (`readNow` returning `{ok:false}` on empty/mid-line-truncated reads) is retained and now also protects the title/description capture.
+- `status()` returns the per-task map including `title` and `description` (existing `counts` retained).
 
 `ptasksBody` detail pane adds, after `task: id [status]`:
 - `title` as a header line.
@@ -59,7 +65,8 @@ Layout is unchanged: the master/detail split stays as-is and new fields are trun
 
 - Torn-read gate: `index.json` is rewritten non-atomically by reindex — on `JSON.parse` failure keep the previous parsed snapshot.
 - Per page, derive: `title`, `type`, `tags`, `source`, `compiled`, `conflict-since` (from frontmatter); `summary` (first paragraph of `body`); `outlinks` (both `[[id]]` wikilinks and markdown links to `.md`); `backlinks` (one global pass over all pages' outlinks per scan); `orphan` flag (no inbound and no outbound links).
-- `status()` grows a `pagesMeta` map keyed by page id/path, alongside existing `{ pages, raw, conflicts }`.
+- **Join key.** `pagesList` (in `derive.mjs`) keys pages by `basename(f)` (the event `entity`), while `index.json` pages carry a relative `path` and a frontmatter `id`. `pagesMeta` is therefore keyed by `basename(path)` so the detail pane can look it up from the selected list entity. Outlink resolution: `[[id]]` targets resolve against frontmatter `id`, markdown `.md` links resolve against `basename(path)`; unresolved targets are still listed (as dangling) but do not create backlinks.
+- `status()` grows a `pagesMeta` map keyed by `basename(path)`, alongside existing `{ pages, raw, conflicts }`.
 
 `pwikiBody` detail pane renders, after `page:`:
 - frontmatter facts (`title`, `type`, `tags`, `source`, `compiled`, `conflict-since`);
