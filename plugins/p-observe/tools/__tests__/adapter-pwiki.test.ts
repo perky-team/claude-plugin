@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync, utimesSync } from 'node:
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadConfig, paths } from '../lib/config.mjs';
-import { createPwikiAdapter, readFrontmatter } from '../lib/adapters/pwiki.mjs';
+import { createPwikiAdapter, readFrontmatter, derivePagesMeta } from '../lib/adapters/pwiki.mjs';
 
 let root: string;
 beforeEach(() => { root = mkdtempSync(join(tmpdir(), 'pobs-pwiki-')); });
@@ -56,5 +56,44 @@ describe('pwiki adapter', () => {
     utimesSync(p.wikiIndexJson, future, future); // simulate regeneration (new mtime)
     a._checkReindex();
     expect(events.filter((e) => e.kind === 'wiki.reindex')).toHaveLength(1);
+  });
+});
+
+const bundle = (pages: any[]) => JSON.stringify({ schema: 1, pages }, null, 2) + '\n';
+
+describe('derivePagesMeta', () => {
+  const pages = [
+    { type: 'concept', id: 'auth', path: 'pages/concept/auth.md',
+      frontmatter: { title: 'Auth', type: 'concept', tags: ['security'], id: 'auth' },
+      body: '# Auth\n\nHow login works. See [[session]].\n' },
+    { type: 'concept', id: 'session', path: 'pages/concept/session.md',
+      frontmatter: { title: 'Session', id: 'session' },
+      body: 'Session details.\n' },
+    { type: 'note', id: 'lonely', path: 'pages/lonely.md',
+      frontmatter: { title: 'Lonely', id: 'lonely' }, body: 'Nothing links here or out.\n' },
+  ];
+  it('derives frontmatter, summary, links, backlinks and orphan flag', () => {
+    const m = derivePagesMeta(pages);
+    expect(m['auth.md']).toMatchObject({ title: 'Auth', type: 'concept', summary: 'How login works. See [[session]].' });
+    expect(m['auth.md'].outlinks).toContain('session.md');
+    expect(m['session.md'].backlinks).toContain('auth.md');
+    expect(m['session.md'].orphan).toBe(false);
+    expect(m['lonely.md'].orphan).toBe(true);
+  });
+});
+
+describe('pwiki adapter pagesMeta', () => {
+  it('status() parses index.json into pagesMeta and caches it on a torn write', () => {
+    const cfg = loadConfig(root); const p = paths(root, cfg);
+    mkdirSync(p.wikiPagesDir, { recursive: true });
+    const a = createPwikiAdapter({ root, paths: p, cfg, emit: () => {} });
+    writeFileSync(p.wikiIndexJson, bundle([
+      { type: 'concept', id: 'auth', path: 'pages/auth.md', frontmatter: { title: 'Auth', id: 'auth' }, body: 'x\n' },
+    ]));
+    a.backfill();
+    expect(a.status().pagesMeta['auth.md'].title).toBe('Auth');
+    writeFileSync(p.wikiIndexJson, '{ "pages": ['); // torn, no trailing newline
+    a.backfill(); // refreshIndex hits the torn gate deterministically; cache kept
+    expect(a.status().pagesMeta['auth.md'].title).toBe('Auth'); // cached, not clobbered
   });
 });
