@@ -1,7 +1,9 @@
 // plugins/p-observe/tools/lib/adapters/scalars.mjs
 // Tolerant scalar reader for js-yaml.dump output. Zero-dep; never throws.
 
-const BLOCK_INDICATOR = /^[|>][+-]?\d*$/; // |, |-, |+, >, >2, |-… (block/folded scalar)
+// Block/folded scalar header: |, >, with optional indent digit and chomp sign
+// in either order (js-yaml.dump emits indent-then-chomp, e.g. |2-, >2+).
+const BLOCK_INDICATOR = /^[|>](\d[+-]?|[+-]\d?|[+-]?\d?)$/;
 
 export function unquote(s) {
   const t = String(s);

@@ -27,6 +27,10 @@ describe('scalarValue', () => {
     expect(scalarValue(['    p: >2', '      folded text'], 0)).toBe('folded text');
     expect(scalarValue(['    p: |+', '      kept'], 0)).toBe('kept');
   });
+  it('reads the first content line of a js-yaml indent+chomp block scalar', () => {
+    expect(scalarValue(['    prompt: |2-', '      - do the thing'], 0)).toBe('- do the thing');
+    expect(scalarValue(['    prompt: >2-', '      folded here'], 0)).toBe('folded here');
+  });
   it('returns empty string when there is no value and no following line', () => {
     expect(scalarValue(['    p: |-'], 0)).toBe('');
     expect(scalarValue(['    nope'], 0)).toBe('');
