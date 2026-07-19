@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadConfig, paths } from '../lib/config.mjs';
-import { createPshedAdapter } from '../lib/adapters/pshed.mjs';
+import { createPshedAdapter, readJobsMeta } from '../lib/adapters/pshed.mjs';
 
 let root: string;
 beforeEach(() => { root = mkdtempSync(join(tmpdir(), 'pobs-pshed-')); });
@@ -71,5 +71,50 @@ describe('pshed adapter run-dir scan', () => {
     adapter._scanRun();
     const launches = events.filter((e) => e.kind === 'job.launched' && e.entity === 'daily');
     expect(launches).toHaveLength(2);
+  });
+});
+
+const JOBS = `jobs:
+  - id: daily
+    schedule: '0 9 * * *'
+    enabled: true
+    prompt: |-
+      run the daily digest
+      and post it
+    model: sonnet
+  - id: sync
+    schedule: '*/5 * * * *'
+    enabled: false
+    prompt: sync mirrors
+`;
+
+describe('readJobsMeta', () => {
+  it('extracts scalar fields and the first prompt line per job', () => {
+    const m = readJobsMeta(JOBS);
+    expect(m.daily).toMatchObject({ model: 'sonnet', schedule: '0 9 * * *', enabled: 'true', prompt: 'run the daily digest' });
+    expect(m.sync).toMatchObject({ model: '', prompt: 'sync mirrors', enabled: 'false' });
+  });
+});
+
+describe('pshed adapter jobsMeta', () => {
+  it('status() exposes jobsMeta parsed from jobs.yml', () => {
+    const { p, adapter } = setup();
+    mkdirSync(p.pshedDir, { recursive: true });
+    writeFileSync(p.pshedJobs, JOBS);
+    expect(adapter.status().jobsMeta.daily.model).toBe('sonnet');
+  });
+
+  it('keeps the last good jobsMeta on a torn (no trailing newline) write', () => {
+    const { p, adapter } = setup();
+    mkdirSync(p.pshedDir, { recursive: true });
+    writeFileSync(p.pshedJobs, JOBS);
+    expect(adapter.status().jobsMeta.daily.model).toBe('sonnet'); // caches good parse
+    writeFileSync(p.pshedJobs, 'jobs:\n  - id: daily\n    prompt: |'); // torn, no newline
+    expect(adapter.status().jobsMeta.daily.model).toBe('sonnet'); // cached, not clobbered
+  });
+
+  it('returns an empty jobsMeta when jobs.yml is absent', () => {
+    const { adapter } = setup();
+    expect(adapter.status().jobsMeta).toEqual({});
   });
 });

@@ -2,6 +2,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { makeEvent } from '../event.mjs';
 import { watchPath } from '../watch.mjs';
+import { scalarValue, unquote } from './scalars.mjs';
 
 const today = () => new Date().toISOString().slice(0, 10);
 
@@ -27,10 +28,39 @@ function readLines(file) {
   return readFileSync(file, 'utf-8').split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
 }
 
+export function readJobsMeta(text) {
+  const lines = text.split('\n');
+  const jobs = {};
+  let cur = null;
+  for (let i = 0; i < lines.length; i++) {
+    const dash = /^\s*-\s+id:\s*(.*)$/.exec(lines[i]);
+    if (dash) {
+      const id = unquote(dash[1].trim());
+      cur = { id, prompt: '', model: '', schedule: '', enabled: '', timeoutSec: '' };
+      jobs[id] = cur;
+      continue;
+    }
+    if (!cur) continue;
+    const kv = /^\s+([A-Za-z][A-Za-z0-9_-]*):/.exec(lines[i]);
+    if (kv && kv[1] !== 'id' && kv[1] in cur) cur[kv[1]] = scalarValue(lines, i);
+  }
+  return jobs;
+}
+
 export function createPshedAdapter({ paths, emit }) {
   const offsets = new Map(); // logfile -> lines already emitted
   let watchers = [];
   let prevPids = new Set();
+  let lastJobsMeta = {};
+
+  function jobsMeta() {
+    if (!existsSync(paths.pshedJobs)) return {};
+    let text;
+    try { text = readFileSync(paths.pshedJobs, 'utf-8'); } catch { return lastJobsMeta; }
+    if (!text.endsWith('\n')) return lastJobsMeta; // torn write — keep last good
+    lastJobsMeta = readJobsMeta(text);
+    return lastJobsMeta;
+  }
 
   function scanRun() {
     if (!existsSync(paths.pshedRunDir)) return;
@@ -80,7 +110,7 @@ export function createPshedAdapter({ paths, emit }) {
           try { jobs[m[1]] = { lastExit: JSON.parse(readFileSync(join(paths.pshedStateDir, name), 'utf-8')).lastExit }; } catch { /* skip corrupt */ }
         }
       }
-      return { running, jobs };
+      return { running, jobs, jobsMeta: jobsMeta() };
     },
   };
 }
