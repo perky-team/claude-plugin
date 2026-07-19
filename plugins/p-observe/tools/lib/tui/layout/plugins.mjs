@@ -59,7 +59,17 @@ export function pwikiBody(state, width, height, { color = false } = {}) {
   const chosen = pages[sel];
   const detail = [];
   if (chosen) {
-    detail.push(fit(`page: ${chosen.id}${chosen.conflict ? '  ⚠ conflict' : ''}`, width));
+    const meta = state.status.wiki?.pagesMeta?.[chosen.id] ?? {};
+    detail.push(fit(`page: ${chosen.id}${chosen.conflict ? '  ⚠ conflict' : ''}${meta.orphan ? '  · orphan' : ''}`, width));
+    if (meta.title) detail.push(fit(`title: ${meta.title}`, width));
+    if (meta.type) detail.push(fit(`type: ${meta.type}`, width));
+    if (meta.tags) detail.push(fit(`tags: ${meta.tags}`, width));
+    if (meta.source) detail.push(fit(`source: ${meta.source}`, width));
+    if (meta.compiled !== '' && meta.compiled != null) detail.push(fit(`compiled: ${meta.compiled}`, width));
+    if (meta.conflictSince) detail.push(fit(`conflict-since: ${meta.conflictSince}`, width));
+    if (meta.summary) { detail.push(''); detail.push(fit(meta.summary, width)); }
+    if (meta.outlinks?.length) detail.push(fit(`→ ${meta.outlinks.join(', ')}`, width));
+    if (meta.backlinks?.length) detail.push(fit(`← ${meta.backlinks.join(', ')}`, width));
     detail.push('');
     for (const e of eventsFor(state.events, 'p-wiki').filter((e) => e.entity === chosen.id))
       detail.push(formatLine(e, { color }));

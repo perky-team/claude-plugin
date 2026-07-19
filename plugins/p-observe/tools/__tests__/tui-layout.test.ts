@@ -124,6 +124,20 @@ describe('per-plugin bodies', () => {
     expect(out).toContain('Add login');
     expect(out).toContain('Wire the OAuth flow');
   });
+  it('pwikiBody shows frontmatter, summary and backlinks for the selected page', () => {
+    const s = initState({ tabs: ['overview', 'p-wiki'], width: 70, height: 14 });
+    s.tab = 'p-wiki';
+    s.events = [ev({ plugin: 'p-wiki', kind: 'page.compiled', entity: 'auth.md', summary: 'compiled' })];
+    s.status = { wiki: { pages: 1, raw: 0, conflicts: 0, pagesMeta: {
+      'auth.md': { title: 'Auth', type: 'concept', tags: 'security', source: '', compiled: 'true', conflictSince: '',
+        summary: 'How login works.', outlinks: ['session.md'], backlinks: ['index.md'], orphan: false },
+    } } };
+    const out = pwikiBody(s, 70, 14, { color: false }).join('\n');
+    expect(out).toContain('Auth');
+    expect(out).toContain('How login works.');
+    expect(out).toContain('session.md');   // outlink
+    expect(out).toContain('index.md');      // backlink
+  });
 });
 
 describe('render (frame)', () => {
