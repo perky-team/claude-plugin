@@ -81,10 +81,13 @@ export function pwikiBody(state, width, height, { color = false } = {}) {
 export function pgraphBody(state, width, height, { color = false } = {}) {
   const g = state.status.pgraph ?? {};
   const lines = [];
+  const sha = g.indexed_sha ? String(g.indexed_sha).slice(0, 7) : '-';
+  const fts = g.fts == null ? '?' : (g.fts ? 'on' : 'off');
+  lines.push(fit(`schema ${g.schema_version ?? '?'} · sha ${sha} · fts ${fts}`, width));
   lines.push(fit(`nodes ${g.nodes ?? '?'} · edges ${g.edges ?? '?'} · files ${g.files ?? '?'} · drift ${g.drift ?? '?'}`, width));
   lines.push(fit('─'.repeat(width), width));
   const hist = applyFilterList(graphHistory(state.events), state.filter, (h) => h.summary);
-  for (const h of hist.slice(-(height - 2))) lines.push(fit(`  ${h.summary}`, width));
+  for (const h of hist.slice(-(height - 3))) lines.push(fit(`  ${h.summary}`, width));
   return lines.slice(0, height);
 }
 

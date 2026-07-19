@@ -115,6 +115,17 @@ describe('per-plugin bodies', () => {
     expect(out.join('\n')).toContain('120');
     expect(out.join('\n')).toContain('nodes');
   });
+  it('pgraphBody shows schema, short sha and fts alongside counters', () => {
+    const s = initState({ tabs: ['overview', 'p-graph'], width: 70, height: 8 });
+    s.tab = 'p-graph';
+    s.status = { pgraph: { schema_version: 3, indexed_sha: 'abcdef1234567890', fts: 1, nodes: 120, edges: 300, files: 42, drift: 0 } };
+    s.events = [ev({ plugin: 'p-graph', entity: '-', summary: '+3 nodes (120 total)' })];
+    const out = pgraphBody(s, 70, 8, { color: false }).join('\n');
+    expect(out).toContain('schema 3');
+    expect(out).toContain('abcdef1');  // short sha (7 chars)
+    expect(out).toContain('fts');
+    expect(out).toContain('120');
+  });
   it('ptasksBody shows the title and description of the selected task', () => {
     const s = initState({ tabs: ['overview', 'p-tasks'], width: 60, height: 12 });
     s.tab = 'p-tasks';
