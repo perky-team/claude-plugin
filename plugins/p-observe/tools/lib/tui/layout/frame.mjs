@@ -14,7 +14,7 @@ function footer(state, width) {
   if (state.filterMode) return fit(`/${state.filterDraft}▏  (Enter apply · Esc cancel)`, width);
   const flt = state.filter ? `  filter:${state.filter}` : '';
   const foll = state.follow ? 'follow' : 'paused';
-  return fit(`Tab/1-9 tabs · j/k move · / filter · f ${foll} · q quit${flt}`, width);
+  return fit(`Tab/1-9 tabs · j/k move · / filter · f ${foll} · q/esc quit${flt}`, width);
 }
 
 export function render(state, { color = false } = {}) {

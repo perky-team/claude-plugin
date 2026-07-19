@@ -66,4 +66,12 @@ describe('reduce', () => {
     s = reduce(s, 'k'); s = reduce(s, 'k');
     expect(s.selection['p-shed']).toBe(0); // clamped at 0
   });
+  it('esc quits outside filter mode, but cancels (not quits) inside filter mode', () => {
+    expect(reduce(base(), 'esc').quit).toBe(true);
+    // inside filter mode esc cancels and must NOT set quit
+    const f = reduce(base(), '/');
+    const c = reduce(f, 'esc');
+    expect(c.filterMode).toBe(false);
+    expect(c.quit).toBeFalsy();
+  });
 });

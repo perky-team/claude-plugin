@@ -6,14 +6,14 @@ description: Launch the p-observe k9s-style TUI for the current repo — tabbed 
 # /p-observe:tui
 
 Launch the interactive TUI. This is a long-running foreground process that takes
-over the terminal (alternate screen) — tell the user to press `q` to quit.
+over the terminal (alternate screen) — tell the user to press `q` or `Esc` to quit.
 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/tools/pobserve.mjs" tui
 ```
 
 Keys: `Tab`/`1`-`9` switch tabs · `j`/`k` (or ↑/↓) move selection · `/` filter ·
-`f` toggle follow · `q` quit.
+`f` toggle follow · `q`/`Esc` quit.
 
 Options:
 - `--journal` — also persist events to per-day journal files in `.pobserve/`.

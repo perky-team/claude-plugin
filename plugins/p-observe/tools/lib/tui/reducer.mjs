@@ -24,7 +24,7 @@ export function reduce(state, token) {
     if (['j', 'k', 'f', 'q', '/'].includes(token)) return { ...state, filterDraft: state.filterDraft + token };
     return state;
   }
-  if (token === 'q' || token === 'ctrl-c') return { ...state, quit: true };
+  if (token === 'q' || token === 'esc' || token === 'ctrl-c') return { ...state, quit: true };
   if (token === 'tab') {
     const i = state.tabs.indexOf(state.tab);
     return switchTab(state, state.tabs[(i + 1) % state.tabs.length]);

@@ -22,4 +22,12 @@ describe('decodeKeys', () => {
   it('splits multi-key chunks', () => {
     expect(decodeKeys('jk')).toEqual(['j', 'k']);
   });
+  it('emits esc only for a lone Esc, and swallows unrecognized escape sequences', () => {
+    expect(decodeKeys('\x1b')).toEqual(['esc']);            // lone Esc (last byte)
+    expect(decodeKeys('\x1b[H')).toEqual([]);               // Home — CSI, swallowed, no esc
+    expect(decodeKeys('\x1b[3~')).toEqual([]);              // Delete — CSI with params, swallowed
+    expect(decodeKeys('\x1bOP')).toEqual([]);               // F1 — SS3, swallowed
+    expect(decodeKeys('\x1b[A')).toEqual(['up']);           // arrows still decode
+    expect(decodeKeys('j\x1b')).toEqual(['j', 'esc']);      // trailing lone Esc after a key
+  });
 });
