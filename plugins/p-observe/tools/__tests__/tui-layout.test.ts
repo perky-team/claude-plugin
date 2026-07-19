@@ -3,7 +3,7 @@ import { renderTabBar } from '../lib/tui/layout/tabbar.mjs';
 import { renderOverview } from '../lib/tui/layout/overview.mjs';
 import { initState } from '../lib/tui/state.mjs';
 import { renderMasterDetail } from '../lib/tui/layout/masterdetail.mjs';
-import { pshedBody, pgraphBody } from '../lib/tui/layout/plugins.mjs';
+import { pshedBody, pgraphBody, ptasksBody, pwikiBody } from '../lib/tui/layout/plugins.mjs';
 import { render } from '../lib/tui/layout/frame.mjs';
 
 function st() {
@@ -114,6 +114,15 @@ describe('per-plugin bodies', () => {
     const out = pgraphBody(s, 60, 8, { color: false });
     expect(out.join('\n')).toContain('120');
     expect(out.join('\n')).toContain('nodes');
+  });
+  it('ptasksBody shows the title and description of the selected task', () => {
+    const s = initState({ tabs: ['overview', 'p-tasks'], width: 60, height: 12 });
+    s.tab = 'p-tasks';
+    s.events = [ev({ plugin: 'p-tasks', kind: 'task.added', entity: 'TASK-1', summary: 'added (todo)', data: { status: 'todo' } })];
+    s.status = { ptasks: { counts: { todo: 1 }, tasks: { 'TASK-1': { status: 'todo', title: 'Add login', description: 'Wire the OAuth flow' } } } };
+    const out = ptasksBody(s, 60, 12, { color: false }).join('\n');
+    expect(out).toContain('Add login');
+    expect(out).toContain('Wire the OAuth flow');
   });
 });
 

@@ -34,7 +34,19 @@ export function ptasksBody(state, width, height, { color = false } = {}) {
   const chosen = tasks[sel];
   const detail = [];
   if (chosen) {
+    const meta = state.status.ptasks?.tasks?.[chosen.id] ?? {};
     detail.push(fit(`task: ${chosen.id}  [${chosen.status}]`, width));
+    if (meta.title) detail.push(fit(meta.title, width));
+    if (meta.description) {
+      const words = meta.description.split(/\s+/);
+      let line = '';
+      let wrapped = 0;
+      for (const w of words) {
+        if ((line + ' ' + w).trim().length > width) { detail.push(fit(line, width)); line = w; if (++wrapped >= 4) break; }
+        else line = (line + ' ' + w).trim();
+      }
+      if (line && wrapped < 4) detail.push(fit(line, width));
+    }
     detail.push('');
     for (const h of chosen.history) detail.push(fit(`  ${h.summary}`, width));
   }
