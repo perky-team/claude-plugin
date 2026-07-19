@@ -6,8 +6,8 @@ const skillsDir = join(process.cwd(), 'plugins/p-shed/skills');
 const read = (name: string) => readFileSync(join(skillsDir, name, 'SKILL.md'), 'utf-8');
 
 describe('p-shed skills', () => {
-  it('ships exactly init, start, stop, job', () => {
-    for (const s of ['init', 'start', 'stop', 'job']) {
+  it('ships init, start, stop, job, reset-breaker', () => {
+    for (const s of ['init', 'start', 'stop', 'job', 'reset-breaker']) {
       expect(existsSync(join(skillsDir, s, 'SKILL.md'))).toBe(true);
     }
   });
@@ -26,5 +26,8 @@ describe('p-shed skills', () => {
     expect(read('stop')).toContain('remove-cron');
     expect(read('job')).toContain('set-job');
     expect(read('job')).toContain('rm-job');
+  });
+  it('reset-breaker skill invokes the reset-breaker command', () => {
+    expect(read('reset-breaker')).toContain('reset-breaker');
   });
 });

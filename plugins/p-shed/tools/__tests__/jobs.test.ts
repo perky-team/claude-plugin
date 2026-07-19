@@ -45,6 +45,19 @@ describe('setJob', () => {
   it('new job missing prompt throws ValidationError', () => {
     expect(() => setJob(root, { schedule: '* * * * *' })).toThrow(ValidationError);
   });
+  it('persists model and maxConsecutiveFailures on create', () => {
+    setJob(root, { id: 'a', schedule: '* * * * *', prompt: 'go', model: 'sonnet', maxConsecutiveFailures: 5 });
+    const job = readJobs(root).jobs[0];
+    expect(job.model).toBe('sonnet');
+    expect(job.maxConsecutiveFailures).toBe(5);
+  });
+  it('persists model and maxConsecutiveFailures on update', () => {
+    setJob(root, { id: 'a', schedule: '* * * * *', prompt: 'go' });
+    setJob(root, { id: 'a', model: 'opus', maxConsecutiveFailures: 2 });
+    const job = readJobs(root).jobs[0];
+    expect(job.model).toBe('opus');
+    expect(job.maxConsecutiveFailures).toBe(2);
+  });
   it('slug collision yields distinct ids', () => {
     const res1 = setJob(root, { schedule: '* * * * *', prompt: 'Do the Thing!' });
     const res2 = setJob(root, { schedule: '* * * * *', prompt: 'Do The Thing' });

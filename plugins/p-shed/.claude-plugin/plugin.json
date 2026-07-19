@@ -1,7 +1,7 @@
 {
   "name": "p-shed",
   "version": "0.1.0",
-  "description": "Scheduler/launcher for Claude Code headless runs. Cron-scheduled jobs launch `claude -p` in a folder, with per-job timeout, duplicate guard, missed-tick catch-up, and log rotation. Pure scheduler — no task storage. Commands (tool `pshed`): tick, run, install-cron, remove-cron, set-job, rm-job. Skills: init, start, stop, job.",
+  "description": "Scheduler/launcher for Claude Code headless runs. Cron-scheduled jobs launch `claude -p` in a folder, with per-job model, timeout, duplicate guard, missed-tick catch-up, log rotation, a process-level circuit breaker, and a task-level self-pause marker. Pure scheduler — no task storage. Commands (tool `pshed`): tick, run, install-cron, remove-cron, set-job, rm-job, reset-breaker. Skills: init, start, stop, job, reset-breaker.",
   "author": {
     "name": "Andrey Sukharev",
     "email": "andrey.sukharev@exinity.com"

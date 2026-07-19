@@ -15,6 +15,19 @@ describe('buildArgs', () => {
       '-p', 'go', '--output-format', 'json', '--permission-mode', 'plan',
     ]);
   });
+  it('appends --model when the job sets it', () => {
+    expect(buildArgs({ prompt: 'go', model: 'sonnet' }, defaults)).toEqual([
+      '-p', 'go', '--output-format', 'json', '--permission-mode', 'acceptEdits', '--allowedTools', 'Read,Write', '--model', 'sonnet',
+    ]);
+  });
+  it('falls back to defaults.model, and job.model overrides it', () => {
+    expect(buildArgs({ prompt: 'go' }, { ...defaults, model: 'haiku' })).toContain('haiku');
+    expect(buildArgs({ prompt: 'go', model: 'opus' }, { ...defaults, model: 'haiku' })).toContain('opus');
+    expect(buildArgs({ prompt: 'go', model: 'opus' }, { ...defaults, model: 'haiku' })).not.toContain('haiku');
+  });
+  it('omits --model when neither job nor defaults set it', () => {
+    expect(buildArgs({ prompt: 'go' }, defaults)).not.toContain('--model');
+  });
 });
 
 describe('runJob', () => {

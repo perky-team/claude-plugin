@@ -4,6 +4,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readJobs, readConfig } from './lib/io.mjs';
 import { setJob, rmJob, ValidationError } from './lib/jobs.mjs';
+import { resetBreaker } from './lib/breaker.mjs';
 import { tick as runTick } from './lib/tick.mjs';
 import { runJob } from './lib/launch.mjs';
 import { buildInstall, buildRemove, taskName, crontabLine, applyCrontab, removeFromCrontab } from './lib/scheduler.mjs';
@@ -57,7 +58,7 @@ export function die(message, exitCode = 1) {
   process.exit(exitCode);
 }
 
-const KNOWN = ['tick', 'run', 'install-cron', 'remove-cron', 'set-job', 'rm-job'];
+const KNOWN = ['tick', 'run', 'install-cron', 'remove-cron', 'set-job', 'rm-job', 'reset-breaker'];
 
 async function main() {
   if (process.argv[2] === '--version') {
@@ -92,6 +93,8 @@ async function main() {
         enabled: args.enabled === undefined ? undefined : args.enabled !== 'false' && args.enabled !== false,
         cwd: args.cwd, timeoutSec: args.timeoutSec ? Number(args.timeoutSec) : undefined,
         permissionMode: args['permission-mode'], allowedTools: args['allowed-tools'],
+        model: args.model,
+        maxConsecutiveFailures: args['max-consecutive-failures'] !== undefined ? Number(args['max-consecutive-failures']) : undefined,
       });
       return emitJson(res, 0);
     }
@@ -99,6 +102,12 @@ async function main() {
     if (command === 'rm-job') {
       if (!args.id) return emitJson({ error: { code: 'validation', message: 'rm-job requires --id' } }, 2);
       return emitJson({ id: args.id, removed: rmJob(root, args.id) }, 0);
+    }
+
+    if (command === 'reset-breaker') {
+      const id = args._[0];
+      if (!id) return emitJson({ error: { code: 'validation', message: 'reset-breaker <id> requires a job id' } }, 2);
+      return emitJson(resetBreaker(root, id), 0);
     }
 
     if (command === 'install-cron' || command === 'remove-cron') {

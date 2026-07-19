@@ -39,6 +39,8 @@ export function setJob(root, spec) {
       timeoutSec: spec.timeoutSec,
       permissionMode: spec.permissionMode,
       allowedTools: spec.allowedTools,
+      model: spec.model,
+      maxConsecutiveFailures: spec.maxConsecutiveFailures,
     }));
     writeJobs(root, data);
     return { id: existing.id, created: false };
@@ -54,6 +56,8 @@ export function setJob(root, spec) {
     timeoutSec: spec.timeoutSec,
     permissionMode: spec.permissionMode,
     allowedTools: spec.allowedTools,
+    model: spec.model,
+    maxConsecutiveFailures: spec.maxConsecutiveFailures,
   }));
   writeJobs(root, data);
   return { id, created: true };

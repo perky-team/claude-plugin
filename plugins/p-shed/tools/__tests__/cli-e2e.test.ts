@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync, chmodSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, chmodSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -27,6 +27,22 @@ describe('cli e2e', () => {
 
   it('set-job with a bad cron exits 2', () => {
     expect(() => runCli(['set-job', '--schedule', 'nope', '--prompt', 'x'])).toThrow(/Command failed/);
+  });
+
+  it('reset-breaker clears a tripped job state and pause marker', () => {
+    runCli(['set-job', '--id', 'a', '--schedule', '* * * * *', '--prompt', 'go']);
+    const stateFile = join(root, '.pshed', 'state', 'a.json');
+    mkdirSync(join(root, '.pshed', 'state'), { recursive: true });
+    writeFileSync(stateFile, JSON.stringify({ lastRun: 1, consecutiveFailures: 3, breakerTripped: true, breakerReason: 'exit 1' }));
+    mkdirSync(join(root, '.pshed', 'run'), { recursive: true });
+    writeFileSync(join(root, '.pshed', 'run', 'a.pause'), 'stuck');
+
+    const res = JSON.parse(runCli(['reset-breaker', 'a']));
+    expect(res.cleared).toBe(true);
+    const st = JSON.parse(readFileSync(stateFile, 'utf-8'));
+    expect(st.breakerTripped).toBeUndefined();
+    expect(st.consecutiveFailures).toBe(0);
+    expect(existsSync(join(root, '.pshed', 'run', 'a.pause'))).toBe(false);
   });
 
   it('run <id> launches the configured claude binary immediately', () => {

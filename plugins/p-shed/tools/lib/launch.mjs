@@ -5,6 +5,8 @@ export function buildArgs(job, defaults) {
   const allowed = job.allowedTools ?? defaults.allowedTools;
   const args = ['-p', job.prompt, '--output-format', 'json', '--permission-mode', mode];
   if (allowed) args.push('--allowedTools', allowed);
+  const model = job.model ?? defaults.model;
+  if (model) args.push('--model', model);
   return args;
 }
 
