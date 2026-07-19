@@ -82,6 +82,30 @@ describe('per-plugin bodies', () => {
     expect(out.join('\n')).toContain('lint');
     expect(out.join('\n')).toContain('build');
   });
+  it('pshedBody shows prompt, model, and schedule for the selected job', () => {
+    const s = initState({ tabs: ['overview', 'p-shed'], width: 60, height: 12 });
+    s.tab = 'p-shed';
+    s.status = { pshed: {
+      running: [], jobs: { daily: { lastExit: 0 } },
+      jobsMeta: { daily: { prompt: 'run the digest', model: 'sonnet', schedule: '0 9 * * *', enabled: 'true' } },
+    } };
+    s.events = [ev({ plugin: 'p-shed', entity: 'daily', summary: 'exit 0' })];
+    const out = pshedBody(s, 60, 12, { color: false }).join('\n');
+    expect(out).toContain('run the digest');
+    expect(out).toContain('sonnet');
+    expect(out).toContain('0 9 * * *');
+  });
+  it('pshedBody marks an unset model as inheriting the default', () => {
+    const s = initState({ tabs: ['overview', 'p-shed'], width: 60, height: 12 });
+    s.tab = 'p-shed';
+    s.status = { pshed: {
+      running: [], jobs: { sync: { lastExit: 0 } },
+      jobsMeta: { sync: { prompt: 'sync', model: '', schedule: '*/5 * * * *', enabled: 'false' } },
+    } };
+    s.events = [ev({ plugin: 'p-shed', entity: 'sync', summary: 'exit 0' })];
+    const out = pshedBody(s, 60, 12, { color: false }).join('\n');
+    expect(out).toContain('inherits default');
+  });
   it('pgraphBody shows counters and reindex history (no list)', () => {
     const s = initState({ tabs: ['overview', 'p-graph'], width: 60, height: 8 });
     s.tab = 'p-graph';

@@ -14,8 +14,13 @@ export function pshedBody(state, width, height, { color = false } = {}) {
   const chosen = jobs[sel];
   const detail = [];
   if (chosen) {
+    const meta = state.status.pshed?.jobsMeta?.[chosen.id] ?? {};
     detail.push(fit(`job: ${chosen.id}`, width));
     detail.push(fit(`state: ${chosen.running ? 'running' : chosen.lastExit != null ? 'exit ' + chosen.lastExit : '—'}`, width));
+    if (meta.model || meta.model === '') detail.push(fit(`model: ${meta.model || '(inherits default)'}`, width));
+    if (meta.schedule) detail.push(fit(`schedule: ${meta.schedule}`, width));
+    if (meta.enabled) detail.push(fit(`enabled: ${meta.enabled}`, width));
+    if (meta.prompt) detail.push(fit(`prompt: ${meta.prompt}`, width));
     detail.push('');
     for (const e of eventsFor(state.events, 'p-shed').filter((e) => e.entity === chosen.id))
       detail.push(formatLine(e, { color }));
