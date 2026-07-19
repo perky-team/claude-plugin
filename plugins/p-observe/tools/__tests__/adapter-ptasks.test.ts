@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { loadConfig, paths } from '../lib/config.mjs';
-import { createPtasksAdapter, readTaskStates } from '../lib/adapters/ptasks.mjs';
+import { createPtasksAdapter, readTaskStates, readTasks } from '../lib/adapters/ptasks.mjs';
 
 let root: string;
 beforeEach(() => { root = mkdtempSync(join(tmpdir(), 'pobs-ptasks-')); });
@@ -98,5 +98,35 @@ tasks:
     expect(events).toEqual([
       expect.objectContaining({ plugin: 'p-tasks', kind: 'task.removed', entity: 'TASK-2' }),
     ]);
+  });
+});
+
+const TASKS_FULL = `version: 1
+tasks:
+  - id: TASK-1
+    title: Add login
+    description: |-
+      Wire the OAuth flow
+      end to end
+    status: todo
+`;
+
+describe('readTasks', () => {
+  it('captures status, title, and the first description line', () => {
+    const m = readTasks(TASKS_FULL);
+    expect(m.get('TASK-1')).toMatchObject({ status: 'todo', title: 'Add login', description: 'Wire the OAuth flow' });
+  });
+  it('readTaskStates stays back-compatible (id -> status)', () => {
+    expect(readTaskStates(TASKS_FULL).get('TASK-1')).toBe('todo');
+  });
+});
+
+describe('ptasks adapter tasks snapshot', () => {
+  it('status() exposes title/description per task', () => {
+    const cfg = loadConfig(root); const p = paths(root, cfg);
+    writeTasks(p, TASKS_FULL);
+    const a = createPtasksAdapter({ root, paths: p, cfg, emit: () => {} });
+    a.backfill();
+    expect(a.status().tasks['TASK-1']).toMatchObject({ title: 'Add login', description: 'Wire the OAuth flow', status: 'todo' });
   });
 });
