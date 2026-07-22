@@ -58,6 +58,22 @@ describe('setJob', () => {
     expect(job.model).toBe('opus');
     expect(job.maxConsecutiveFailures).toBe(2);
   });
+  it('persists effort on create and round-trips through read', () => {
+    setJob(root, { id: 'a', schedule: '* * * * *', prompt: 'go', effort: 'high' });
+    expect(readJobs(root).jobs[0].effort).toBe('high');
+  });
+  it('persists effort on update', () => {
+    setJob(root, { id: 'a', schedule: '* * * * *', prompt: 'go' });
+    setJob(root, { id: 'a', effort: 'xhigh' });
+    expect(readJobs(root).jobs[0].effort).toBe('xhigh');
+  });
+  it('does not write effort when it is unset', () => {
+    setJob(root, { id: 'a', schedule: '* * * * *', prompt: 'go' });
+    expect('effort' in readJobs(root).jobs[0]).toBe(false);
+  });
+  it('rejects an invalid effort level', () => {
+    expect(() => setJob(root, { id: 'a', schedule: '* * * * *', prompt: 'go', effort: 'bogus' })).toThrow(ValidationError);
+  });
   it('slug collision yields distinct ids', () => {
     const res1 = setJob(root, { schedule: '* * * * *', prompt: 'Do the Thing!' });
     const res2 = setJob(root, { schedule: '* * * * *', prompt: 'Do The Thing' });

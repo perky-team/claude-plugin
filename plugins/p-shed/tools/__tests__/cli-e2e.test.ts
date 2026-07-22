@@ -29,6 +29,24 @@ describe('cli e2e', () => {
     expect(() => runCli(['set-job', '--schedule', 'nope', '--prompt', 'x'])).toThrow(/Command failed/);
   });
 
+  it('set-job --effort persists the level to jobs.yml', () => {
+    runCli(['set-job', '--id', 'strategist', '--schedule', '* * * * *', '--prompt', 'go', '--effort', 'high']);
+    const yml = readFileSync(join(root, '.pshed', 'jobs.yml'), 'utf-8');
+    expect(yml).toMatch(/effort: high/);
+  });
+
+  it('set-job with an invalid effort exits 2 with a validation error', () => {
+    let err: any;
+    try {
+      runCli(['set-job', '--id', 'x', '--schedule', '* * * * *', '--prompt', 'go', '--effort', 'bogus']);
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeTruthy();
+    expect(err.status).toBe(2);
+    expect(JSON.parse(err.stdout).error.code).toBe('validation');
+  });
+
   it('reset-breaker clears a tripped job state and pause marker', () => {
     runCli(['set-job', '--id', 'a', '--schedule', '* * * * *', '--prompt', 'go']);
     const stateFile = join(root, '.pshed', 'state', 'a.json');

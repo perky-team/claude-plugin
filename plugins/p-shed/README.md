@@ -23,7 +23,7 @@ Tool: `node tools/pshed.mjs <command>` (all support `--json`; exit `0` ok / `1` 
 |---|---|
 | `tick` | Cron entry point — run every due job once. Invoked by the OS scheduler each minute. |
 | `run <id>` | Run one job immediately, bypassing the schedule (manual/testing). |
-| `set-job` | Add or modify a job (`--schedule`, `--prompt`, `--id`, `--cwd`, `--timeoutSec`, `--permission-mode`, `--allowed-tools`, `--model`, `--max-consecutive-failures`). |
+| `set-job` | Add or modify a job (`--schedule`, `--prompt`, `--id`, `--cwd`, `--timeoutSec`, `--permission-mode`, `--allowed-tools`, `--model`, `--effort`, `--max-consecutive-failures`). |
 | `rm-job` | Delete a job (`--id`). |
 | `reset-breaker <id>` | Clear a job's tripped circuit breaker and self-pause marker so it schedules again. |
 | `install-cron` / `remove-cron` | Register/unregister the every-minute `tick` in the OS scheduler for this folder. |
@@ -34,7 +34,7 @@ Tool: `node tools/pshed.mjs <command>` (all support `--json`; exit `0` ok / `1` 
 
 | File | Tracked? | Contents |
 |---|---|---|
-| `jobs.yml` | git | `version`, `defaults`, `jobs[]{ id, schedule, enabled, cwd?, prompt, timeoutSec?, permissionMode?, allowedTools?, model?, maxConsecutiveFailures? }` |
+| `jobs.yml` | git | `version`, `defaults`, `jobs[]{ id, schedule, enabled, cwd?, prompt, timeoutSec?, permissionMode?, allowedTools?, model?, effort?, maxConsecutiveFailures? }` |
 | `config.json` | gitignore | `{ nodeBin, claudeBin }` (resolved at init) |
 | `state/<id>.json` | gitignore | per-job `{ lastRun, lastExit, pid, consecutiveFailures, breakerTripped?, breakerReason?, breakerAt? }` — one file per job (no shared state file) |
 | `logs/<date>.jsonl` | gitignore | one record per run; auto-rotated (7-day retention) |
@@ -50,18 +50,33 @@ Example `jobs.yml`:
       permissionMode: acceptEdits
       allowedTools: "Read,Write,Edit,Bash(git *)"
       model: sonnet
+      effort: low
       maxConsecutiveFailures: 3
     jobs:
       - id: task-runner
         schedule: "*/15 * * * *"
         enabled: true
         prompt: "Take the next unblocked work item in this repo and complete it."
+      - id: strategist
+        schedule: "0 9 * * *"
+        enabled: true
+        effort: high
+        prompt: "Review the roadmap and propose the next quarter's priorities."
 
 ## Model selection
 
 Set `model` on a job (or on `defaults`) to pass `--model <name>` to `claude` for that
 run; a per-job `model` overrides `defaults.model`. Omit it to use the caller's default
 model. Any name `claude --model` accepts works (e.g. `sonnet`, `opus`, `haiku`).
+
+## Reasoning effort
+
+Set `effort` on a job (or on `defaults`) to pass `--effort <level>` to `claude` for that
+run; a per-job `effort` overrides `defaults.effort`. Valid levels are `low`, `medium`,
+`high`, and `xhigh` — anything else is rejected with a validation error (exit `2`). Omit
+it (on both the job and `defaults`) to let `claude` use its own default. The flag is
+**silently skipped for Haiku models** — `--effort` errors on Haiku 4.5 — so a job whose
+resolved `model` matches `haiku` never receives it even when `effort` is set.
 
 ## Staying stuck-safe: circuit breaker + self-pause
 

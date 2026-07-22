@@ -28,6 +28,24 @@ describe('buildArgs', () => {
   it('omits --model when neither job nor defaults set it', () => {
     expect(buildArgs({ prompt: 'go' }, defaults)).not.toContain('--model');
   });
+  it('appends --effort when the job sets it', () => {
+    const args = buildArgs({ prompt: 'go', effort: 'high' }, defaults);
+    expect(args).toContain('--effort');
+    expect(args[args.indexOf('--effort') + 1]).toBe('high');
+  });
+  it('falls back to defaults.effort, and job.effort overrides it', () => {
+    expect(buildArgs({ prompt: 'go' }, { ...defaults, effort: 'low' })).toContain('low');
+    const both = buildArgs({ prompt: 'go', effort: 'xhigh' }, { ...defaults, effort: 'low' });
+    expect(both).toContain('xhigh');
+    expect(both).not.toContain('low');
+  });
+  it('omits --effort when neither job nor defaults set it', () => {
+    expect(buildArgs({ prompt: 'go' }, defaults)).not.toContain('--effort');
+  });
+  it('omits --effort for a Haiku model even when effort is set', () => {
+    expect(buildArgs({ prompt: 'go', model: 'haiku', effort: 'high' }, defaults)).not.toContain('--effort');
+    expect(buildArgs({ prompt: 'go', effort: 'high' }, { ...defaults, model: 'claude-haiku-4-5-20251001' })).not.toContain('--effort');
+  });
 });
 
 describe('runJob', () => {

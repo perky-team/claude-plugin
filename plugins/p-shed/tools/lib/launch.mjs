@@ -7,6 +7,10 @@ export function buildArgs(job, defaults) {
   if (allowed) args.push('--allowedTools', allowed);
   const model = job.model ?? defaults.model;
   if (model) args.push('--model', model);
+  // --effort mirrors --model (job overrides defaults). Skip it for Haiku models:
+  // the param errors on Haiku 4.5, so a set effort is silently dropped there.
+  const effort = job.effort ?? defaults.effort;
+  if (effort && !/haiku/i.test(String(model ?? ''))) args.push('--effort', effort);
   return args;
 }
 

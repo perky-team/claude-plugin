@@ -3,6 +3,8 @@ import { parseCron } from './cron.mjs';
 
 export class ValidationError extends Error {}
 
+const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh'];
+
 export function slugify(text) {
   return String(text)
     .toLowerCase()
@@ -30,6 +32,10 @@ export function setJob(root, spec) {
   const schedule = spec.schedule ?? existing.schedule;
   try { parseCron(schedule); } catch (e) { throw new ValidationError(`invalid cron: ${e.message}`); }
 
+  if (spec.effort !== undefined && !EFFORT_LEVELS.includes(spec.effort)) {
+    throw new ValidationError(`invalid effort: ${spec.effort} (expected one of ${EFFORT_LEVELS.join(', ')})`);
+  }
+
   if (existing) {
     Object.assign(existing, pruneUndefined({
       schedule: spec.schedule,
@@ -40,6 +46,7 @@ export function setJob(root, spec) {
       permissionMode: spec.permissionMode,
       allowedTools: spec.allowedTools,
       model: spec.model,
+      effort: spec.effort,
       maxConsecutiveFailures: spec.maxConsecutiveFailures,
     }));
     writeJobs(root, data);
@@ -57,6 +64,7 @@ export function setJob(root, spec) {
     permissionMode: spec.permissionMode,
     allowedTools: spec.allowedTools,
     model: spec.model,
+    effort: spec.effort,
     maxConsecutiveFailures: spec.maxConsecutiveFailures,
   }));
   writeJobs(root, data);

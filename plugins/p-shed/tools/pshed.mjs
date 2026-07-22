@@ -94,6 +94,7 @@ async function main() {
         cwd: args.cwd, timeoutSec: args.timeoutSec ? Number(args.timeoutSec) : undefined,
         permissionMode: args['permission-mode'], allowedTools: args['allowed-tools'],
         model: args.model,
+        effort: args.effort,
         maxConsecutiveFailures: args['max-consecutive-failures'] !== undefined ? Number(args['max-consecutive-failures']) : undefined,
       });
       return emitJson(res, 0);
