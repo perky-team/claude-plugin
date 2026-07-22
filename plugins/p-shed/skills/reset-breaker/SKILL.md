@@ -14,6 +14,11 @@ A job stops being scheduled for one of two reasons:
 - **Self-pause** — the job's own run left a `run/<id>.pause` marker because its
   internal work went red (`claude -p` exits 0 even then). Ticks log `skipped-paused`.
 
+> Not this: a **usage-limit / API-overload** skip. If ticks log `skipped-usage-limit`
+> (or `status` shows a `lastSkip` of `usage-limit`), the job is only waiting out a quota
+> window and the breaker was never touched — it will retry on its own when the window
+> resets. `reset-breaker` is unnecessary there.
+
 ## Reset
 Confirm the job id, then run:
     node "${CLAUDE_PLUGIN_ROOT}/tools/pshed.mjs" reset-breaker <id> --json

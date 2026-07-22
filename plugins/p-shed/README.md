@@ -39,7 +39,7 @@ Tool: `node tools/pshed.mjs <command>` (all support `--json`; exit `0` ok / `1` 
 |---|---|---|
 | `jobs.yml` | git | `version`, `defaults`, `jobs[]{ id, schedule, enabled, cwd?, prompt, timeoutSec?, permissionMode?, allowedTools?, model?, effort?, maxConsecutiveFailures? }` |
 | `config.json` | gitignore | `{ nodeBin, claudeBin }` (resolved at init) |
-| `state/<id>.json` | gitignore | per-job `{ lastRun, lastExit, pid, consecutiveFailures, breakerTripped?, breakerReason?, breakerAt? }` — one file per job (no shared state file) |
+| `state/<id>.json` | gitignore | per-job `{ lastRun, lastExit, pid, consecutiveFailures, breakerTripped?, breakerReason?, breakerAt?, lastSkipReason?, lastSkipAt?, lastSkipResetAt? }` — one file per job (no shared state file). `lastSkip*` records the most recent usage-limit skip and is cleared once the job runs for real again |
 | `logs/<date>.jsonl` | gitignore | one record per run; auto-rotated (7-day retention) |
 | `run/<id>.pid` | gitignore | duplicate-guard pidfile |
 | `run/<id>.pause` | gitignore | per-job self-pause marker (contents = reason); a job's own run writes it to stop being scheduled |
@@ -56,6 +56,7 @@ Example `jobs.yml`:
       model: sonnet
       effort: low
       maxConsecutiveFailures: 3
+      # usageLimitPattern: "my-custom-limit-regex"  # optional; overrides the built-in limit/overload detector
     jobs:
       - id: task-runner
         schedule: "*/15 * * * *"
@@ -91,11 +92,33 @@ are cleared with `reset-breaker <id>` (or `/p-shed:reset-breaker`).
   *unhealthy* if it timed out or exited non-zero. After `maxConsecutiveFailures`
   unhealthy runs in a row (per-job or `defaults`; default 3, `0` disables), the breaker
   trips — the job is skipped on later ticks (`skipped-breaker`) until reset. A healthy
-  run (exit 0) resets the counter.
+  run (exit 0) resets the counter. **A Claude usage-limit or a transient API overload
+  is not a failure** (see below) — it is a `skipped-usage-limit` that leaves the counter
+  untouched, so a quota window can never trip the breaker.
 - **Self-pause (task-level).** `claude -p` exits 0 even when the job's *internal* work
   failed (e.g. its own tests went red), which the breaker can't see. So a job's prompt
   can write `run/<id>.pause` (contents = a human-readable reason) to signal "stop
   scheduling me". While that marker exists the job is skipped (`skipped-paused`).
+
+### Usage limits and API overload are skips, not failures
+
+When a run fails **only** because the Claude subscription usage limit is exhausted (the
+5-hour "session", weekly, Opus, or "out of extra usage" / "out of credits" cases) or
+because of a transient API overload (`429`/`529`, `rate_limit_error`, `overloaded_error`),
+that is quota/infra — not a code failure. p-shed classifies each finished run and, for
+these, records a `skipped-usage-limit` (with a reset time when the message carries one)
+that **does not move the breaker counter**. The next scheduled tick simply retries when
+the window resets; no `reset-breaker` is needed. `status` shows a job's last skip in the
+`lastSkip` column so a stuck-on-limit job is visible.
+
+Claude Code has no distinct exit code or JSON subtype for a usage limit, so detection is
+by **message text** (plus a structured-JSON fallback: `is_error` together with an
+`api_error_status` / HTTP `429`|`529`). The pattern is customizable — set
+`defaults.usageLimitPattern` in `jobs.yml` (a case-insensitive regex) or the
+`PSHED_USAGE_LIMIT_PATTERN` env var to override the built-in; `jobs.yml` wins, then env,
+then the built-in default. Every **failed** run also logs its truncated raw output and
+classification to `logs/<date>.jsonl`, so a limit message the pattern didn't yet cover is
+visible there and can be added after at most one breaker trip.
 
 ## Stopping, pausing, and status
 
@@ -112,7 +135,8 @@ Three levers, deliberately distinct:
   short grace period (`--grace-ms`, default 3000), reporting how many were terminated.
 - **`status`.** A read-only snapshot: whether the tick is installed (scanned from the OS
   scheduler), the global pause state, and per job — running (live pid), self-paused,
-  breaker state (consecutive failures / reason), and last run/exit.
+  breaker state (consecutive failures / reason), last run/exit, and the last usage-limit
+  skip (`lastSkip` column / `lastSkipReason` field) so a stuck-on-limit job is visible.
 
 ### `remove-cron` / `stop` are honest about a cwd mismatch
 

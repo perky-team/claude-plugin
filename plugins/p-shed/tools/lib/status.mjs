@@ -29,6 +29,10 @@ export function collectStatus(root, { installed = null, deps = {} } = {}) {
       consecutiveFailures: st.consecutiveFailures ?? 0,
       lastRun: st.lastRun ?? null,
       lastExit: st.lastExit ?? null,
+      // Last usage-limit skip (quota/infra, not a failure), so a stuck-on-limit job
+      // is visible without paging through logs. Undefined when the last run was real.
+      lastSkipReason: st.lastSkipReason,
+      lastSkipResetAt: st.lastSkipResetAt,
     };
   });
 
@@ -49,8 +53,11 @@ export function formatHuman(status) {
   lines.push(`installed: ${status.installed === null ? 'unknown' : status.installed}`);
   lines.push(`paused:    ${status.paused}${status.pauseReason ? ` (${status.pauseReason})` : ''}`);
   lines.push('');
-  lines.push(['id', 'enabled', 'running', 'paused', 'breaker', 'fails', 'lastExit'].join('\t'));
+  lines.push(['id', 'enabled', 'running', 'paused', 'breaker', 'fails', 'lastExit', 'lastSkip'].join('\t'));
   for (const j of status.jobs) {
+    const skip = j.lastSkipReason
+      ? (j.lastSkipResetAt ? `${j.lastSkipReason} (resets ${j.lastSkipResetAt})` : j.lastSkipReason)
+      : '-';
     lines.push([
       j.id,
       j.enabled,
@@ -59,6 +66,7 @@ export function formatHuman(status) {
       j.breakerTripped ? (j.breakerReason ?? 'tripped') : '-',
       j.consecutiveFailures,
       j.lastExit ?? '-',
+      skip,
     ].join('\t'));
   }
   return lines.join('\n');

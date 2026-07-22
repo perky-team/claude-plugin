@@ -5,6 +5,7 @@ import { appendLog as realAppendLog, rotateLogs as realRotateLogs } from './logs
 import { readPause } from './breaker.mjs';
 import { readGlobalPause } from './pause.mjs';
 import { isPidAlive, readPid, writePid, removePid } from './pids.mjs';
+import { classifyRun, resolveUsageLimitPattern, parseResetAt, truncateOutput } from './classify.mjs';
 
 export async function tick({ root, now = Date.now(), deps = {} }) {
   const d = {
@@ -55,11 +56,38 @@ export async function tick({ root, now = Date.now(), deps = {} }) {
     const r = await d.runJob({ job, defaults, claudeBin: config.claudeBin, onSpawn: (p) => { if (p) d.writePid(job.id, p); } });
 
     // Read-modify-write: preserve breaker/other fields instead of clobbering the whole
-    // state object, then fold in this run's health. Unhealthy = timed out OR exit !== 0.
+    // state object, then fold in this run's outcome.
     const prev = d.readJobState(root, job.id) ?? {};
-    const consecutiveFailures = r.exit === 0 ? 0 : (prev.consecutiveFailures ?? 0) + 1;
+    const outcome = classifyRun(r.exit, r.out, r.err, resolveUsageLimitPattern(defaults));
+
+    // Self-reveal logging: for every non-success run, log the truncated raw output
+    // alongside its classification. The exact headless usage-limit message shape is
+    // unconfirmed, so a limit we failed to pattern-match stays visible in the log and
+    // the pattern can be corrected (jobs.yml / env) after at most one breaker trip.
+    const rawTail = outcome === 'success' ? undefined : truncateOutput(r.out, r.err);
+    const withRaw = (rec) => (rawTail ? { ...rec, raw: rawTail } : rec);
+
+    if (outcome === 'usage_limit') {
+      // Quota/infra, not a code failure: do NOT touch the failure counter or breaker.
+      // Record the skip so `status` can show a stuck-on-limit job; the next tick retries.
+      const resetAt = parseResetAt(r.out, r.err);
+      const next = { ...prev, lastRun: now, lastExit: r.exit, pid: null, lastSkipReason: 'usage-limit', lastSkipAt: now };
+      if (resetAt) next.lastSkipResetAt = resetAt; else delete next.lastSkipResetAt;
+      d.writeJobState(root, job.id, next);
+      d.appendLog(root, withRaw({ ts: now, job: job.id, exit: r.exit, timedOut: r.timedOut, durationMs: r.durationMs, outcome: 'skipped', reason: 'usage-limit', ...(resetAt ? { resetAt } : {}) }), now);
+      d.removePid(job.id);
+      results.push({ id: job.id, action: 'skipped-usage-limit', reason: 'usage-limit', ...(resetAt ? { resetAt } : {}) });
+      continue;
+    }
+
+    // success | failure — unchanged breaker semantics (unhealthy = timed out OR exit !== 0),
+    // plus clearing any stale usage-limit skip marker now that the job ran for real.
+    const consecutiveFailures = outcome === 'success' ? 0 : (prev.consecutiveFailures ?? 0) + 1;
     const maxFailures = job.maxConsecutiveFailures ?? defaults.maxConsecutiveFailures ?? 3;
     const next = { ...prev, lastRun: now, lastExit: r.exit, pid: null, consecutiveFailures };
+    delete next.lastSkipReason;
+    delete next.lastSkipAt;
+    delete next.lastSkipResetAt;
     if (maxFailures > 0 && consecutiveFailures >= maxFailures) {
       next.breakerTripped = true;
       next.breakerReason = r.timedOut ? 'timeout' : (r.error ?? `exit ${r.exit}`);
@@ -70,7 +98,7 @@ export async function tick({ root, now = Date.now(), deps = {} }) {
       delete next.breakerAt;
     }
     d.writeJobState(root, job.id, next);
-    d.appendLog(root, { ts: now, job: job.id, exit: r.exit, timedOut: r.timedOut, durationMs: r.durationMs }, now);
+    d.appendLog(root, withRaw({ ts: now, job: job.id, exit: r.exit, timedOut: r.timedOut, durationMs: r.durationMs, outcome }), now);
     d.removePid(job.id);
     results.push({ id: job.id, action: 'launched', exit: r.exit, timedOut: r.timedOut });
   }

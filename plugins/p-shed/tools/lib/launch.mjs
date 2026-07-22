@@ -38,9 +38,20 @@ export function runJob({ job, defaults, claudeBin, spawnFn = spawn, killFn = kil
     const child = spawnFn(file, spawnArgs, {
       cwd: job.cwd ?? defaults.cwd ?? '.',
       detached: !isWin,          // own process group so killFn(-pid) reaps children on POSIX
-      stdio: 'ignore',
+      stdio: ['ignore', 'pipe', 'pipe'], // capture output so the run can be classified
       windowsHide: true,
     });
+    // Capture stdout/stderr (bounded) so the classifier can tell a usage-limit / API
+    // overload from a real failure — Claude Code has no distinct exit code for a limit,
+    // only message text. Keep the TAIL: the `--output-format json` result and any limit
+    // message land at the end, and an unbounded buffer could exhaust memory on a chatty
+    // run. Optional-chained so a stdio-less spawn stub (tests) doesn't throw.
+    const CAP = 64 * 1024;
+    let out = '', err = '';
+    child.stdout?.on('data', (c) => { out = (out + c).slice(-CAP); });
+    child.stderr?.on('data', (c) => { err = (err + c).slice(-CAP); });
+    child.stdout?.on('error', () => {}); // ignore pipe teardown races when killed
+    child.stderr?.on('error', () => {});
     // Publish the pidfile NOW (before awaiting exit) so a concurrent minute-tick sees a
     // live run and skips it. The duplicate guard must hold for the whole run — writing
     // the pidfile only after the run would let overlapping ticks double-launch long jobs.
@@ -49,11 +60,11 @@ export function runJob({ job, defaults, claudeBin, spawnFn = spawn, killFn = kil
     let settled = false;
     const finish = (result) => { if (settled) return; settled = true; clearTimeout(timer); resolve(result); };
     const timer = setTimeout(() => { timedOut = true; killFn(child.pid); }, timeoutSec * 1000);
-    child.on('exit', (code) => finish({ pid: child.pid, exit: timedOut ? null : code, timedOut, durationMs: now() - start }));
+    child.on('exit', (code) => finish({ pid: child.pid, exit: timedOut ? null : code, timedOut, durationMs: now() - start, out, err }));
     // A spawn failure (bad binary, missing cwd, EACCES) emits 'error'; without this
     // listener Node throws and crashes the whole tick, and the promise would hang
     // because 'exit' may never fire. Resolve with a failure result so the tick logs it
     // and the next tick recovers.
-    child.on('error', (err) => finish({ pid: child.pid ?? null, exit: null, timedOut, error: err?.message ?? String(err), durationMs: now() - start }));
+    child.on('error', (e) => finish({ pid: child.pid ?? null, exit: null, timedOut, error: e?.message ?? String(e), durationMs: now() - start, out, err }));
   });
 }

@@ -91,4 +91,18 @@ describe('runJob', () => {
     child.emit('error', new Error('spawn ENOENT'));
     await expect(p).resolves.toMatchObject({ exit: null, timedOut: false });
   });
+
+  it('captures stdout/stderr into the result so the run can be classified', async () => {
+    const child: any = new EventEmitter();
+    child.pid = 7;
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    const spawnFn = vi.fn(() => child);
+    const p = runJob({ job: { prompt: 'go' }, defaults, claudeBin: 'claude', spawnFn, now: () => 0 });
+    child.stdout.emit('data', Buffer.from('hello '));
+    child.stdout.emit('data', Buffer.from('world'));
+    child.stderr.emit('data', Buffer.from('a warning'));
+    child.emit('exit', 0);
+    await expect(p).resolves.toMatchObject({ exit: 0, out: 'hello world', err: 'a warning' });
+  });
 });

@@ -184,4 +184,81 @@ describe('tick', () => {
     expect(res.find((r) => r.id === 'off')).toBeUndefined();
     expect(res).toEqual([{ id: 'on', action: 'launched', exit: 0, timedOut: false }]);
   });
+
+  // A usage-limit / transient-overload run is quota/infra, not a code failure: the
+  // breaker must not move and the run must be a skip, so the next tick retries when
+  // the window resets. See classify.mjs.
+  const usageLimitJob = () => {
+    writeJobs(root, { version: 1, defaults: { maxConsecutiveFailures: 2 }, jobs: [{ id: 'a', schedule: '* * * * *', enabled: true, prompt: 'go' }] });
+    writeJobState(root, 'a', { lastRun: NOW - MIN, lastExit: 0, pid: null, consecutiveFailures: 1 });
+  };
+
+  it('skips a usage-limit run (text) without touching the breaker counter', async () => {
+    usageLimitJob();
+    const runJob = vi.fn(async () => ({ pid: 1, exit: 1, timedOut: false, durationMs: 5, out: 'Claude usage limit reached', err: '' }));
+    const res = await tick({ root, now: NOW, deps: fakeDeps({ runJob }) });
+    expect(res).toEqual([{ id: 'a', action: 'skipped-usage-limit', reason: 'usage-limit' }]);
+    const st = readState(root).jobs.a;
+    expect(st.consecutiveFailures).toBe(1);        // NOT incremented, NOT reset
+    expect(st.breakerTripped).toBeUndefined();     // NOT tripped
+    expect(st.lastSkipReason).toBe('usage-limit'); // visible to status
+  });
+
+  it('records a reset time from the limit message when present', async () => {
+    usageLimitJob();
+    const runJob = vi.fn(async () => ({ pid: 1, exit: 1, timedOut: false, durationMs: 5, out: '5-hour limit reached ∙ resets 3am', err: '' }));
+    const res = await tick({ root, now: NOW, deps: fakeDeps({ runJob }) });
+    expect(res[0]).toMatchObject({ id: 'a', action: 'skipped-usage-limit', reason: 'usage-limit' });
+    expect(String(res[0].resetAt)).toContain('3am');
+    expect(readState(root).jobs.a.lastSkipResetAt).toContain('3am');
+  });
+
+  it('skips a usage-limit run detected via structured JSON (is_error + 429)', async () => {
+    usageLimitJob();
+    const out = JSON.stringify({ type: 'result', is_error: true, api_error_status: 429, result: 'overloaded' });
+    const runJob = vi.fn(async () => ({ pid: 1, exit: 1, timedOut: false, durationMs: 5, out, err: '' }));
+    await tick({ root, now: NOW, deps: fakeDeps({ runJob }) });
+    const st = readState(root).jobs.a;
+    expect(st.consecutiveFailures).toBe(1);
+    expect(st.breakerTripped).toBeUndefined();
+    expect(st.lastSkipReason).toBe('usage-limit');
+  });
+
+  it('skips a transient API overload (529 overloaded_error)', async () => {
+    usageLimitJob();
+    const runJob = vi.fn(async () => ({ pid: 1, exit: 1, timedOut: false, durationMs: 5, out: '', err: 'API Error: 529 overloaded_error' }));
+    const res = await tick({ root, now: NOW, deps: fakeDeps({ runJob }) });
+    expect(res).toEqual([{ id: 'a', action: 'skipped-usage-limit', reason: 'usage-limit' }]);
+    expect(readState(root).jobs.a.consecutiveFailures).toBe(1);
+  });
+
+  it('a usage-limit skip never trips the breaker no matter how many in a row', async () => {
+    usageLimitJob(); // maxConsecutiveFailures: 2, starts at 1
+    const runJob = vi.fn(async () => ({ pid: 1, exit: 1, timedOut: false, durationMs: 5, out: 'usage limit reached', err: '' }));
+    const deps = fakeDeps({ runJob });
+    await tick({ root, now: NOW, deps });
+    await tick({ root, now: NOW + MIN, deps });
+    await tick({ root, now: NOW + 2 * MIN, deps });
+    const st = readState(root).jobs.a;
+    expect(st.consecutiveFailures).toBe(1);
+    expect(st.breakerTripped).toBeUndefined();
+  });
+
+  it('a genuine crash (non-zero, no limit signature) still counts as a failure', async () => {
+    usageLimitJob(); // consecutiveFailures starts at 1
+    const runJob = vi.fn(async () => ({ pid: 1, exit: 1, timedOut: false, durationMs: 5, out: 'panic: runtime error: index out of range', err: '' }));
+    const res = await tick({ root, now: NOW, deps: fakeDeps({ runJob }) });
+    expect(res).toEqual([{ id: 'a', action: 'launched', exit: 1, timedOut: false }]);
+    expect(readState(root).jobs.a.consecutiveFailures).toBe(2); // incremented, exactly as before
+    expect(readState(root).jobs.a.breakerTripped).toBe(true);   // reached maxConsecutiveFailures: 2
+  });
+
+  it('clears a stale usage-limit skip marker once the job runs for real again', async () => {
+    writeJobs(root, { version: 1, defaults: { maxConsecutiveFailures: 3 }, jobs: [{ id: 'a', schedule: '* * * * *', enabled: true, prompt: 'go' }] });
+    writeJobState(root, 'a', { lastRun: NOW - MIN, lastExit: 1, pid: null, consecutiveFailures: 0, lastSkipReason: 'usage-limit', lastSkipAt: NOW - MIN });
+    const runJob = vi.fn(async () => ({ pid: 1, exit: 0, timedOut: false, durationMs: 5, out: 'ok', err: '' }));
+    await tick({ root, now: NOW, deps: fakeDeps({ runJob }) });
+    expect(readState(root).jobs.a.lastSkipReason).toBeUndefined();
+    expect(readState(root).jobs.a.consecutiveFailures).toBe(0);
+  });
 });

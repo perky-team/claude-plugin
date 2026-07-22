@@ -45,6 +45,15 @@ describe('collectStatus', () => {
     expect(status.paused).toBe(false);
     expect(status.jobs[0]).toMatchObject({ id: 'a', running: false, paused: false, breakerTripped: false, consecutiveFailures: 0, lastRun: null });
   });
+
+  it("surfaces a job's last usage-limit skip so a stuck-on-limit job is visible", () => {
+    writeJobs(root, { version: 1, defaults: {}, jobs: [{ id: 'a', schedule: '* * * * *', enabled: true, prompt: 'go' }] });
+    writeJobState(root, 'a', { lastRun: 5000, lastExit: 1, pid: null, consecutiveFailures: 1, lastSkipReason: 'usage-limit', lastSkipResetAt: '3am' });
+    const status = collectStatus(root);
+    const a = status.jobs.find((j: any) => j.id === 'a');
+    expect(a).toMatchObject({ lastSkipReason: 'usage-limit', lastSkipResetAt: '3am' });
+    expect(formatHuman(status)).toContain('usage-limit');
+  });
 });
 
 describe('formatHuman', () => {

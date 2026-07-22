@@ -163,4 +163,57 @@ describe('cli e2e', () => {
     expect(existsSync(sentinel)).toBe(true);
     expect(readFileSync(sentinel, 'utf-8')).toContain('done');
   });
+
+  // A fake "claude" that prints `text` and exits with `code`, wired in as claudeBin.
+  const wireFakeClaude = (text: string, code: number) => {
+    const fake = join(root, process.platform === 'win32' ? 'claude.cmd' : 'claude.sh');
+    if (process.platform === 'win32') {
+      writeFileSync(fake, `@echo off\r\necho ${text}\r\nexit /b ${code}\r\n`);
+    } else {
+      writeFileSync(fake, `#!/bin/sh\necho "${text}"\nexit ${code}\n`);
+      chmodSync(fake, 0o755);
+    }
+    writeFileSync(join(root, '.pshed', 'config.json'), JSON.stringify({ nodeBin: 'node', claudeBin: fake }));
+  };
+  // Seed a due job state (backdated lastRun so the next tick launches it).
+  const seedDue = (id: string, extra: Record<string, unknown> = {}) => {
+    mkdirSync(join(root, '.pshed', 'state'), { recursive: true });
+    writeFileSync(join(root, '.pshed', 'state', `${id}.json`),
+      JSON.stringify({ lastRun: Date.now() - 3_600_000, lastExit: 0, pid: null, consecutiveFailures: 0, ...extra }));
+  };
+  const readJobState = (id: string) => JSON.parse(readFileSync(join(root, '.pshed', 'state', `${id}.json`), 'utf-8'));
+
+  it('tick skips a real usage-limit run without moving the breaker (end-to-end)', () => {
+    // max-consecutive-failures 1: a run counted as a FAILURE would trip immediately, so
+    // "not tripped" is a meaningful assertion that the limit run was NOT counted.
+    runCli(['set-job', '--id', 'a', '--schedule', '* * * * *', '--prompt', 'go', '--max-consecutive-failures', '1']);
+    wireFakeClaude('Claude usage limit reached', 1); // non-zero exit + limit message
+    seedDue('a');
+
+    const t = JSON.parse(runCli(['tick']));
+    expect(t.results).toEqual([{ id: 'a', action: 'skipped-usage-limit', reason: 'usage-limit' }]);
+
+    const st = readJobState('a');
+    expect(st.consecutiveFailures).toBe(0);        // untouched — not counted as a failure
+    expect(st.breakerTripped).toBeUndefined();     // and therefore not tripped
+    expect(st.lastSkipReason).toBe('usage-limit');
+
+    // status surfaces the stuck-on-limit state.
+    const a = JSON.parse(runCli(['status'])).jobs.find((j: any) => j.id === 'a');
+    expect(a.lastSkipReason).toBe('usage-limit');
+  }, 15000);
+
+  it('tick still trips the breaker for a genuine crash (real-failure behavior preserved)', () => {
+    runCli(['set-job', '--id', 'a', '--schedule', '* * * * *', '--prompt', 'go', '--max-consecutive-failures', '1']);
+    wireFakeClaude('panic: boom', 1); // non-zero exit, NO limit signature
+    seedDue('a');
+
+    const t = JSON.parse(runCli(['tick']));
+    expect(t.results).toEqual([{ id: 'a', action: 'launched', exit: 1, timedOut: false }]);
+
+    const st = readJobState('a');
+    expect(st.consecutiveFailures).toBe(1);   // incremented exactly as before
+    expect(st.breakerTripped).toBe(true);     // reached the threshold and tripped
+    expect(st.lastSkipReason).toBeUndefined();
+  }, 15000);
 });

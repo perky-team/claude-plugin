@@ -7,6 +7,7 @@ import { setJob, rmJob, ValidationError } from './lib/jobs.mjs';
 import { resetBreaker } from './lib/breaker.mjs';
 import { tick as runTick } from './lib/tick.mjs';
 import { runJob } from './lib/launch.mjs';
+import { classifyRun, resolveUsageLimitPattern, truncateOutput } from './lib/classify.mjs';
 import { buildInstall, buildRemove, taskName, crontabLine, applyCrontab, planRemoveCron, scanCrontabTaskIds, crontabHasTask } from './lib/scheduler.mjs';
 import { writeGlobalPause, removeGlobalPause } from './lib/pause.mjs';
 import { listRunningJobs, terminateJobs } from './lib/pids.mjs';
@@ -90,7 +91,12 @@ async function main() {
       if (!job) return emitJson({ error: { code: 'validation', message: `no such job: ${id}` } }, 2);
       const config = readConfig(root);
       const result = await runJob({ job, defaults, claudeBin: config.claudeBin });
-      return emitJson({ id, result }, 0);
+      // Expose the classification (success | usage_limit | failure) and a truncated
+      // output tail instead of dumping the full capture buffers inline.
+      const outcome = classifyRun(result.exit, result.out, result.err, resolveUsageLimitPattern(defaults));
+      const { out, err, ...rest } = result;
+      const raw = truncateOutput(out, err);
+      return emitJson({ id, outcome, result: raw ? { ...rest, raw } : rest }, 0);
     }
 
     if (command === 'set-job') {
