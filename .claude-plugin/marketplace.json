@@ -29,7 +29,7 @@
     {
       "name": "p-graph",
       "source": "./plugins/p-graph",
-      "description": "Local code knowledge graph (TS/JS, Go, C++, Python). pgraph CLI indexes symbols + call/import/extend edges into SQLite; query with search/node/callers/callees/impact/trace/context. Skills: init, sync, help."
+      "description": "Local code knowledge graph (TS/JS, Go, C++, Python). pgraph CLI indexes symbols + call/import/extend edges into SQLite; query with search/node/callers/callees/impact/trace/context. Skills: init, sync, help, query."
     },
     {
       "name": "p-shed",

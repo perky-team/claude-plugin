@@ -1,9 +1,12 @@
 ## p-graph — prefer the code graph over grep for structural questions
 
-This repo has a `pgraph` code knowledge graph. For **structural** questions use
-`pgraph` (run via Bash: `node ${CLAUDE_PLUGIN_ROOT}/tools/pgraph.mjs <cmd>` — or
-the `pgraph` wrapper if installed). Use grep/Read only for literal text (string
-contents, comments, log messages).
+This repo has a `pgraph` code knowledge graph. For a natural-language structural
+question ("who calls X", "what breaks if I change Y", "how does X reach Y"), run
+`/p-graph:query <question>` — it picks the right commands and answers with
+`file:line` citations. To drive the CLI yourself, run via Bash:
+`node ${CLAUDE_PLUGIN_ROOT}/tools/pgraph.mjs <cmd>` — or the `pgraph` wrapper if
+installed. Use grep/Read only for literal text (string contents, comments, log
+messages).
 
 | Question | Command |
 |---|---|
