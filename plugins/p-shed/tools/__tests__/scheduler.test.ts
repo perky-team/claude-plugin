@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { taskName, buildInstall, buildRemove, crontabLine, applyCrontab, removeFromCrontab } from '../lib/scheduler.mjs';
+import { taskName, buildInstall, buildRemove, crontabLine, applyCrontab, removeFromCrontab, scanCrontabTaskIds, crontabHasTask, planRemoveCron } from '../lib/scheduler.mjs';
 
 const root = '/home/me/work';
 const nodeBin = '/usr/bin/node';
@@ -53,5 +53,47 @@ describe('posix crontab transforms', () => {
     const withUser = applyCrontab('0 5 * * * backup\n', line, marker);
     const removed = removeFromCrontab(withUser, marker);
     expect(removed).toBe('0 5 * * * backup');
+  });
+});
+
+describe('crontab honesty helpers', () => {
+  const line = crontabLine({ root, nodeBin, toolPath });
+  const marker = `# ${taskName(root)}`;
+
+  it('scanCrontabTaskIds lists every distinct pshed task id, once each', () => {
+    const blob = applyCrontab('0 5 * * * backup\n', line, marker) +
+      `* * * * * cd /elsewhere && node x tick # ${taskName('/elsewhere')}\n`;
+    const ids = scanCrontabTaskIds(blob);
+    expect(ids).toContain(taskName(root));
+    expect(ids).toContain(taskName('/elsewhere'));
+    expect(ids.filter((i) => i === taskName(root))).toHaveLength(1);
+  });
+  it('scanCrontabTaskIds returns [] for an empty or marker-less crontab', () => {
+    expect(scanCrontabTaskIds('')).toEqual([]);
+    expect(scanCrontabTaskIds('0 5 * * * backup\n')).toEqual([]);
+  });
+  it('crontabHasTask reports whether this folder\'s tick line is present', () => {
+    const installed = applyCrontab('', line, marker);
+    expect(crontabHasTask(installed, root)).toBe(true);
+    expect(crontabHasTask('0 5 * * * backup\n', root)).toBe(false);
+  });
+
+  it('planRemoveCron reports removed:true and strips the line when the marker is present', () => {
+    const installed = applyCrontab('0 5 * * * backup\n', line, marker);
+    const plan = planRemoveCron(installed, root);
+    expect(plan.removed).toBe(true);
+    expect(plan.next).toBe('0 5 * * * backup');
+    expect(plan.foundTaskIds).toContain(taskName(root));
+  });
+  it('planRemoveCron reports removed:false when this folder\'s marker is absent (wrong-dir incident)', () => {
+    const other = `* * * * * cd /elsewhere && node x tick # ${taskName('/elsewhere')}\n`;
+    const plan = planRemoveCron(other, root);
+    expect(plan.removed).toBe(false);
+    expect(plan.foundTaskIds).toEqual([taskName('/elsewhere')]);
+  });
+  it('planRemoveCron on an empty crontab removes nothing', () => {
+    const plan = planRemoveCron('', root);
+    expect(plan.removed).toBe(false);
+    expect(plan.foundTaskIds).toEqual([]);
   });
 });

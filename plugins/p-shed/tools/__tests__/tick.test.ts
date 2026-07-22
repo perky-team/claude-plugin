@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { tick } from '../lib/tick.mjs';
 import { writeJobs, writeJobState, readState, paths } from '../lib/io.mjs';
 import { pausePath } from '../lib/breaker.mjs';
+import { writeGlobalPause } from '../lib/pause.mjs';
 
 const MIN = 60000;
 
@@ -137,6 +138,17 @@ describe('tick', () => {
     const deps = fakeDeps({ runJob: vi.fn(async () => ({ pid: 1, exit: 1, timedOut: false, durationMs: 5 })) });
     await tick({ root, now: NOW, deps });
     expect(readState(root).jobs.a.breakerTripped).toBeUndefined();
+  });
+
+  it('short-circuits the whole tick when the global PAUSED marker is present', async () => {
+    writeJobs(root, { version: 1, defaults: {}, jobs: [{ id: 'a', schedule: '* * * * *', enabled: true, prompt: 'go' }] });
+    writeJobState(root, 'a', { lastRun: NOW - MIN, lastExit: 0, pid: null });
+    writeGlobalPause(root, { reason: 'reconfiguring', now: NOW });
+    const deps = fakeDeps();
+    const res = await tick({ root, now: NOW, deps });
+    expect(res).toEqual({ action: 'tick', paused: true, launched: 0 });
+    expect(deps.runJob).not.toHaveBeenCalled();
+    expect(deps.rotateLogs).not.toHaveBeenCalled(); // first gate — nothing else runs
   });
 
   it('skips a job whose pause marker is present, without launching', async () => {

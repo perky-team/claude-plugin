@@ -1,41 +1,25 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { paths, readJobs, readConfig, readJobState, writeJobState, removeJobState, listStateIds } from './io.mjs';
+import { readJobs, readConfig, readJobState, writeJobState, removeJobState, listStateIds } from './io.mjs';
 import { parseCron, isDue } from './cron.mjs';
 import { runJob as realRunJob } from './launch.mjs';
 import { appendLog as realAppendLog, rotateLogs as realRotateLogs } from './logs.mjs';
 import { readPause } from './breaker.mjs';
-
-export function isPidAlive(pid) {
-  if (!pid) return false;
-  try { process.kill(pid, 0); return true; }
-  catch (e) { return e.code === 'EPERM'; }
-}
-
-function writePid(root, id, pid) {
-  const dir = paths(root).runDir;
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, `${id}.pid`), String(pid), 'utf-8');
-}
-
-function removePid(root, id) {
-  rmSync(join(paths(root).runDir, `${id}.pid`), { force: true });
-}
-
-function readPid(root, id) {
-  const p = join(paths(root).runDir, `${id}.pid`);
-  if (!existsSync(p)) return null;
-  const n = parseInt(readFileSync(p, 'utf-8').trim(), 10);
-  return Number.isNaN(n) ? null : n;
-}
+import { readGlobalPause } from './pause.mjs';
+import { isPidAlive, readPid, writePid, removePid } from './pids.mjs';
 
 export async function tick({ root, now = Date.now(), deps = {} }) {
   const d = {
     readJobs, readConfig, readJobState, writeJobState, removeJobState, listStateIds,
     runJob: realRunJob, appendLog: realAppendLog, rotateLogs: realRotateLogs,
     isPidAlive, writePid: (id, pid) => writePid(root, id, pid), removePid: (id) => removePid(root, id),
+    readGlobalPause,
     ...deps,
   };
+
+  // Global pause: while run/PAUSED exists the whole scheduler is halted (cron stays
+  // installed). This is the FIRST gate in the launch flow — before log rotation and any
+  // job evaluation — so a paused tick is a genuine no-op, mirroring the per-job pause
+  // marker but for every job at once.
+  if (d.readGlobalPause(root)) return { action: 'tick', paused: true, launched: 0 };
 
   d.rotateLogs(root, now);
   const { defaults, jobs } = d.readJobs(root);

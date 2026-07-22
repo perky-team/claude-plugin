@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, chmodSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -15,6 +15,15 @@ const runCli = (args: string[]) =>
     encoding: 'utf-8',
     cwd: root,
   });
+
+const isAlive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+const waitForDead = async (pid: number, ms: number) => {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    if (!isAlive(pid)) return;
+    await new Promise((r) => setTimeout(r, 25));
+  }
+};
 
 describe('cli e2e', () => {
   it('set-job then rm-job persists to jobs.yml', () => {
@@ -62,6 +71,79 @@ describe('cli e2e', () => {
     expect(st.consecutiveFailures).toBe(0);
     expect(existsSync(join(root, '.pshed', 'run', 'a.pause'))).toBe(false);
   });
+
+  it('pause writes run/PAUSED, tick short-circuits, resume restores', () => {
+    runCli(['set-job', '--id', 'a', '--schedule', '* * * * *', '--prompt', 'go']);
+
+    const paused = JSON.parse(runCli(['pause', '--reason', 'reconfiguring']));
+    expect(paused.paused).toBe(true);
+    expect(existsSync(join(root, '.pshed', 'run', 'PAUSED'))).toBe(true);
+
+    const t = JSON.parse(runCli(['tick']));
+    expect(t).toMatchObject({ action: 'tick', paused: true, launched: 0 });
+
+    const resumed = JSON.parse(runCli(['resume']));
+    expect(resumed.paused).toBe(false);
+    expect(existsSync(join(root, '.pshed', 'run', 'PAUSED'))).toBe(false);
+
+    // After resume the scheduler evaluates jobs again: a brand-new job baselines.
+    const t2 = JSON.parse(runCli(['tick']));
+    expect(t2.results).toEqual([{ id: 'a', action: 'baselined' }]);
+  });
+
+  it('remove-cron from a folder with no installed entry reports removed:false + a warning (wrong-dir incident)', () => {
+    const out = JSON.parse(runCli(['remove-cron']));
+    expect(out.removed).toBe(false);
+    expect(out.warning).toMatch(/nothing removed/);
+    expect(Array.isArray(out.installedTaskIds)).toBe(true);
+  }, 15000); // shells out to the OS scheduler; allow headroom under parallel-suite load
+
+  it('status reports installed:false, global paused, and per-job breaker/pause/lastRun', () => {
+    runCli(['set-job', '--id', 'a', '--schedule', '* * * * *', '--prompt', 'go']);
+    mkdirSync(join(root, '.pshed', 'state'), { recursive: true });
+    writeFileSync(join(root, '.pshed', 'state', 'a.json'),
+      JSON.stringify({ lastRun: 4000, lastExit: 1, pid: null, consecutiveFailures: 3, breakerTripped: true, breakerReason: 'exit 1' }));
+    mkdirSync(join(root, '.pshed', 'run'), { recursive: true });
+    writeFileSync(join(root, '.pshed', 'run', 'a.pause'), 'verify red');
+    runCli(['pause', '--reason', 'reconfiguring']);
+
+    const s = JSON.parse(runCli(['status']));
+    expect(s.action).toBe('status');
+    expect(s.installed).toBe(false);
+    expect(s.paused).toBe(true);
+    expect(s.pauseReason).toBe('reconfiguring');
+    const a = s.jobs.find((j: any) => j.id === 'a');
+    expect(a).toMatchObject({ breakerTripped: true, breakerReason: 'exit 1', paused: true, lastExit: 1, consecutiveFailures: 3 });
+  });
+
+  it('status --human prints a text table', () => {
+    runCli(['set-job', '--id', 'a', '--schedule', '* * * * *', '--prompt', 'go']);
+    const text = execFileSync('node', [CLI, 'status', '--human'], { encoding: 'utf-8', cwd: root });
+    expect(text).toMatch(/installed:/);
+    expect(text).toContain('lastExit');
+    expect(text).toContain('a');
+  });
+
+  it('stop --kill tears down and terminates an in-flight job', async () => {
+    // A sacrificial long-lived process standing in for a running job's child.
+    const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 100000)'], {
+      detached: process.platform !== 'win32', stdio: 'ignore',
+    });
+    child.unref();
+    const pid = child.pid as number;
+    mkdirSync(join(root, '.pshed', 'run'), { recursive: true });
+    writeFileSync(join(root, '.pshed', 'run', 'a.pid'), String(pid));
+    try {
+      const out = JSON.parse(runCli(['stop', '--kill', '--grace-ms', '100']));
+      expect(out.action).toBe('stop');
+      expect(out.killed.terminated).toBe(1);
+      expect(out.killed.ids).toContain('a');
+      await waitForDead(pid, 3000);
+      expect(isAlive(pid)).toBe(false);
+    } finally {
+      try { process.kill(pid); } catch { /* already gone */ }
+    }
+  }, 15000); // stop also shells out to the OS scheduler; headroom under parallel-suite load
 
   it('run <id> launches the configured claude binary immediately', () => {
     // A fake "claude" that records it was called into a sentinel file.

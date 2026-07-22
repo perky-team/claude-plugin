@@ -26,7 +26,10 @@ Tool: `node tools/pshed.mjs <command>` (all support `--json`; exit `0` ok / `1` 
 | `set-job` | Add or modify a job (`--schedule`, `--prompt`, `--id`, `--cwd`, `--timeoutSec`, `--permission-mode`, `--allowed-tools`, `--model`, `--effort`, `--max-consecutive-failures`). |
 | `rm-job` | Delete a job (`--id`). |
 | `reset-breaker <id>` | Clear a job's tripped circuit breaker and self-pause marker so it schedules again. |
-| `install-cron` / `remove-cron` | Register/unregister the every-minute `tick` in the OS scheduler for this folder. |
+| `pause` / `resume` | Reversibly halt / resume the **whole** scheduler (`run/PAUSED`; cron stays installed). `pause` accepts `--reason`; both idempotent. |
+| `status` | Report, from disk + the OS scheduler: installed?, globally paused?, and per job running/paused/breaker/last-run. JSON by default, `--human` for a text table. |
+| `stop` `[--kill]` | Honest teardown of the OS scheduler entry — reports `removed: true|false` (see below). `--kill` also SIGTERM→SIGKILLs any in-flight jobs (`--grace-ms` tunes the escalation delay). |
+| `install-cron` / `remove-cron` | Register/unregister the every-minute `tick` in the OS scheduler for this folder. `remove-cron` reports `removed` and warns on a cwd mismatch (see below). |
 
 ## Formats
 
@@ -39,7 +42,8 @@ Tool: `node tools/pshed.mjs <command>` (all support `--json`; exit `0` ok / `1` 
 | `state/<id>.json` | gitignore | per-job `{ lastRun, lastExit, pid, consecutiveFailures, breakerTripped?, breakerReason?, breakerAt? }` — one file per job (no shared state file) |
 | `logs/<date>.jsonl` | gitignore | one record per run; auto-rotated (7-day retention) |
 | `run/<id>.pid` | gitignore | duplicate-guard pidfile |
-| `run/<id>.pause` | gitignore | self-pause marker (contents = reason); a job's own run writes it to stop being scheduled |
+| `run/<id>.pause` | gitignore | per-job self-pause marker (contents = reason); a job's own run writes it to stop being scheduled |
+| `run/PAUSED` | gitignore | global pause marker (`{ createdAt, reason? }`); halts every job while cron stays installed. Written by `pause`, removed by `resume` |
 
 Example `jobs.yml`:
 
@@ -92,6 +96,33 @@ are cleared with `reset-breaker <id>` (or `/p-shed:reset-breaker`).
   failed (e.g. its own tests went red), which the breaker can't see. So a job's prompt
   can write `run/<id>.pause` (contents = a human-readable reason) to signal "stop
   scheduling me". While that marker exists the job is skipped (`skipped-paused`).
+
+## Stopping, pausing, and status
+
+Three levers, deliberately distinct:
+
+- **`pause` / `resume` (reversible, cwd-independent).** `pause` drops `run/PAUSED`; the
+  next `tick` short-circuits before evaluating any job (`{ "action": "tick", "paused":
+  true, "launched": 0 }`) and launches nothing until `resume` deletes the marker. Cron
+  stays installed, so this is the right tool to "halt to reconfigure, then resume"
+  without re-running `install-cron`. It does not depend on the folder-scoped task id.
+- **`stop` (teardown).** Removes the OS scheduler entry for this folder — the honest
+  `remove-cron` (below) — reporting a `removed` verdict. `stop --kill` additionally
+  terminates in-flight jobs: SIGTERM every live pid, then SIGKILL any survivor after a
+  short grace period (`--grace-ms`, default 3000), reporting how many were terminated.
+- **`status`.** A read-only snapshot: whether the tick is installed (scanned from the OS
+  scheduler), the global pause state, and per job — running (live pid), self-paused,
+  breaker state (consecutive failures / reason), and last run/exit.
+
+### `remove-cron` / `stop` are honest about a cwd mismatch
+
+The scheduler task id is derived from the current folder (`taskName(root)`). Running
+`remove-cron`/`stop` from the **wrong** directory used to remove a non-existent entry and
+still report success while the real tick kept ticking. Now the teardown diffs the crontab
+(or checks the `schtasks` delete result) and reports `removed: false` with a `warning`
+plus `installedTaskIds` — the `pshed-*` ids actually registered — so a cwd mismatch is
+obvious. The crontab is only rewritten when a line is genuinely removed, so a wrong-dir
+run never mutates it.
 
 ## Known limitations
 

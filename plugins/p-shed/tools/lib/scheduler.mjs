@@ -32,3 +32,29 @@ export function applyCrontab(existing, line, marker) {
 export function removeFromCrontab(existing, marker) {
   return (existing ? existing.split('\n') : []).filter((l) => l.trim() && !l.includes(marker)).join('\n');
 }
+
+// Every distinct pshed task id a crontab/schtasks blob tags, regardless of folder. Lets
+// a remove/stop run from the wrong dir report which loops are actually installed so a
+// cwd mismatch (the `remove-cron silently did nothing` incident) is obvious.
+export function scanCrontabTaskIds(existing) {
+  const ids = [];
+  const re = /pshed-[0-9a-f]{8}/g;
+  let m;
+  while ((m = re.exec(existing || '')) !== null) if (!ids.includes(m[0])) ids.push(m[0]);
+  return ids;
+}
+
+export function crontabHasTask(existing, root) {
+  return scanCrontabTaskIds(existing).includes(taskName(root));
+}
+
+// Pure plan for remove-cron: the crontab after stripping this folder's tick line, plus
+// whether a line was actually removed (diff old vs new line counts) and which pshed ids
+// the crontab tagged. Callers only write when `removed` is true.
+export function planRemoveCron(existing, root) {
+  const marker = `# ${taskName(root)}`;
+  const before = (existing ? existing.split('\n') : []).filter((l) => l.trim()).length;
+  const next = removeFromCrontab(existing, marker);
+  const after = (next ? next.split('\n') : []).filter((l) => l.trim()).length;
+  return { next, removed: after < before, foundTaskIds: scanCrontabTaskIds(existing) };
+}
