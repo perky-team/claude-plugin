@@ -270,6 +270,34 @@ posting digests needs no skill: any job can call `send` directly from its prompt
 - Negative self-tests: guard must exit 2 (not 75) on unreachable API and on
   empty allowlist; a free-text message must never reach the `commands` shell.
 
+### 2.7 Live smoke checklist (real Telegram, after the mock suites are green)
+
+The mock suites cover the logic; one manual round-trip against the real Bot API
+validates the credentials path and the phone UX. The bot itself can only be
+created by the owner — walk them through it at this point:
+
+1. **Owner**: in Telegram, talk to `@BotFather` → `/newbot` → receive the token.
+   Create TWO bots if this deployment will go to production later: a dev bot for
+   this checklist and a prod bot whose token only ever lives on the target
+   machine.
+2. **Owner**: put the token in a file themselves (e.g.
+   `~/.config/p-chat/token`, chmod 600). The token must NEVER be pasted into a
+   Claude session, a repo file, or a shell argument — it would persist in
+   transcripts/history (this ecosystem has prior art on leaked credentials in
+   transcripts).
+3. **Owner**: send the bot any message — bots cannot message first, and this
+   seeds `getUpdates` with the owner's `chat_id`.
+4. **Session**: `pchat init --token-file <path>` → `getMe` succeeds, the pending
+   update reveals the chat id, `init` prints it and writes `.pchat.json` with it
+   allowlisted.
+5. **Session**: `pchat send "smoke"` → arrives on the phone. Owner replies with
+   free text → `pchat guard` exits 0 → `pending` shows it → `ack` → `guard` now
+   exits 75. Owner sends a configured `/command` → scripted answer arrives
+   without any Claude involvement.
+
+This checklist runs fine from any machine with Node and internet — the target
+deployment machine is not required for it.
+
 ## 3. Part C — reference deployment (the Pi loop; ops repo owns the runbook)
 
 Not part of this repo's implementation — recorded so the design is checked
@@ -308,3 +336,6 @@ against its real consumer:
    contract → suite goes red).
 5. READMEs and marketplace entry updated; release notes follow the existing
    `chore(release)` convention.
+6. Live smoke checklist (§2.7) executed once with the owner and a dev bot:
+   send, free-text round-trip, scripted `/command` — all observed on a real
+   phone.
