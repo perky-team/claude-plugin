@@ -36,6 +36,14 @@ export function setJob(root, spec) {
     throw new ValidationError(`invalid effort: ${spec.effort} (expected one of ${EFFORT_LEVELS.join(', ')})`);
   }
 
+  // guard: a shell command; '' is the documented clear sentinel (--guard "").
+  if (spec.guard !== undefined && typeof spec.guard !== 'string') {
+    throw new ValidationError('guard must be a string command (use --guard "" to clear)');
+  }
+  if (spec.guardTimeoutSec !== undefined && (!Number.isFinite(spec.guardTimeoutSec) || spec.guardTimeoutSec <= 0)) {
+    throw new ValidationError(`invalid guardTimeoutSec: ${spec.guardTimeoutSec} (expected a positive number)`);
+  }
+
   if (existing) {
     Object.assign(existing, pruneUndefined({
       schedule: spec.schedule,
@@ -48,7 +56,12 @@ export function setJob(root, spec) {
       model: spec.model,
       effort: spec.effort,
       maxConsecutiveFailures: spec.maxConsecutiveFailures,
+      guard: spec.guard || undefined,          // '' falls through to the delete below
+      guardTimeoutSec: spec.guardTimeoutSec,
     }));
+    // Clearing the guard also clears its timeout — an orphaned guardTimeoutSec is
+    // meaningless (an idle timeout with nothing to time out).
+    if (spec.guard === '') { delete existing.guard; delete existing.guardTimeoutSec; }
     writeJobs(root, data);
     return { id: existing.id, created: false };
   }
@@ -66,6 +79,8 @@ export function setJob(root, spec) {
     model: spec.model,
     effort: spec.effort,
     maxConsecutiveFailures: spec.maxConsecutiveFailures,
+    guard: spec.guard || undefined,
+    guardTimeoutSec: spec.guardTimeoutSec,
   }));
   writeJobs(root, data);
   return { id, created: true };

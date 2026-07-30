@@ -108,6 +108,8 @@ async function main() {
         model: args.model,
         effort: args.effort,
         maxConsecutiveFailures: args['max-consecutive-failures'] !== undefined ? Number(args['max-consecutive-failures']) : undefined,
+        guard: args.guard,
+        guardTimeoutSec: args['guard-timeout-sec'] !== undefined ? Number(args['guard-timeout-sec']) : undefined,
       });
       return emitJson(res, 0);
     }
