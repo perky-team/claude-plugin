@@ -1,6 +1,7 @@
 import { readJobs, readConfig, readJobState, writeJobState, removeJobState, listStateIds } from './io.mjs';
 import { parseCron, isDue } from './cron.mjs';
 import { runJob as realRunJob } from './launch.mjs';
+import { runGuard as realRunGuard } from './guard.mjs';
 import { appendLog as realAppendLog, rotateLogs as realRotateLogs } from './logs.mjs';
 import { readPause } from './breaker.mjs';
 import { readGlobalPause } from './pause.mjs';
@@ -11,6 +12,7 @@ export async function tick({ root, now = Date.now(), deps = {} }) {
   const d = {
     readJobs, readConfig, readJobState, writeJobState, removeJobState, listStateIds,
     runJob: realRunJob, appendLog: realAppendLog, rotateLogs: realRotateLogs,
+    runGuard: (job, defaults) => realRunGuard({ job, defaults, root }),
     isPidAlive, writePid: (id, pid) => writePid(root, id, pid), removePid: (id) => removePid(root, id),
     readGlobalPause,
     ...deps,
@@ -53,6 +55,53 @@ export async function tick({ root, now = Date.now(), deps = {} }) {
       continue;
     }
 
+    // Guard: an owner-supplied cheap command in front of the Claude launch decides,
+    // per due slot, whether the launch happens (exit 0), the slot is deliberately
+    // quiet (75 — EX_TEMPFAIL, see lib/guard.mjs), or the guard itself is broken
+    // (anything else / timeout). Runs AFTER every gate above, so a paused / tripped /
+    // pid-alive / not-due job never executes its guard, and the baseline tick skips
+    // it too. A quiet guard CONSUMES the slot (lastRun = now), mirroring the
+    // usage-limit skip path: a daily job whose guard said quiet retries tomorrow,
+    // not every minute all day.
+    let guarded;
+    if (job.guard) {
+      const g = await d.runGuard(job, defaults);
+      const lastGuard = { at: now, outcome: g.outcome, exit: g.exit };
+      const prevG = d.readJobState(root, job.id) ?? {};
+      if (g.outcome === 'quiet') {
+        // Log-noise policy: quiet is state-only (lastGuard) — no history line. A
+        // minutely chat job must not write 1440 quiet records/day; freshness is
+        // visible via status.lastGuard instead.
+        d.writeJobState(root, job.id, { ...prevG, lastRun: now, lastGuard, consecutiveGuardFailures: 0 });
+        results.push({ id: job.id, action: 'guard-quiet' });
+        continue;
+      }
+      if (g.outcome === 'error') {
+        // Guard errors get their own counter — reset by a healthy guard (quiet or
+        // pass), NOT by a healthy run — but share the breaker and its threshold, so
+        // watchdogs keyed on breakerTripped need no change. A single shared counter
+        // fails both ways: guard blips weeks apart would eventually trip a healthy
+        // job, while a crashing run interleaved with quiet slots would never trip.
+        const consecutiveGuardFailures = (prevG.consecutiveGuardFailures ?? 0) + 1;
+        const maxFailures = job.maxConsecutiveFailures ?? defaults.maxConsecutiveFailures ?? 3;
+        const next = { ...prevG, lastRun: now, lastGuard, consecutiveGuardFailures };
+        if (maxFailures > 0 && consecutiveGuardFailures >= maxFailures) {
+          next.breakerTripped = true;
+          next.breakerReason = g.timedOut ? 'guard timeout' : (g.error ? `guard: ${g.error}` : `guard exit ${g.exit}`);
+          next.breakerAt = now;
+        }
+        d.writeJobState(root, job.id, next);
+        const rawG = truncateOutput(g.out, g.err);
+        d.appendLog(root, { ts: now, job: job.id, outcome: 'guard-error', exit: g.exit, timedOut: g.timedOut, durationMs: g.durationMs, ...(rawG ? { raw: rawG } : {}) }, now);
+        results.push({ id: job.id, action: 'guard-error', exit: g.exit, timedOut: g.timedOut });
+        continue;
+      }
+      // pass: the guard is proven healthy — reset its counter, record freshness,
+      // fall through to the launch. The post-run read-modify-write re-reads this.
+      d.writeJobState(root, job.id, { ...prevG, lastGuard, consecutiveGuardFailures: 0 });
+      guarded = true;
+    }
+
     const r = await d.runJob({ job, defaults, claudeBin: config.claudeBin, onSpawn: (p) => { if (p) d.writePid(job.id, p); } });
 
     // Read-modify-write: preserve breaker/other fields instead of clobbering the whole
@@ -74,7 +123,7 @@ export async function tick({ root, now = Date.now(), deps = {} }) {
       const next = { ...prev, lastRun: now, lastExit: r.exit, pid: null, lastSkipReason: 'usage-limit', lastSkipAt: now };
       if (resetAt) next.lastSkipResetAt = resetAt; else delete next.lastSkipResetAt;
       d.writeJobState(root, job.id, next);
-      d.appendLog(root, withRaw({ ts: now, job: job.id, exit: r.exit, timedOut: r.timedOut, durationMs: r.durationMs, outcome: 'skipped', reason: 'usage-limit', ...(resetAt ? { resetAt } : {}) }), now);
+      d.appendLog(root, withRaw({ ts: now, job: job.id, exit: r.exit, timedOut: r.timedOut, durationMs: r.durationMs, outcome: 'skipped', reason: 'usage-limit', ...(guarded ? { guarded: true } : {}), ...(resetAt ? { resetAt } : {}) }), now);
       d.removePid(job.id);
       results.push({ id: job.id, action: 'skipped-usage-limit', reason: 'usage-limit', ...(resetAt ? { resetAt } : {}) });
       continue;
@@ -98,7 +147,7 @@ export async function tick({ root, now = Date.now(), deps = {} }) {
       delete next.breakerAt;
     }
     d.writeJobState(root, job.id, next);
-    d.appendLog(root, withRaw({ ts: now, job: job.id, exit: r.exit, timedOut: r.timedOut, durationMs: r.durationMs, outcome }), now);
+    d.appendLog(root, withRaw({ ts: now, job: job.id, exit: r.exit, timedOut: r.timedOut, durationMs: r.durationMs, outcome, ...(guarded ? { guarded: true } : {}) }), now);
     d.removePid(job.id);
     results.push({ id: job.id, action: 'launched', exit: r.exit, timedOut: r.timedOut });
   }

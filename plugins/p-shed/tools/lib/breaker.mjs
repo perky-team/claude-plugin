@@ -30,6 +30,7 @@ export function resetBreaker(root, id) {
     delete st.breakerReason;
     delete st.breakerAt;
     st.consecutiveFailures = 0;
+    delete st.consecutiveGuardFailures;
     writeJobState(root, id, st);
   }
   removePause(root, id);
