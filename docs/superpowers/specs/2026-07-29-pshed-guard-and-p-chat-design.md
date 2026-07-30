@@ -1,7 +1,7 @@
 # p-shed job guards + p-chat Telegram channel — design
 
 Date: 2026-07-29
-Status: approved by Andrey (conversation), pending spec review
+Status: approved by Andrey (conversation); spec review done 2026-07-29 — resolutions in §6
 Deliverables: p-shed 0.6.0 (guard feature), p-chat 0.1.0 (new plugin)
 
 ## 0. Motivation and rejected alternatives
@@ -62,7 +62,7 @@ exit code:
 |---|---|---|
 | `0` | work exists | launch `claude -p` with the job's prompt, as today |
 | `75` | deliberately quiet — no work this slot | skip silently; **not** a failure |
-| anything else, or timeout | guard is broken | skip + count toward the job's `consecutiveFailures` → breaker |
+| anything else, or timeout | guard is broken | skip + count toward the job's `consecutiveGuardFailures` → breaker (§1.3) |
 
 Why 75: POSIX exit codes are an unsigned byte, so a distinctive "quiet" value
 must live in 0–255. It must also be a code no crashing tool emits by accident —
@@ -339,3 +339,59 @@ against its real consumer:
 6. Live smoke checklist (§2.7) executed once with the owner and a dev bot:
    send, free-text round-trip, scripted `/command` — all observed on a real
    phone.
+
+## 6. Spec review resolutions (2026-07-29)
+
+Refinements accepted during spec review; none overturn the design. Where a
+resolution contradicts an earlier section, the resolution wins.
+
+Part A:
+
+- **A2 — timeout kill.** §1.3 said "SIGTERM, then SIGKILL (mirror `launch.mjs`)",
+  but `launch.mjs` actually kills immediately via `killTree` (SIGKILL of the
+  process group / `taskkill /T /F`); the two-stage kill lives only in
+  `pids.mjs:terminateJobs`. `runGuard` is async and mirrors `runJob` exactly:
+  timer → `killTree`. ("sync" in the §1.3 pseudocode is likewise superseded —
+  `spawnSync` cannot escalate a kill and can hang on a SIGTERM-ignoring child.)
+- **A3 — guard cwd.** Resolves identically to the run itself:
+  `job.cwd ?? defaults.cwd ?? root` (§1.2 omitted `defaults.cwd`).
+- **A4 — reset-breaker.** `resetBreaker` clears `consecutiveGuardFailures` too
+  (already implied by the §1.6 test list).
+- **A5 — `run <id>` stays stateless.** The guard executes; on quiet/error the CLI
+  emits `{ id, outcome: 'guard-quiet' | 'guard-error', guard: {...} }` and exits 0
+  without launching. No state, counters, or history log are touched — manual runs
+  never affect the breaker, exactly as today.
+- **A6 — `--guard ""`** clears `guardTimeoutSec` along with `guard`.
+- **A7 — Windows caveat (docs only).** `shell: true` means cmd.exe on Windows:
+  `~` does not expand there — guard commands need real paths. README note next to
+  the existing cmd.exe prompt caveat.
+
+Part B:
+
+- **B1 — `pending` stop rule** (the gap that mattered): `pending` returns only
+  the **contiguous prefix** of free-text messages from allowed chats, stopping
+  before the first scripted-command message. Otherwise a queue of
+  `[question₁, /status, question₂]` answered in one batch would `ack --until`
+  past `/status`, confirming it unexecuted — violating the §2.3 invariant. The
+  stopped-at command runs on the next guard pass after the ack.
+- **B2 — `init --chat-id` is optional.** Without it, init peeks `getUpdates` and
+  discovers the chat id (per §2.7 step 4); no pending update → exit 2 with "send
+  the bot a message first". Init always baselines the cursor to the newest seen
+  update so stale history is never replayed.
+- **B3 — Markdown fallback.** On a 400 "can't parse entities" from sendMessage,
+  retry the chunk without `parse_mode`. Delivery beats formatting.
+- **B4 — non-text updates** (stickers, photos, edits, service updates) are
+  treated like non-allowlisted chats: logged locally, cursor advances past.
+  Free text = a `message` with `text` only.
+- **B5 — `apiBase` config field** (default `https://api.telegram.org`): the test
+  seam for the mock Bot API server; also covers a future local Bot API server.
+- **B6 — command time/output bounds.** Scripted commands run with a per-command
+  timeout (`commandTimeoutSec`, default 15) and a capped output tail sent back;
+  the reference deployment sets `guardTimeoutSec: 120` on the chat job.
+- **B7 — network outages vs breaker (Part C note).** Exit-2-on-network stays
+  (fail-closed is correct), but 3 minutes of Pi wifi outage = 3 guard errors =
+  breaker tripped = chat dead until a manual `reset-breaker` at the machine. The
+  reference deployment sets `maxConsecutiveFailures: 10–15` on `chat-responder`
+  so short outages survive; the GitHub watchdog remains the alarm for real trips.
+- **B8 — token permission check is POSIX-only** (file mode is meaningless on
+  Windows); skipped with a note on win32.
