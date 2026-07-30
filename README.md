@@ -11,7 +11,7 @@ Open Claude Code CLI and add this repository as a marketplace, then install any 
 /plugin install <plugin-name>@perky.team
 ```
 
-`<plugin-name>` is one of `p-wiki`, `p-flow`, `p-tasks`, `p-statusline`, `p-graph`, `p-shed`, `p-observe` (see below).
+`<plugin-name>` is one of `p-wiki`, `p-flow`, `p-tasks`, `p-statusline`, `p-graph`, `p-shed`, `p-observe`, `p-chat` (see below).
 
 From a non-GitHub git host:
 
@@ -93,6 +93,12 @@ Zero-touch realtime observability with a bundled `pobserve` CLI. Watches the run
 
 Skills: `init`, `watch`, `help`.
 
+### [`p-chat`](./plugins/p-chat/)
+
+A deliberately dumb Telegram channel with a bundled `pchat` CLI — the mouth and ears of a Claude Code loop, never the brain. Runs as a p-shed job guard: scripted `/commands` are answered directly (no Claude launch, works even when Claude is usage-limited); a pending free-text question makes the guard request a Claude responder launch. Fail-closed chat allowlist, at-least-once delivery, zero dependencies.
+
+Skills: `init`, `respond`.
+
 ## Tests
 
 Static validation of `marketplace.json`, every `plugin.json`, every `SKILL.md`, and template references.
@@ -160,6 +166,12 @@ Complements `npm test`: tests catch structural drift in our manifests/skills, `v
 │   │   │   └── plugin.json
 │   │   ├── README.md
 │   │   └── skills/
+│   ├── p-chat/              ← dumb Telegram channel (pchat CLI + p-shed guard)
+│   │   ├── .claude-plugin/
+│   │   │   └── plugin.json
+│   │   ├── README.md
+│   │   ├── skills/
+│   │   └── tools/           ← the pchat CLI (config, queue, api, send, core)
 │   └── p-observe/           ← zero-touch realtime observability (pobserve CLI)
 │       ├── .claude-plugin/
 │       │   └── plugin.json

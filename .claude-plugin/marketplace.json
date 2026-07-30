@@ -40,6 +40,11 @@
       "name": "p-observe",
       "source": "./plugins/p-observe",
       "description": "Zero-touch realtime observability: watches p-shed/p-tasks/p-graph/p-wiki runtime state and emits a normalized human-readable event stream (pobserve watch/status/capture/tui). Skills: init, watch, tui, help."
+    },
+    {
+      "name": "p-chat",
+      "source": "./plugins/p-chat",
+      "description": "Dumb Telegram channel for Claude Code loops: a p-shed job guard + pchat CLI (init, guard, pending, ack, send, reset, status). Scripted /commands answered without Claude; free-text questions trigger a Claude responder launch via p-shed. Zero deps. Skills: init, respond."
     }
   ]
 }
