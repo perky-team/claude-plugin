@@ -7,6 +7,7 @@ import { setJob, rmJob, ValidationError } from './lib/jobs.mjs';
 import { resetBreaker } from './lib/breaker.mjs';
 import { tick as runTick } from './lib/tick.mjs';
 import { runJob } from './lib/launch.mjs';
+import { runGuard } from './lib/guard.mjs';
 import { classifyRun, resolveUsageLimitPattern, truncateOutput } from './lib/classify.mjs';
 import { buildInstall, buildRemove, taskName, crontabLine, applyCrontab, planRemoveCron, scanCrontabTaskIds, crontabHasTask } from './lib/scheduler.mjs';
 import { writeGlobalPause, removeGlobalPause } from './lib/pause.mjs';
@@ -90,6 +91,15 @@ async function main() {
       const job = jobs.find((j) => j.id === id);
       if (!job) return emitJson({ error: { code: 'validation', message: `no such job: ${id}` } }, 2);
       const config = readConfig(root);
+      // Manual runs respect the guard (--no-guard bypasses for debugging) but stay
+      // STATELESS: no counters, no history log — exactly like guardless `run` today.
+      if (job.guard && !args['no-guard']) {
+        const g = await runGuard({ job, defaults, root });
+        if (g.outcome !== 'pass') {
+          const raw = truncateOutput(g.out, g.err);
+          return emitJson({ id, outcome: `guard-${g.outcome}`, guard: { exit: g.exit, timedOut: g.timedOut, durationMs: g.durationMs, ...(raw ? { raw } : {}) } }, 0);
+        }
+      }
       const result = await runJob({ job, defaults, claudeBin: config.claudeBin });
       // Expose the classification (success | usage_limit | failure) and a truncated
       // output tail instead of dumping the full capture buffers inline.
