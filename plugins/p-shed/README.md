@@ -22,8 +22,8 @@ Tool: `node tools/pshed.mjs <command>` (all support `--json`; exit `0` ok / `1` 
 | Command | Purpose |
 |---|---|
 | `tick` | Cron entry point — run every due job once. Invoked by the OS scheduler each minute. |
-| `run <id>` | Run one job immediately, bypassing the schedule (manual/testing). |
-| `set-job` | Add or modify a job (`--schedule`, `--prompt`, `--id`, `--cwd`, `--timeoutSec`, `--permission-mode`, `--allowed-tools`, `--model`, `--effort`, `--max-consecutive-failures`). |
+| `run <id>` `[--no-guard]` | Run one job immediately, bypassing the schedule (manual/testing). Respects the job's guard; `--no-guard` bypasses it for debugging. |
+| `set-job` | Add or modify a job (`--schedule`, `--prompt`, `--id`, `--cwd`, `--timeoutSec`, `--permission-mode`, `--allowed-tools`, `--model`, `--effort`, `--max-consecutive-failures`, `--guard`, `--guard-timeout-sec`). |
 | `rm-job` | Delete a job (`--id`). |
 | `reset-breaker <id>` | Clear a job's tripped circuit breaker and self-pause marker so it schedules again. |
 | `pause` / `resume` | Reversibly halt / resume the **whole** scheduler (`run/PAUSED`; cron stays installed). `pause` accepts `--reason`; both idempotent. |
@@ -37,9 +37,9 @@ Tool: `node tools/pshed.mjs <command>` (all support `--json`; exit `0` ok / `1` 
 
 | File | Tracked? | Contents |
 |---|---|---|
-| `jobs.yml` | git | `version`, `defaults`, `jobs[]{ id, schedule, enabled, cwd?, prompt, timeoutSec?, permissionMode?, allowedTools?, model?, effort?, maxConsecutiveFailures? }` |
+| `jobs.yml` | git | `version`, `defaults`, `jobs[]{ id, schedule, enabled, cwd?, prompt, timeoutSec?, permissionMode?, allowedTools?, model?, effort?, maxConsecutiveFailures?, guard?, guardTimeoutSec? }` |
 | `config.json` | gitignore | `{ nodeBin, claudeBin }` (resolved at init) |
-| `state/<id>.json` | gitignore | per-job `{ lastRun, lastExit, pid, consecutiveFailures, breakerTripped?, breakerReason?, breakerAt?, lastSkipReason?, lastSkipAt?, lastSkipResetAt? }` — one file per job (no shared state file). `lastSkip*` records the most recent usage-limit skip and is cleared once the job runs for real again |
+| `state/<id>.json` | gitignore | per-job `{ lastRun, lastExit, pid, consecutiveFailures, consecutiveGuardFailures?, lastGuard?, breakerTripped?, breakerReason?, breakerAt?, lastSkipReason?, lastSkipAt?, lastSkipResetAt? }` — one file per job (no shared state file). `lastSkip*` records the most recent usage-limit skip and is cleared once the job runs for real again; `lastGuard` records the most recent guard check (`{ at, outcome, exit }`) |
 | `logs/<date>.jsonl` | gitignore | one record per run; auto-rotated (7-day retention) |
 | `run/<id>.pid` | gitignore | duplicate-guard pidfile |
 | `run/<id>.pause` | gitignore | per-job self-pause marker (contents = reason); a job's own run writes it to stop being scheduled |
@@ -82,6 +82,52 @@ run; a per-job `effort` overrides `defaults.effort`. Valid levels are `low`, `me
 it (on both the job and `defaults`) to let `claude` use its own default. The flag is
 **silently skipped for Haiku models** — `--effort` errors on Haiku 4.5 — so a job whose
 resolved `model` matches `haiku` never receives it even when `effort` is set.
+
+## Job guards
+
+A **guard** is an optional cheap shell command in front of a job's Claude launch. On
+each due tick — after every other gate (global pause, self-pause, breaker, live pid) —
+p-shed runs `guard` (`shell: true`, cwd = the job's `cwd` else `defaults.cwd` else the
+repo root, env + `PSHED_JOB_ID` / `PSHED_ROOT`, killed after `guardTimeoutSec`,
+default 30 s) and reads only its exit code:
+
+| Exit | Meaning | Effect |
+|---|---|---|
+| `0` | work exists | launch `claude -p` as usual (log record gains `guarded: true`) |
+| `75` | deliberately quiet — no work this slot | skip silently; **not** a failure |
+| anything else, or timeout | guard is broken | skip + `consecutiveGuardFailures`+1 → shared breaker |
+
+Why 75: it is `EX_TEMPFAIL` in `sysexits.h` ("temporary failure, try again later") and
+no crashing tool emits it by accident — crashes exit 1/2, "not found" is 127. A guard
+author writes `exit 75` deliberately, so an accidentally broken guard always surfaces
+as an error instead of reading as eternal quiet.
+
+Semantics worth knowing:
+
+- **A quiet guard consumes the schedule slot** (like a usage-limit skip): a daily job
+  whose guard said quiet at 09:00 next tries tomorrow — it does not re-poll all day.
+- **Two failure counters, one breaker.** Guard errors increment
+  `consecutiveGuardFailures` (reset by any healthy guard result); run failures keep
+  `consecutiveFailures`. Either reaching `maxConsecutiveFailures` trips the same
+  breaker; `reset-breaker` clears both.
+- **Quiet is silent**: no history-log line (a minutely job must not write 1440
+  lines/day) — freshness is visible in `status` (`lastGuard`, e.g. `quiet 40s ago`).
+  `guard-error` and launches do log.
+- `run <id>` respects the guard; `--no-guard` bypasses it. Manual runs stay stateless.
+- Windows: the guard runs via `cmd.exe`, where `~` does not expand — use real paths in
+  guard commands.
+
+### Guard-only jobs (free scheduled commands)
+
+A job whose guard does the work and exits 75 never launches Claude but keeps full
+p-shed supervision (breaker, `status`): in `cmd && exit 75` a failing `cmd`
+short-circuits the `&&`, the guard exits with `cmd`'s code, and the breaker path
+fires. `prompt` stays required as documentation of what the guard does.
+
+    - id: session-clean
+      schedule: "0 4 * * *"
+      guard: "node tools/clean.mjs && exit 75"
+      prompt: "(guard-only) Nightly cleanup; the guard does the work."
 
 ## Staying stuck-safe: circuit breaker + self-pause
 

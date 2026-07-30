@@ -14,9 +14,12 @@ Collect: cron `schedule` (validate the 5-field form), the `prompt`, optional `cw
 (defaults to `.`), optional `timeoutSec`/`permissionMode`/`allowedTools`, optional
 `model` (passed to `claude --model`), optional `effort` (reasoning-effort level passed
 to `claude --effort`; one of `low|medium|high|xhigh`; omitted ⇒ claude's default;
-ignored for Haiku models), and optional `maxConsecutiveFailures` (circuit breaker
-threshold; default 3, `0` disables). To modify an existing job, pass its `--id`. Run:
-    node "${CLAUDE_PLUGIN_ROOT}/tools/pshed.mjs" set-job --schedule "<cron>" --prompt "<text>" [--id <id>] [--cwd <path>] [--timeoutSec <n>] [--permission-mode <mode>] [--allowed-tools "<list>"] [--model <name>] [--effort <low|medium|high|xhigh>] [--max-consecutive-failures <n>] --json
+ignored for Haiku models), optional `maxConsecutiveFailures` (circuit breaker
+threshold; default 3, `0` disables), optional `guard` (a shell command run before each
+due launch: exit 0 ⇒ launch, exit 75 ⇒ quiet skip, anything else ⇒ guard error counting
+toward the breaker; pass `--guard ""` to clear), and optional `guardTimeoutSec`
+(seconds before the guard is killed; default 30). To modify an existing job, pass its `--id`. Run:
+    node "${CLAUDE_PLUGIN_ROOT}/tools/pshed.mjs" set-job --schedule "<cron>" --prompt "<text>" [--id <id>] [--cwd <path>] [--timeoutSec <n>] [--permission-mode <mode>] [--allowed-tools "<list>"] [--model <name>] [--effort <low|medium|high|xhigh>] [--max-consecutive-failures <n>] [--guard "<cmd>"] [--guard-timeout-sec <n>] --json
 On exit code 2 (`error.code = validation`), show the message (e.g. bad cron) and ask again.
 
 ## Delete

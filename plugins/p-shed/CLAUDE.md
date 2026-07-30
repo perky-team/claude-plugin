@@ -37,4 +37,12 @@ Pure scheduler/launcher. Key decisions:
 - **State writes are read-modify-write.** `tick` merges into the existing state object
   (spread prev, then set lastRun/lastExit/pid/consecutiveFailures/breaker) rather than
   replacing it, so breaker fields survive across ticks.
+- **Guards: one breaker, two counters, exit 75.** A job's optional `guard` command
+  (lib/guard.mjs) runs after all other gates and before the launch; 0 = launch,
+  75 = quiet skip (EX_TEMPFAIL — deliberate, so a crash can never read as quiet;
+  do NOT "simplify" to 0/nonzero), else = guard error. Guard errors have their own
+  `consecutiveGuardFailures` (reset by any healthy guard result, not by a healthy
+  run) but trip the same breaker. Quiet skips consume the schedule slot and write
+  NO history-log line — state (`lastGuard`) + `status` only. `run <id>` respects
+  the guard (`--no-guard` bypasses) and stays stateless.
 - Deps vendored via `scripts/vendor-deps.mjs` (js-yaml only), same pattern as p-tasks.
