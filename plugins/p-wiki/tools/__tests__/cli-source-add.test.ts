@@ -1,9 +1,11 @@
-import { describe, expect, it, beforeEach, afterEach } from 'vitest';
+import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { createFakeConfluence } from './fixtures/fake-confluence.mjs';
+import { getPage, sourceAdd } from '../pwiki.mjs';
 
 const cli = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'pwiki.mjs');
 
@@ -162,9 +164,8 @@ describe('pwiki source add', () => {
     expect(readFileSync(join(primary, 'docs', 'wiki', '.pwiki.json'), 'utf-8')).toBe(before);
   });
 
-  it('refuses to add a source that duplicates the primary role', () => {
-    // 'fs' is taken, so use a fresh name pointing at our own root — allowed by config
-    // validation, but the name/role check must still keep primary and mirrors distinct.
+  it('refuses a name already taken by a mirror, not just by the primary', () => {
+    // One name, one role: reusing a mirror's name as a source would change where writes go.
     const cfg = readCfg(primary);
     cfg.mirrors = ['backup'];
     cfg.destinations.backup = { kind: 'fs', path: other };
@@ -172,5 +173,146 @@ describe('pwiki source add', () => {
     const r = run(primary, 'source', 'add', 'backup', '--kind=fs', `--path=${other}`);
     expect(r.status).toBe(1);
     expect(JSON.parse(r.out).error.code).toBe('source-exists');
+  });
+
+  it('refuses an fs path that has a docs/wiki folder but no wiki in it', () => {
+    // A stale checkout or a half-deleted wiki: the folder exists, the marker does not.
+    const empty = mkdtempSync(join(tmpdir(), 'pwiki-srcadd-empty-'));
+    try {
+      mkdirSync(join(empty, 'docs', 'wiki'), { recursive: true });
+      const before = readFileSync(join(primary, 'docs', 'wiki', '.pwiki.json'), 'utf-8');
+      const r = run(primary, 'source', 'add', 'specs', '--kind=fs', `--path=${empty}`);
+      expect(r.status).toBe(1);
+      const json = JSON.parse(r.out);
+      expect(json.error.code).toBe('source-unreachable');
+      expect(json.error.message).toMatch(/CLAUDE\.md/);
+      expect(readFileSync(join(primary, 'docs', 'wiki', '.pwiki.json'), 'utf-8')).toBe(before);
+    } finally {
+      rmSync(empty, { recursive: true, force: true });
+    }
+  });
+});
+
+/**
+ * `--from-config` is the documented route for a Confluence source, because its block
+ * carries space and page ids nobody should retype. Copying the block is only half the
+ * job: what matters is that the copy still reads. This exercises both halves in one go —
+ * add the source from a foreign config, then read a page through it on a fake transport.
+ */
+describe('pwiki source add --from-config (Confluence block, fake transport)', () => {
+  let dir: string;
+  let foreignDir: string;
+  let cwd: string;
+  let exitSpy: any;
+  let stdoutSpy: any;
+  let out: string;
+
+  const CONF_BLOCK = {
+    kind: 'confluence', siteUrl: 'https://x', spaceKey: 'ENG', spaceId: 'S1',
+    rootPageId: '100', titlePrefix: 'Specs',
+    subParents: { concept: '101', person: '102', source: '103', query: '104' },
+  };
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'pwiki-fromcfg-'));
+    foreignDir = mkdtempSync(join(tmpdir(), 'pwiki-fromcfg-foreign-'));
+    mkdirSync(join(dir, 'docs', 'wiki', 'pages', 'concept'), { recursive: true });
+    writeFileSync(join(dir, 'docs', 'wiki', 'CLAUDE.md'), 'placeholder');
+    writeFileSync(join(dir, 'docs', 'wiki', '.pwiki.json'), JSON.stringify({
+      primary: 'fs', mirrors: [], destinations: { fs: { kind: 'fs' } },
+    }), 'utf-8');
+    // The other wiki's own config — Confluence-primary, as a specs wiki would be.
+    mkdirSync(join(foreignDir, 'docs', 'wiki'), { recursive: true });
+    writeFileSync(join(foreignDir, 'docs', 'wiki', '.pwiki.json'), JSON.stringify({
+      primary: 'confluence', mirrors: [], destinations: { confluence: CONF_BLOCK },
+    }), 'utf-8');
+
+    cwd = process.cwd();
+    process.chdir(dir);
+    process.env.PWIKI_CONFLUENCE_EMAIL = 'a@b.c';
+    process.env.PWIKI_CONFLUENCE_TOKEN = 't';
+    out = '';
+    exitSpy = vi.spyOn(process, 'exit').mockImplementation(((code?: number) => { throw new Error(`exit:${code ?? 0}`); }) as any);
+    stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation(((s: string) => { out += s; return true; }) as any);
+  });
+
+  afterEach(() => {
+    process.chdir(cwd);
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(foreignDir, { recursive: true, force: true });
+    exitSpy.mockRestore();
+    stdoutSpy.mockRestore();
+  });
+
+  const call = async (fn: () => Promise<unknown>, expectedExit: number) => {
+    try {
+      await fn();
+      throw new Error('expected the command to exit');
+    } catch (e: any) {
+      expect(e.message).toBe(`exit:${expectedExit}`);
+    }
+  };
+
+  it('copies the whole Confluence block, ids included, and the copy reads a page', async () => {
+    await call(
+      () => sourceAdd({ _: ['specs'], 'from-config': join(foreignDir, 'docs', 'wiki', '.pwiki.json'), 'no-verify': true }),
+      0,
+    );
+    const cfg = JSON.parse(readFileSync(join(dir, 'docs', 'wiki', '.pwiki.json'), 'utf-8'));
+    expect(cfg.sources).toEqual(['specs']);
+    // Verbatim copy: a dropped spaceId or subParent would break reads later, not now.
+    expect(cfg.destinations.specs).toEqual(CONF_BLOCK);
+
+    const adf = { type: 'doc', version: 1, content: [{ type: 'heading', attrs: { level: 1 }, content: [{ type: 'text', text: 'Fees' }] }] };
+    const fake = createFakeConfluence({
+      spaces: [{ id: 'S1', key: 'ENG', name: 'Eng' }],
+      initialPages: [
+        { id: '200', title: 'Fees', parentId: '101', body: adf, properties: [
+          { key: 'pwiki-id', value: 'fees' }, { key: 'pwiki-type', value: 'concept' },
+          { key: 'pwiki-title', value: 'Fees' }, { key: 'pwiki-tags', value: '[]' },
+        ] },
+      ],
+    });
+    out = '';
+    await call(
+      () => getPage({ _: ['confluence://concept/fees'], source: 'specs', format: 'json' }, { transport: fake.transport }),
+      0,
+    );
+    const json = JSON.parse(out);
+    expect(json.frontmatter.title).toBe('Fees');
+    expect(json.body).toBe('# Fees');
+  });
+
+  it('--from-destination picks a named block instead of the foreign primary', async () => {
+    writeFileSync(join(foreignDir, 'docs', 'wiki', '.pwiki.json'), JSON.stringify({
+      primary: 'fs', mirrors: ['confluence-mirror'],
+      destinations: { fs: { kind: 'fs' }, 'confluence-mirror': CONF_BLOCK },
+    }), 'utf-8');
+    await call(
+      () => sourceAdd({
+        _: ['specs'],
+        'from-config': join(foreignDir, 'docs', 'wiki', '.pwiki.json'),
+        'from-destination': 'confluence-mirror',
+        'no-verify': true,
+      }),
+      0,
+    );
+    expect(JSON.parse(readFileSync(join(dir, 'docs', 'wiki', '.pwiki.json'), 'utf-8')).destinations.specs).toEqual(CONF_BLOCK);
+  });
+
+  it('rejects a --from-destination that is not in the foreign config', async () => {
+    out = '';
+    await call(
+      () => sourceAdd({
+        _: ['specs'],
+        'from-config': join(foreignDir, 'docs', 'wiki', '.pwiki.json'),
+        'from-destination': 'nope',
+        'no-verify': true,
+      }),
+      1,
+    );
+    expect(JSON.parse(out).error.code).toBe('bad-args');
+    // Nothing written: the config must still be the untouched fs-only one.
+    expect(JSON.parse(readFileSync(join(dir, 'docs', 'wiki', '.pwiki.json'), 'utf-8')).sources).toBeUndefined();
   });
 });

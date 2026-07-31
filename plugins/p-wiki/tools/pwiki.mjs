@@ -371,8 +371,14 @@ function blockFromConfig(fromPath, args, root) {
 /** Cheap reachability probe: FS checks the folder, every other kind runs a 1-hit search. */
 async function verifySource(name, block, root, transport) {
   if (block.kind === 'fs') {
+    // Check the same marker `findWikiRoot` uses, not just the folder: a path that happens
+    // to hold an empty docs/wiki/ (a stale checkout, a half-deleted wiki, the wrong repo)
+    // would otherwise pass the probe and then return nothing on every search.
     const abs = resolve(root, block.path);
-    if (!existsSync(join(abs, 'docs', 'wiki'))) throw new Error(`no wiki at ${join(abs, 'docs', 'wiki')}`);
+    const marker = join(abs, 'docs', 'wiki', 'CLAUDE.md');
+    if (!existsSync(marker)) {
+      throw new Error(`no p-wiki at ${join(abs, 'docs', 'wiki')} (expected its CLAUDE.md)`);
+    }
     return;
   }
   const dest = makeDestination(name, block, root, { transport });
