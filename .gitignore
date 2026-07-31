@@ -17,3 +17,6 @@ node_modules/
 
 # p-graph local index — rebuildable, never committed
 .pgraph/
+
+# vitest last-run report — regenerated every run, used to identify flaky tests
+.vitest-last-run.json

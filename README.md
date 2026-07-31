@@ -127,6 +127,12 @@ Two layers run together. The marketplace layer is static: it validates `marketpl
 
 No test needs the network or a logged-in service. The few that do talk to a real Confluence are skipped unless their environment variables are set.
 
+Every run also writes `.vitest-last-run.json` (gitignored) beside the console output. When a run fails — especially one of the e2e tests that spawn processes and fail rarely — read that file instead of scrolling back:
+
+```bash
+node -e "for (const f of JSON.parse(require('fs').readFileSync('.vitest-last-run.json','utf8')).testResults) for (const a of f.assertionResults) if (a.status==='failed') console.log(f.name, '::', a.fullName)"
+```
+
 ## Validate
 
 Run Claude Code's own validator on the marketplace and every plugin. Requires the `claude` CLI on PATH.
