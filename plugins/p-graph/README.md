@@ -94,7 +94,9 @@ about the same as a graph query, and it cannot silently omit a hit.
 
 ### Name resolution
 
-Each symbol carries a bare `name` (used for search/UX) and a qualified `qname`. Call edges are resolved conservatively: an edge links to a target only when exactly one symbol matches — first by an exact qualified-name match, then falling back to a unique bare-name match. A genuinely ambiguous name (the same bare name in two places, with no qualifier to tell them apart) is left **unresolved** rather than linked to a guess. That guard is not a proof of correctness: the resolver matches names, not types. A call on a function parameter or a local variable has no recorded type, so a bare name that happens to be unique in the repo still links — even when the real receiver is a different type altogether. Interface dispatch is not resolved at all; those calls are dropped by design and show up only in the gap report below. Measured on gohugoio/hugo before this round of fixes: exact qualified matches were correct in 18 of 18 hand-checked cases, and bare-name matches in 20 of 22 — Task 8 will publish fresh numbers. Treat a `callers` row as a strong lead, not as a fact. Calls into the standard library or external packages have no symbol in the repo and likewise stay unresolved.
+Each symbol carries a bare `name` (used for search/UX) and a qualified `qname`. Call edges are resolved conservatively: an edge links to a target only when exactly one symbol matches — first by an exact qualified-name match, then falling back to a unique bare-name match. A genuinely ambiguous name (the same bare name in two places, with no qualifier to tell them apart) is left **unresolved** rather than linked to a guess. That guard is not a proof of correctness: the resolver matches names, not types. A call on a function parameter or a local variable has no recorded type. So a bare name that is unique in the repo still links — even when the real receiver is a different type. Interface dispatch is not analysed, so a call through an interface parameter or local variable behaves the same way: no type to check, and no warning if the name it links to is the wrong one. Calls into the standard library or external packages have no symbol in the repo and stay unresolved the same way.
+
+Measured on gohugoio/hugo before this round of fixes: exact qualified matches were correct in 18 of 18 hand-checked cases, and bare-name matches in 20 of 22. Treat a `callers` row as a strong lead, not as a fact.
 
 For **Go**, `qname` is package- and receiver-qualified — a package-level `New` in package `filesink` becomes `filesink.New`, and a method becomes `filesink.Writer.Write`. Call sites are qualified the same way: `filesink.New(...)` and same-package `New()` calls both resolve to `filesink.New`, so common names (`New`, `Write`, `Close`, `Run`) no longer collapse into one ambiguous bucket.
 
@@ -118,7 +120,14 @@ So every graph query names its own gaps. `callers`, `callees`, `impact` and `con
   Confirm with a text search before treating this answer as complete.
 ```
 
-A gap is matched by the **bare name** each call site actually wrote, not by the name you asked about. That is what finds a call made through an import alias (`bp.ListGroups` for `bufferpool.ListGroups`), through a local variable that shadows a package name, or through a receiver-qualified guess whose target does not exist. Three groups are reported separately, so the list stays short enough to read: call sites that may be a real miss are listed (capped at 20, with a `… and N more` line past that); same-name call sites in files that cannot even see the target's package are counted; and calls that leave the repo are counted. `--json` returns every row with its `reason` and `reachable` fields.
+A gap is matched by the **bare name** each call site actually wrote, not by the name you asked about. That is what finds a call made through an import alias (`bp.ListGroups` for `bufferpool.ListGroups`), through a local variable that shadows a package name, or through a receiver-qualified guess whose target does not exist.
+
+Three groups are reported separately, so the list stays short enough to read:
+- call sites that may be a real miss — **listed**, up to 20 rows, then `… and N more`;
+- same-name call sites in files that cannot even see the target's package — **counted**, not listed;
+- calls that leave the repo — **counted**, not listed.
+
+`--json` returns every row with its `reason` and `reachable` fields.
 
 `callers` also cannot show a caller row for a call made outside any indexed symbol — at module scope, or inside a callback that is not a definition. Those call sites are resolved in the graph but have no source symbol, so they appear in the gap report as `outside any indexed symbol` instead of vanishing.
 

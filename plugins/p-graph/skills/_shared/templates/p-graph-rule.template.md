@@ -21,10 +21,13 @@ below — a text search costs about the same and cannot silently miss a hit.
 | Several symbols at once | `pgraph explore A B C` |
 | What files are under path/ | `pgraph files path/` |
 
-**Completeness:** the graph links a call only when it can name exactly one target.
-A call it cannot type — a method on an interface, a parameter, a local variable, or
-any ambiguous bare name — is dropped, and `callers` / `impact` / `trace` walk
-resolved calls only. `callers`, `callees`, `impact` and `context` print
+**Completeness:** the graph links a call by matching names, not by checking types.
+A genuinely ambiguous bare name — shared by two or more repo symbols, with nothing
+to tell them apart — is left unresolved, and `callers` / `impact` / `trace` walk
+resolved calls only. A call through an interface, a parameter, or a local variable
+has no type the graph can check: when its bare name is unique it still links,
+silently, with no guarantee the receiver is the type it names. `callers`,
+`callees`, `impact` and `context` print
 `⚠ N call sites missing from this answer` with each `file:line`, plus a count of
 same-name call sites in files that cannot see the target and a count of calls
 that leave the repo; `status` shows the repo-wide share. Gaps are grouped —

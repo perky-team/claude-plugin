@@ -23,10 +23,14 @@ Refresh with `/p-graph:sync`. Use the graph for candidates and for a transitive
 silently miss a hit.
 
 **Read the gap banner.** `callers` / `callees` / `impact` / `context` end with
-`⚠ N call sites missing from this answer` when the graph could not tell which
-symbol a call targets (interface, parameter or local receiver; ambiguous bare
-name), or when a resolved call has no caller symbol to show. Gaps are grouped —
-listed rows are worth checking, the two counted groups are scale. Pass the
-banner on and grep to confirm. `status` shows the repo-wide share as
-`unattributed calls N/M`. Always ask by `qname` — a bare name merges every
-symbol that shares it.
+`⚠ N call sites missing from this answer` when a call's bare name is genuinely
+ambiguous — shared by two or more repo symbols, with nothing to tell them apart.
+`callers`, `impact` and `context` also list a resolved call that has no caller
+symbol to show (made at module scope, or inside a non-definition callback);
+`callees` does not have that case. A call through an interface, a parameter, or
+a local variable has no type the graph can check: when its bare name is unique
+it still links, with no banner and no guarantee the receiver is the type it
+names. Gaps are grouped — listed rows are worth checking, the two counted
+groups are scale. Pass the banner on and grep to confirm. `status` shows the
+repo-wide share as `unattributed calls N/M`. Always ask by `qname` — a bare
+name merges every symbol that shares it.

@@ -56,10 +56,12 @@ their callers into one list with no marker. `callers store.Postgres.Get` asks ab
 
 ## Step 3 — Report the gaps, always
 
-The graph resolves a call only when it can name exactly one target. A call it cannot pin down —
-a method on an interface, on a parameter, on a local variable, or any ambiguous bare name — is
-**dropped**, and `callers` / `impact` / `trace` walk resolved calls only. So a short list is not
-proof of a short list.
+The graph resolves a call by matching names, not by checking types. A genuinely ambiguous bare
+name — used by two or more repo symbols, with nothing to tell them apart — is left **unresolved**
+and shows up in the gap report below. A call through an interface, a parameter, or a local
+variable carries no type the graph can check, so when its bare name happens to be unique in the
+repo, the call still links — silently, with no warning, and possibly to the wrong symbol. So a
+short list, even a **clean** one with no banner at all, is not proof that every row is correct.
 
 `callers`, `callees`, `impact` and `context` therefore print, after the rows:
 
@@ -102,8 +104,9 @@ Say so plainly and point elsewhere — don't guess:
   name may be misspelled, or external (stdlib / third-party symbols have no node in the graph),
   or the graph is stale (suggest `/p-graph:sync`).
 - **The question is "have I found them all?"** — the graph alone cannot answer that. Use it to
-  find the call sites fast, then grep the bare name to confirm the count. Interface methods are
-  the known weak spot: a call through an interface field carries no type the graph can follow.
+  find the call sites fast, then grep the bare name to confirm the count. Interface calls are the
+  known risk: the graph has no type for the receiver, so a unique bare name still links — even to
+  the wrong type — and no banner marks it. A parameter or local variable behaves the same way.
 - **The question is about literal text** — string contents, comments, log messages, config values
   — rather than code structure. The graph only knows symbols and call/import edges; point the user
   to grep / Read for text search.
