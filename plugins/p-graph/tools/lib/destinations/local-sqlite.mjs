@@ -369,13 +369,19 @@ function attachReadHelpers(store, db, hasFts) {
            SELECT 1 FROM nodes ${nodesAlias} WHERE ${nodesAlias}.lang = ${lang}
              AND ${nodesAlias}.qname LIKE substr(${dstName}, 1, instr(${dstName}, '.') - 1) || '.%'
          ) THEN 1 ELSE 0 END`;
-  // These four are prepared lazily, inside the helpers that use them, like
-  // every other statement in this function. gapRows names e.dst_bare/e.lang/
+  // These are prepared lazily, inside the helpers that use them, like every
+  // other statement in this function. gapRows names e.dst_bare/e.lang/
   // e.external, which do not exist before schema 6 — preparing it eagerly here
   // would throw as soon as attachReadHelpers runs, before any query is even
   // asked for, which breaks the read-only fallback on any pre-6 database (the
   // fallback exists precisely for a filesystem that can never be migrated).
-  const gapRowsSql = `
+  //
+  // Both are built with an `IN (...)` list sized to the batch instead of a
+  // fixed `= ?`, so collectGaps can look up every name (or every id) it needs
+  // in one round trip instead of one round trip per name/id. SQLite bounds the
+  // number of parameters a statement can bind, so a caller with a big batch
+  // must split it — see `chunk` below.
+  const gapRowsByNameSql = (n) => `
     SELECT e.dst_name, e.dst_bare, e.file, e.line, e.external, e.lang,
            s.qname AS src_qname,
            CASE WHEN e.external = 1 THEN 0 ELSE (
@@ -385,10 +391,20 @@ function attachReadHelpers(store, db, hasFts) {
            ${QUALIFIER_KNOWN_SQL('e.dst_name', 'nq', 'e.lang')} AS qualifier_known
     FROM edges e LEFT JOIN nodes s ON s.id = e.src_id
     WHERE e.kind = 'call' AND e.dst_id IS NULL
-      AND (e.dst_name = ? OR e.dst_bare = ?)`;
-  const noCallerRowsSql = `
+      AND (e.dst_name IN (${Array(n).fill('?').join(',')})
+        OR e.dst_bare IN (${Array(n).fill('?').join(',')}))`;
+  const noCallerRowsByIdSql = (n) => `
     SELECT e.dst_name, e.file, e.line FROM edges e
-    WHERE e.kind = 'call' AND e.dst_id = ? AND e.src_id IS NULL`;
+    WHERE e.kind = 'call' AND e.src_id IS NULL
+      AND e.dst_id IN (${Array(n).fill('?').join(',')})`;
+  // SQLite's bound-parameter cap (SQLITE_MAX_VARIABLE_NUMBER) can be as low as
+  // 999. 400 leaves headroom even when a name list is bound twice — once for
+  // dst_name IN (...), once for dst_bare IN (...) — 800 params at that cap.
+  const chunk = (arr, size) => {
+    const out = [];
+    for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+    return out;
+  };
   const fileInPackageSql = `SELECT 1 FROM nodes WHERE file = ? AND qname LIKE ? LIMIT 1`;
   // Import paths are stored quoted: "x/internal/bufferpool" or "bufferpool".
   // SQL LIKE treats `_` as a one-character wildcard, so a package name that
@@ -424,28 +440,55 @@ function attachReadHelpers(store, db, hasFts) {
   // share one `seen` set, so a caller that wants no-caller rows for several
   // node ids at once (gapsAround, across a whole impact set) never needs a
   // second dedupe pass on top of this one.
+  //
+  // gapsAround can pass hundreds of symbols (one per impact-reached node).
+  // Querying per symbol per name variant was the perf bug this batches away:
+  // one name-matched symbol used to cost up to 3 round trips, so hundreds of
+  // reached nodes meant hundreds of round trips to print a handful of rows.
+  // Below, every name variant from every symbol is collected once into one
+  // list and looked up in one (possibly chunked) query; the no-caller ids get
+  // the same treatment. The row shape and the `seen`-based dedupe are exactly
+  // as before — only the number of trips to SQLite changes.
   const collectGaps = (symbols, callerCheckIds = []) => {
-    const gapRowsStmt = db.prepare(gapRowsSql);
     const seen = new Set(), out = [];
-    for (const { names, pkg } of symbols) {
+
+    // The old code ran one query per (symbol, name) pair; the first symbol
+    // whose query surfaced a given row locked in that symbol's pkg for the
+    // `reachable` check, because later symbols found the row already in
+    // `seen` and skipped it. To batch the query while keeping that same
+    // per-row pkg choice, record which symbol (by position) first offers each
+    // name variant, then for a returned row pick whichever of its dst_name /
+    // dst_bare owners comes first.
+    const owner = new Map(); // name -> { pkg, idx }
+    const allNames = [];
+    symbols.forEach(({ names, pkg }, idx) => {
       for (const name of new Set(names.filter(Boolean).map(String))) {
-        for (const r of gapRowsStmt.all(name, name)) {
-          const key = `${r.file}|${r.line}|${r.dst_name}`;
-          if (seen.has(key)) continue;
-          seen.add(key);
-          const reason = r.candidates > 0 && r.qualifier_known ? 'ambiguous' : 'external';
-          out.push({
-            file: r.file, line: r.line, dst_name: r.dst_name, src_qname: r.src_qname,
-            reason,
-            reachable: reason === 'ambiguous' && r.lang === 'go' ? reachableIn(r.file, pkg) : 1,
-          });
-        }
+        if (!owner.has(name)) { owner.set(name, { pkg, idx }); allNames.push(name); }
+      }
+    });
+    const pkgForRow = (r) => {
+      const byName = owner.get(r.dst_name), byBare = owner.get(r.dst_bare);
+      if (byName && byBare) return (byName.idx <= byBare.idx ? byName : byBare).pkg;
+      return (byName ?? byBare)?.pkg ?? null;
+    };
+    for (const names of chunk(allNames, 400)) {
+      const stmt = db.prepare(gapRowsByNameSql(names.length));
+      for (const r of stmt.all(...names, ...names)) {
+        const key = `${r.file}|${r.line}|${r.dst_name}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const reason = r.candidates > 0 && r.qualifier_known ? 'ambiguous' : 'external';
+        out.push({
+          file: r.file, line: r.line, dst_name: r.dst_name, src_qname: r.src_qname,
+          reason,
+          reachable: reason === 'ambiguous' && r.lang === 'go' ? reachableIn(r.file, pkgForRow(r)) : 1,
+        });
       }
     }
     if (callerCheckIds.length) {
-      const noCallerStmt = db.prepare(noCallerRowsSql);
-      for (const id of callerCheckIds) {
-        for (const r of noCallerStmt.all(id)) {
+      for (const ids of chunk([...new Set(callerCheckIds)], 400)) {
+        const stmt = db.prepare(noCallerRowsByIdSql(ids.length));
+        for (const r of stmt.all(...ids)) {
           const key = `${r.file}|${r.line}|${r.dst_name}`;
           if (seen.has(key)) continue;
           seen.add(key);
