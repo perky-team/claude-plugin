@@ -29,13 +29,13 @@ describe('cli auto-refresh', () => {
     initRepo();
     run(['index', '--full']);
     // baseline: only foo calls bar
-    expect(JSON.parse(run(['callers', 'bar', '--json']).stdout).map((r) => r.name)).toEqual(['foo']);
+    expect(JSON.parse(run(['callers', 'bar', '--json']).stdout).callers.map((r) => r.name)).toEqual(['foo']);
 
     // add a second caller, do NOT sync
     writeFileSync(join(dir, 'a.ts'),
       'export function foo() { bar(); }\nexport function bar() {}\nexport function baz() { bar(); }');
     const r = run(['callers', 'bar', '--json']);
-    const names = JSON.parse(r.stdout).map((x) => x.name).sort();
+    const names = JSON.parse(r.stdout).callers.map((x) => x.name).sort();
     expect(names).toEqual(['baz', 'foo']);           // auto-refreshed
     expect(r.stderr).toContain('p-graph: refreshing');
   }, 30000);
@@ -45,7 +45,7 @@ describe('cli auto-refresh', () => {
     run(['index', '--full']);
     const r = run(['callers', 'bar', '--json']);
     expect(r.stderr).not.toContain('refreshing');
-    expect(JSON.parse(r.stdout).map((x) => x.name)).toEqual(['foo']);
+    expect(JSON.parse(r.stdout).callers.map((x) => x.name)).toEqual(['foo']);
   }, 30000);
 
   it('a non-source edit does not trigger a refresh', () => {
@@ -63,7 +63,7 @@ describe('cli auto-refresh', () => {
     writeFileSync(join(dir, 'a.ts'),
       'export function foo() { bar(); }\nexport function bar() {}\nexport function baz() { bar(); }');
     const r = run(['callers', 'bar', '--json', '--stale-ok']);
-    expect(JSON.parse(r.stdout).map((x) => x.name)).toEqual(['foo']); // NOT refreshed
+    expect(JSON.parse(r.stdout).callers.map((x) => x.name)).toEqual(['foo']); // NOT refreshed
     expect(r.stderr).toContain('⚠ p-graph STALE: 1 files changed since index');
   }, 30000);
 
@@ -73,7 +73,7 @@ describe('cli auto-refresh', () => {
     writeFileSync(join(dir, 'a.ts'),
       'export function foo() { bar(); }\nexport function bar() {}\nexport function baz() { bar(); }');
     const r = run(['callers', 'bar', '--json'], { PGRAPH_AUTOREFRESH: '0' });
-    expect(JSON.parse(r.stdout).map((x) => x.name)).toEqual(['foo']);
+    expect(JSON.parse(r.stdout).callers.map((x) => x.name)).toEqual(['foo']);
     expect(r.stderr).toContain('⚠ p-graph STALE:');
   }, 30000);
 
@@ -84,7 +84,7 @@ describe('cli auto-refresh', () => {
     writeFileSync(join(dir, 'a.ts'), 'export function foo() { bar(); }\nexport function bar() {}');
     run(['index', '--full']);
     const r = run(['callers', 'bar', '--json']);
-    expect(JSON.parse(r.stdout).map((x) => x.name)).toEqual(['foo']); // still answers
+    expect(JSON.parse(r.stdout).callers.map((x) => x.name)).toEqual(['foo']); // still answers
     expect(r.stderr).toContain('cannot verify freshness');
   }, 30000);
 
@@ -97,7 +97,7 @@ describe('cli auto-refresh', () => {
     store.close();
     const r = run(['callers', 'bar', '--json']);
     expect(r.stderr).toContain('rebuilding graph after schema upgrade');
-    expect(JSON.parse(r.stdout).map((x) => x.name)).toEqual(['foo']); // answers off the rebuilt graph
+    expect(JSON.parse(r.stdout).callers.map((x) => x.name)).toEqual(['foo']); // answers off the rebuilt graph
     // schema is now current, so a second query is the fast path (no rebuild).
     expect(run(['callers', 'bar', '--json']).stderr).not.toContain('rebuilding');
   }, 30000);

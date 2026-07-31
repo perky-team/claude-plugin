@@ -17,9 +17,11 @@ const run = (args) => execFileSync('node', [CLI, ...args], { cwd: dir, encoding:
 describe('cli graph queries', () => {
   it('callers/callees/impact/trace/context/explore', () => {
     run(['index', '--full']);
-    expect(JSON.parse(run(['callers', 'bar', '--json'])).some((r) => r.qname === 'foo')).toBe(true);
-    expect(JSON.parse(run(['callees', 'foo', '--json'])).some((r) => r.qname === 'bar')).toBe(true);
-    expect(JSON.parse(run(['impact', 'baz', '--json'])).map((r) => r.qname).sort()).toEqual(['bar', 'foo']);
+    // Graph answers are objects: the rows plus the call sites the graph could
+    // not attribute, so an incomplete answer can never look complete.
+    expect(JSON.parse(run(['callers', 'bar', '--json'])).callers.some((r) => r.qname === 'foo')).toBe(true);
+    expect(JSON.parse(run(['callees', 'foo', '--json'])).callees.some((r) => r.qname === 'bar')).toBe(true);
+    expect(JSON.parse(run(['impact', 'baz', '--json'])).impact.map((r) => r.qname).sort()).toEqual(['bar', 'foo']);
     expect(JSON.parse(run(['trace', 'foo', 'baz', '--json'])).path).toEqual(['foo', 'bar', 'baz']);
     expect(JSON.parse(run(['context', 'bar', '--json'])).node.qname).toBe('bar');
     expect(JSON.parse(run(['explore', 'foo', 'baz', '--json'])).length).toBe(2);

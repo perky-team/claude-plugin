@@ -69,10 +69,13 @@ function goFieldTypeName(typeNode, pkg) {
 // qualifier can't be classified as a package (method call on a value/expr) or
 // when the call is a builtin / lives in a dot-importing file.
 //
-// For `recvVar.field.Method()` (operand is a `recvVar.field` selector) it returns
-// structured info {bare, recvVar, field, method} so the build-time resolver can
-// look the field's static type up in the field-type table; `bare` stays as the
-// fallback dst_name if the type can't be inferred.
+// Two shapes return structured info instead of a plain name, for the caller to
+// bind against the enclosing method's receiver:
+//   `recvVar.field.Method()` -> {bare, recvVar, field, method} — the field's
+//      static type is looked up in the field-type table at build time.
+//   `recvVar.Method()`       -> {bare, recvVar, method} — no field, so the
+//      receiver's own type names the target directly.
+// `bare` stays as the fallback dst_name when neither can be bound.
 function goCallTarget(c, { pkg, importNames, hasDotImport }) {
   const node = c.node;
   if (node?.type === 'field_identifier') {
@@ -87,10 +90,39 @@ function goCallTarget(c, { pkg, importNames, hasDotImport }) {
         return { bare: c.text, recvVar: innerRecv.text, field: innerField.text, method: c.text };
       }
     }
-    return c.text; // receiver type unknown (no type inference) — keep bare name
+    if (operand?.type === 'identifier') {
+      return { bare: c.text, recvVar: operand.text, method: c.text };
+    }
+    return c.text; // receiver is an expression, not a name — keep bare name
   }
   if (pkg && !hasDotImport && !GO_BUILTINS.has(c.text)) return `${pkg}.${c.text}`;
   return c.text;
+}
+
+// Kinds that own methods, so a `this`/`self` call inside one of their methods
+// can be bound to them.
+const OWNER_KINDS = new Set(['class', 'struct', 'interface']);
+
+// The type a `this.m()` / `this->m()` / `self.m()` call belongs to, for languages
+// where qname comes from lexical nesting (TS/JS, Python, C++). The owning type is
+// the enclosing method's container, so no type inference is needed — but a bare
+// `m` would collide with every same-named method in the repo and get dropped as
+// ambiguous. Returns the owner def, or null when the receiver isn't the enclosing
+// object (a plain variable, or a `this` inside a nested function whose container
+// is not a type).
+function selfCallOwner(c, lang, defs, enclosing) {
+  if (!enclosing?.container_id) return null;
+  const parent = c.node?.parent;
+  // TS/JS member_expression uses `object`; C++ field_expression uses `argument`;
+  // Python attribute uses `object`.
+  const recv = parent?.childForFieldName?.('object') ?? parent?.childForFieldName?.('argument');
+  if (!recv) return null;
+  // Only Python names the receiver with an ordinary identifier, so restrict the
+  // by-name check to it: a TS variable called `self` must not be mistaken for it.
+  const isSelf = lang === 'py' ? (recv.text === 'self' || recv.text === 'cls') : recv.type === 'this';
+  if (!isSelf) return null;
+  const owner = defs.find((d) => d.id === enclosing.container_id);
+  return owner && OWNER_KINDS.has(owner.kind) ? owner : null;
 }
 
 export async function extract({ file, lang, langId, scm, source }) {
@@ -211,15 +243,29 @@ export async function extract({ file, lang, langId, scm, source }) {
     const target = goCtx && kind === 'call' ? goCallTarget(c, goCtx) : c.text;
     if (target && typeof target === 'object') {
       dst_name = target.bare; // bare method name — the fallback if we can't infer the type
-      // Bind the field-selector only when its receiver var IS the enclosing
-      // method's own receiver and that receiver's type is known. Anything else
-      // (plain function, param, local var) keeps the bare-name fallback — no guessing.
-      if (enclosing?.kind === 'method' && enclosing.recvVar && enclosing.recvVar === target.recvVar && enclosing.recvType) {
+      // Bind only when the call's receiver var IS the enclosing method's own
+      // receiver and that receiver's type is known. Anything else (plain
+      // function, param, local var) keeps the bare-name fallback — no guessing.
+      const onOwnReceiver = enclosing?.kind === 'method' && enclosing.recvVar &&
+        enclosing.recvVar === target.recvVar && enclosing.recvType;
+      if (onOwnReceiver && target.field) {
         field_key = `${enclosing.recvType}.${target.field}`;
+        method = target.method;
+      } else if (onOwnReceiver) {
+        // `s.M()` — the receiver's own type names the target exactly. `method`
+        // keeps the bare name so a promoted method of an embedded struct (no
+        // `<recvType>.M` node exists) still falls back instead of vanishing.
+        dst_name = `${enclosing.recvType}.${target.method}`;
         method = target.method;
       }
     } else {
       dst_name = target;
+      // Same idea for lexically-nested languages: `this.m()` / `self.m()` belongs
+      // to the enclosing type, so name it instead of leaving an ambiguous bare `m`.
+      if (kind === 'call' && !goCtx) {
+        const owner = selfCallOwner(c, lang, defs, enclosing);
+        if (owner) { dst_name = `${owner.qname}.${c.text}`; method = c.text; }
+      }
     }
     edges.push({
       src_id: enclosing ? enclosing.id : null,

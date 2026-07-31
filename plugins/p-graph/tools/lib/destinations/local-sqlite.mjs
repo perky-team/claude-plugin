@@ -16,7 +16,12 @@ function loadDatabaseSync() {
 // its whole file or mangled qnames). Existing Go graphs have missing/wrong nodes
 // until rebuilt, so bump to force a full reindex. No DDL change — an old DB opens
 // read-write cleanly and rebuilds; no read-only degrade.
-export const SCHEMA_VERSION = 4;
+// 5: a call on the enclosing method's own receiver (`s.M()` in Go, `this.M()` in
+// TS/JS/C++, `self.M()` in Python) is now stored receiver-qualified instead of as
+// a bare name, so it no longer collides with same-named methods on other types.
+// dst_name values changed for those edges — an old DB must fully reindex to pick
+// the new resolution up. No DDL change.
+export const SCHEMA_VERSION = 5;
 
 const DDL = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
@@ -192,6 +197,17 @@ export function openStore(dbPath, opts = {}) {
       WHERE dst_id IS NULL AND dst_name IS NOT NULL
         AND (SELECT count(*) FROM nodes n WHERE n.qname = dst_name) = 0
         AND (SELECT count(*) FROM nodes n WHERE n.name = dst_name) = 1`).run();
+    // Pass C — a receiver-qualified guess that missed. `s.M()` / `this.M()` is
+    // stored as "<own type>.M", which does not exist when M is inherited or
+    // promoted from an embedded type. `method` holds the bare name, so retry the
+    // unique-bare-name rule on it; without this the qualified guess would lose
+    // edges Pass B used to link.
+    db.prepare(`
+      UPDATE edges SET dst_id = (
+        SELECT n.id FROM nodes n WHERE n.name = edges.method LIMIT 1
+      )
+      WHERE dst_id IS NULL AND method IS NOT NULL
+        AND (SELECT count(*) FROM nodes n WHERE n.name = edges.method) = 1`).run();
   };
   store.markSchemaCurrent = () => store.setMeta('schema_version', SCHEMA_VERSION);
 
@@ -240,11 +256,58 @@ function attachReadHelpers(store, db, hasFts) {
   store.status = () => ({
     nodes: db.prepare('SELECT count(*) c FROM nodes').get().c,
     edges: db.prepare('SELECT count(*) c FROM edges').get().c,
+    call_edges: db.prepare(`SELECT count(*) c FROM edges WHERE kind = 'call'`).get().c,
+    unresolved_calls: db.prepare(
+      `SELECT count(*) c FROM edges WHERE kind = 'call' AND dst_id IS NULL`).get().c,
     files: db.prepare('SELECT count(*) c FROM files').get().c,
     indexed_sha: store.getMeta('indexed_sha'),
     schema_version: store.getMeta('schema_version'),
     fts: hasFts,
   });
+
+  // Where the graph gave up. A call edge with no dst_id is a call site pgraph
+  // could not attribute to exactly one symbol: an ambiguous bare name, a
+  // receiver it cannot type (interface, parameter, local, long field chain), or
+  // a call into the stdlib / a third-party package. Every query walks resolved
+  // edges only, so without these reports a dropped call site is
+  // indistinguishable from "nothing calls this" — the graph would answer with
+  // silent holes. Reporting them turns a silent hole into a stated one.
+  const unresolvedByNames = (names) => {
+    const list = [...new Set(names.filter(Boolean).map(String))];
+    if (!list.length) return [];
+    const rows = [];
+    // Chunked so a large impact set can't blow SQLite's bound-parameter limit.
+    for (let i = 0; i < list.length; i += 400) {
+      const chunk = list.slice(i, i + 400);
+      rows.push(...db.prepare(`
+        SELECT e.dst_name, e.file, e.line, s.qname AS src_qname
+        FROM edges e LEFT JOIN nodes s ON s.id = e.src_id
+        WHERE e.kind = 'call' AND e.dst_id IS NULL
+          AND e.dst_name IN (${chunk.map(() => '?').join(',')})`).all(...chunk));
+    }
+    return rows.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
+  };
+  // A call site carries whatever the source wrote — usually the bare method
+  // name, even when the user asks by qname. Match on both.
+  const targetNames = (nameOrId) => {
+    const n = store.node(nameOrId);
+    return n ? [String(nameOrId), n.name, n.qname] : [String(nameOrId)];
+  };
+  store.unresolvedFor = (name) => unresolvedByNames(targetNames(name));
+  store.unresolvedFrom = (name) => {
+    const n = store.node(name);
+    if (!n) return [];
+    return db.prepare(`
+      SELECT dst_name, file, line FROM edges
+      WHERE kind = 'call' AND dst_id IS NULL AND src_id = ?
+      ORDER BY file, line`).all(n.id);
+  };
+  // The frontier of an impact walk: gaps naming the target itself AND gaps
+  // naming anything the walk already reached, which is where it stopped.
+  store.unresolvedAround = (name) => unresolvedByNames([
+    ...targetNames(name),
+    ...store.impact(name).flatMap((n) => [n.name, n.qname]),
+  ]);
   const MAX_DEPTH = 50;
   store.impact = (name) => {
     const target = store.node(name);

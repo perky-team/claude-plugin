@@ -38,7 +38,7 @@ describe('cli concurrency', () => {
     ]);
     for (const r of [r1, r2]) {
       expect(r.code).toBe(0);
-      expect(JSON.parse(r.out).map((x) => x.name).sort()).toEqual(['baz', 'foo']);
+      expect(JSON.parse(r.out).callers.map((x) => x.name).sort()).toEqual(['baz', 'foo']);
     }
 
     // Graph is intact and readable afterwards.

@@ -39,15 +39,18 @@ describe('go extraction', () => {
     expect(nodes.find((n) => n.name === 'Run')?.name).toBe('Run');
   }, 20000);
 
-  it('qualifies call targets: package selector, same-package plain, leaves method/builtin bare', async () => {
+  it('qualifies call targets: package selector, same-package plain, own receiver; leaves expr/builtin bare', async () => {
     const { edges } = await run();
     const calls = edges.filter((e) => e.kind === 'call').map((e) => e.dst_name);
     // imported package selector -> external, stays qualified (resolves to NULL later)
     expect(calls).toContain('fmt.Println');
     // same-package plain call -> package-qualified
     expect(calls).toContain('main.helper');
-    // method call on a value/expr -> bare (receiver type unknown)
-    expect(calls).toContain('calc'); // s.calc()
+    // call on the enclosing method's own receiver -> receiver-qualified, because
+    // the receiver's type is known right there (`s` is `*Server` in Run).
+    expect(calls).toContain('main.Server.calc'); // s.calc()
+    expect(calls).not.toContain('calc');
+    // receiver is an expression, not a name -> bare (type unknown)
     expect(calls).toContain('Run');  // (&Server{}).Run()
     // builtin -> bare, never package-qualified
     expect(calls).toContain('len');

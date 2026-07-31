@@ -19,6 +19,15 @@ messages).
 | Several symbols at once | `pgraph explore A B C` |
 | What files are under path/ | `pgraph files path/` |
 
+**Completeness:** the graph links a call only when it can name exactly one target.
+A call it cannot type — a method on an interface, a parameter, a local variable, or
+any ambiguous bare name — is dropped, and `callers` / `impact` / `trace` walk
+resolved calls only. `callers`, `callees`, `impact` and `context` print
+`⚠ N unattributed call sites` with each `file:line` when that happened; `status`
+shows the repo-wide share. **Relay that banner to the user and grep to close the
+gap — never present a list as complete while it is there.** Ask by `qname`, not by
+bare name: `callers Get` merges every symbol named `Get`.
+
 **Freshness:** structural queries **auto-refresh** the graph before answering —
 `pgraph` reindexes any changed files first, so a query never answers from a stale
 graph and manual syncing is normally unnecessary. To skip the refresh (answer from

@@ -32,10 +32,24 @@ export async function runCommand(ctx) {
     const change = gitChangedFiles(root, st.indexed_sha);
     st.drift = change ? change.modified.length + change.deleted.length : null;
     return opts.json ? emitJson(st)
-      : out(`schema ${st.schema_version} - ${st.nodes} nodes - ${st.edges} edges - ${st.files} files - sha ${st.indexed_sha ?? '-'} - fts ${st.fts} - drift ${st.drift ?? 'n/a'}`);
+      : out(`schema ${st.schema_version} - ${st.nodes} nodes - ${st.edges} edges - ${st.files} files - sha ${st.indexed_sha ?? '-'} - fts ${st.fts} - drift ${st.drift ?? 'n/a'} - unattributed calls ${st.unresolved_calls}/${st.call_edges}`);
   }
 
   const fmtNode = (n) => `${n.kind} ${n.qname}  ${n.file}:${n.start_line}  ${n.signature}`;
+
+  // Name the call sites pgraph could not attribute to a symbol, so a short
+  // answer is never mistaken for a complete one. Queries walk resolved edges
+  // only: without this banner "no callers" and "I gave up here" print the same.
+  const GAP_LIMIT = 20;
+  const emitGaps = (rows) => {
+    if (!rows.length) return;
+    out(`⚠ ${rows.length} unattributed call site${rows.length === 1 ? '' : 's'} — this answer may be incomplete:`);
+    for (const r of rows.slice(0, GAP_LIMIT)) {
+      out(`    ${r.file}:${r.line}  ${r.src_qname ?? '(file scope)'} -> ${r.dst_name}`);
+    }
+    if (rows.length > GAP_LIMIT) out(`    … and ${rows.length - GAP_LIMIT} more`);
+    out('  The graph could not tell which symbol these call. Confirm with a text search before treating this answer as complete.');
+  };
 
   if (command === 'search') {
     const q = opts._[0]; if (!q) die('search needs a query');
@@ -52,29 +66,54 @@ export async function runCommand(ctx) {
   }
 
   if (command === 'callers') {
-    const rows = store.callers(opts._[0]);
-    return opts.json ? emitJson(rows) : rows.forEach((r) => out(fmtNode(r)));
+    const target = opts._[0];
+    const rows = store.callers(target), unresolved = store.unresolvedFor(target);
+    if (opts.json) return emitJson({ callers: rows, unresolved });
+    rows.forEach((r) => out(fmtNode(r)));
+    return emitGaps(unresolved);
   }
   if (command === 'callees') {
-    const rows = store.callees(opts._[0]);
-    return opts.json ? emitJson(rows) : rows.forEach((r) => out(fmtNode(r)));
+    const target = opts._[0];
+    const rows = store.callees(target);
+    // The source of every gap here IS the symbol asked about — label it, so the
+    // banner reads the same way as it does for callers.
+    const unresolved = store.unresolvedFrom(target).map((r) => ({ ...r, src_qname: target }));
+    if (opts.json) return emitJson({ callees: rows, unresolved });
+    rows.forEach((r) => out(fmtNode(r)));
+    return emitGaps(unresolved);
   }
   if (command === 'impact') {
-    const rows = store.impact(opts._[0]);
-    return opts.json ? emitJson(rows) : (rows.length ? rows.forEach((r) => out(fmtNode(r))) : out('(no impact)'));
+    const target = opts._[0];
+    // The frontier, not just the target: an impact walk also stops at an
+    // unattributed call to something it already reached.
+    const rows = store.impact(target), unresolved = store.unresolvedAround(target);
+    if (opts.json) return emitJson({ impact: rows, unresolved });
+    rows.length ? rows.forEach((r) => out(fmtNode(r))) : out('(no impact)');
+    return emitGaps(unresolved);
   }
   if (command === 'trace') {
     const path = store.trace(opts._[0], opts._[1]);
-    return opts.json ? emitJson({ path }) : out(path ? path.join(' -> ') : '(no path)');
+    const st = store.status();
+    if (opts.json) return emitJson({ path, unresolved_calls: st.unresolved_calls, call_edges: st.call_edges });
+    if (path) return out(path.join(' -> '));
+    // A missing path is not proof there is none: any unattributed call site
+    // could be the hop the walk needed.
+    return out(st.unresolved_calls
+      ? `(no path — but ${st.unresolved_calls}/${st.call_edges} call sites are unattributed, so a real path may be invisible to the graph)`
+      : '(no path)');
   }
   if (command === 'context') {
     const n = store.node(opts._[0]); if (!n) die('symbol not found', 1);
-    const ctxObj = { node: n, callers: store.callers(opts._[0]), callees: store.callees(opts._[0]) };
+    const ctxObj = {
+      node: n, callers: store.callers(opts._[0]), callees: store.callees(opts._[0]),
+      unresolved_in: store.unresolvedFor(opts._[0]),
+      unresolved_out: store.unresolvedFrom(opts._[0]).map((r) => ({ ...r, src_qname: n.qname })),
+    };
     if (opts.json) return emitJson(ctxObj);
     out(fmtNode(n));
     out('callers:'); ctxObj.callers.forEach((r) => out('  ' + fmtNode(r)));
     out('callees:'); ctxObj.callees.forEach((r) => out('  ' + fmtNode(r)));
-    return;
+    return emitGaps([...ctxObj.unresolved_in, ...ctxObj.unresolved_out]);
   }
   if (command === 'explore') {
     const rows = opts._.map((q) => store.node(q)).filter(Boolean);

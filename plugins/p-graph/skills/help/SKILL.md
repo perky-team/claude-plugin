@@ -19,3 +19,10 @@ Present this cheat-sheet:
 - `index [--full|--changed]` / `status` — build / inspect the graph.
 
 Refresh with `/p-graph:sync`. Prefer these over grep for structural questions.
+
+**Read the gap banner.** `callers` / `callees` / `impact` / `context` end with
+`⚠ N unattributed call sites` when the graph could not tell which symbol a call
+targets (interface, parameter or local receiver; ambiguous bare name). Those call
+sites are missing from the answer above it, so pass the banner on and grep to
+confirm. `status` shows the repo-wide share as `unattributed calls N/M`. Always
+ask by `qname` — a bare name merges every symbol that shares it.
