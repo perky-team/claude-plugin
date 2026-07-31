@@ -10,9 +10,11 @@ export function pausePath(root, id) {
   return join(paths(root).runDir, `${id}.pause`);
 }
 
-// The marker now has two possible ORIGINS — the job pausing itself, or an operator
-// running `pshed pause --id/--group` — because `reset-breaker` must clear the first
-// and keep the second (a deliberate human pause is lifted by the human, via `resume`).
+// The marker now has three possible ORIGINS — the job pausing itself, an operator
+// running `pshed pause --id/--group`, or a deploy holding the loop during maintenance.
+// `reset-breaker` must clear the first and keep the other two (a deliberate human pause
+// is lifted by the human via `resume`; a deploy pause is lifted by the deploy itself or
+// the tick's orphan reclaim).
 //
 // The format stays a plain-text reason, with the origin on an OPTIONAL first line.
 // Two properties this preserves, both load-bearing:
@@ -23,8 +25,18 @@ export function pausePath(root, id) {
 //      the reason `status` and the tick report never turns into a machine blob.
 const ORIGIN_HEADER = /^#pshed origin=([a-z]+)$/;
 export const OPERATOR_ORIGIN_LINE = '#pshed origin=operator';
+export const DEPLOY_ORIGIN_LINE = '#pshed origin=deploy';
 
-// { origin: 'self' | 'operator', reason } for a present marker, else null. An
+// Three origins now. `deploy` exists so the tick's orphan reclaim can lift a pause a
+// dead `pshed deploy` abandoned WITHOUT touching one a human set deliberately — if the
+// two were indistinguishable, the reclaim would silence the whole loop on its own, the
+// exact failure the deploy dance was written to prevent. The pid deliberately does NOT
+// go in this header: `#pshed origin=deploy pid=123` fails the regex, reads back as a
+// self-pause, and reset-breaker on an unrelated job then deletes a live deploy's pause.
+// The owner lives in run/DEPLOY instead (lib/owner.mjs).
+const KNOWN_ORIGINS = new Set(['self', 'operator', 'deploy']);
+
+// { origin: 'self' | 'operator' | 'deploy', reason } for a present marker, else null. An
 // unrecognised header value reads as `operator`: only p-shed ever writes a header, and
 // refusing to auto-clear a marker we don't fully understand is the safe direction.
 export function readPauseRecord(root, id) {
@@ -38,7 +50,10 @@ export function readPauseRecord(root, id) {
   const m = ORIGIN_HEADER.exec(first);
   if (!m) return { origin: 'self', reason: raw };
   const body = nl === -1 ? '' : raw.slice(nl + 1);
-  return { origin: m[1] === 'self' ? 'self' : 'operator', reason: body.replace(/\r?\n$/, '') };
+  // An unrecognised header value still reads as `operator`: only p-shed writes headers,
+  // and refusing to auto-clear a marker we don't fully understand is the safe direction.
+  const origin = KNOWN_ORIGINS.has(m[1]) ? m[1] : 'operator';
+  return { origin, reason: body.replace(/\r?\n$/, '') };
 }
 
 // The human-readable reason (never the header), or null when there is no marker. An
@@ -56,9 +71,9 @@ export function writePause(root, id, { reason, origin = 'operator' } = {}) {
   if (existing) return { id, paused: true, alreadyPaused: true, origin: existing.origin, reason: existing.reason };
   const text = typeof reason === 'string' && reason.trim() !== ''
     ? reason
-    : (origin === 'operator' ? 'paused by operator' : '');
+    : (origin === 'self' ? '' : `paused by ${origin}`);
   mkdirSync(paths(root).runDir, { recursive: true });
-  const body = origin === 'operator' ? `${OPERATOR_ORIGIN_LINE}\n${text}\n` : `${text}\n`;
+  const body = origin === 'self' ? `${text}\n` : `#pshed origin=${origin}\n${text}\n`;
   writeFileSync(pausePath(root, id), body, 'utf-8');
   return { id, paused: true, alreadyPaused: false, origin, reason: text };
 }
@@ -68,9 +83,10 @@ export function removePause(root, id) {
 }
 
 // Un-stick a job: clear the process-level breaker in state and remove the task-level
-// pause marker — but ONLY a self-pause. Clearing an operator pause here would mean an
-// unrelated breaker reset silently lifts a halt a human put there on purpose, so that
-// one survives and is reported instead. Idempotent; safe when either is absent.
+// pause marker — but ONLY a self-pause. Clearing an operator or deploy pause here would
+// mean an unrelated breaker reset silently lifts a halt a human put there on purpose or a
+// deploy is holding, so those survive and are reported instead. Idempotent; safe when
+// either is absent.
 export function resetBreaker(root, id) {
   const st = readJobState(root, id);
   if (st) {
@@ -82,14 +98,15 @@ export function resetBreaker(root, id) {
     writeJobState(root, id, st);
   }
   const pause = readPauseRecord(root, id);
-  const operatorPause = pause?.origin === 'operator';
-  if (pause && !operatorPause) removePause(root, id);
-  return {
-    id,
-    cleared: true,
-    pauseCleared: pause != null && !operatorPause,
-    ...(operatorPause
-      ? { operatorPause: true, pauseReason: pause.reason, hint: `operator pause kept; lift it with: pshed resume --id ${id}` }
-      : {}),
-  };
+  // Only a SELF pause is cleared here. Both an operator pause and a deploy-held one are
+  // someone else's to lift: the human via `resume`, the deploy via its own release (or
+  // the tick's reclaim once its owner is gone).
+  const keep = pause != null && pause.origin !== 'self';
+  if (pause && !keep) removePause(root, id);
+  const held = keep
+    ? (pause.origin === 'deploy'
+        ? { deployPause: true, pauseReason: pause.reason, hint: `a running deploy holds this pause; it lifts when the deploy finishes, or the next tick reclaims it if the deploy died` }
+        : { operatorPause: true, pauseReason: pause.reason, hint: `operator pause kept; lift it with: pshed resume --id ${id}` })
+    : {};
+  return { id, cleared: true, pauseCleared: pause != null && !keep, ...held };
 }
