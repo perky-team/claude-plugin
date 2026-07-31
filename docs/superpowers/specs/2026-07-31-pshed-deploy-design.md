@@ -186,9 +186,21 @@ both unparseable.
 | 0 | the command ran and succeeded |
 | *n* | the command ran and exited *n* |
 | 128+signum | the command was killed by a signal (shell convention) |
-| 127 | the command could not be spawned (ENOENT) |
+| 127 | the command could not be spawned — POSIX only, see below |
+| 130 | the operator interrupted the deploy (SIGINT); nothing is left paused |
 | 1 | timed out waiting for idle — nothing was paused, nothing ran |
 | 2 | validation: unknown group, `--id` (see §2), missing `--reason`, missing `--`, no command after `--` |
+
+127 is inherently platform-dependent and the spec does not pretend otherwise: measured,
+a shell-less POSIX spawn of a missing binary raises `ENOENT`, which maps to 127, while
+with `shell: true` on win32 the shell reports plain exit 1. What holds on both platforms
+is the part that matters — the loop is left un-paused.
+
+**Cancellation covers the wait, not just the command.** An interrupt arriving while
+`deploy` is still waiting for idle has no child process to kill, so the wait itself polls
+a cancel flag and unwinds. A signal handler must never call `process.exit()`: that would
+skip the release and leave the loop paused — the failure this whole design exists to
+prevent.
 
 1 and 2 are ambiguous with a command that itself exits 1 or 2. This is accepted: `--json`
 carries an unambiguous `error.code`, and the alternative (inventing a private code) is
