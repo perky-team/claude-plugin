@@ -72,6 +72,12 @@ export function reclaimOrphanedDeployPauses(root, { isAlive = isPidAlive } = {})
     removePause(root, id);
     reclaimed.push({ scope: 'job', id });
   }
-  if (owner) removeDeployOwner(root);
+  // Unconditional, not `if (owner)`: a CORRUPT run/DEPLOY (e.g. killed mid-write, before
+  // the atomic-rename fix above) parses to `owner === null` from readDeployOwner, so
+  // gating on `owner` truthiness never swept it — the stale file sat there forever and
+  // every later tick re-did this same scan for nothing. rmSync({force:true}) is already
+  // a no-op when the file is absent, so removing unconditionally costs nothing extra in
+  // the ordinary case (owner present and just reclaimed, or nothing to begin with).
+  removeDeployOwner(root);
   return { reclaimed };
 }

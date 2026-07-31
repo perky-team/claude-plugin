@@ -78,13 +78,38 @@ export async function runDeploy({
   // ENOENT but still throws on a real I/O failure (a locked file, a permission error —
   // a live concern on Windows), and one such failure must not stop the rest of the
   // cleanup, nor ever throw out of here. Failures come back as short messages.
+  //
+  // Re-reads each marker before removing it, and skips one ONLY when the re-read
+  // positively confirms its origin is no longer 'deploy'. An operator `pause` landing on
+  // one of these markers while this deploy is still running takes ownership of it (see
+  // writeGlobalPause / writePause) precisely so this check can catch it — without the
+  // re-read, this would blindly delete-by-path and wipe out a human's halt the instant
+  // this run released, which is the mirror image of the bug the orphan reclaim exists to
+  // prevent (that one never lifts an operator pause either).
+  //
+  // Deliberately NOT the inverse (remove only when origin reads back as 'deploy'): both
+  // readGlobalPause and readPauseRecord fold a genuine I/O failure — not "an operator
+  // took it", something else entirely, e.g. the marker path colliding with a directory —
+  // into a falsy/originless result, and this run KNOWS it wrote 'deploy' as the origin
+  // (ownedGlobal / pausedIds are only populated right after doing exactly that). So the
+  // absence of positive evidence of a takeover means "still ours" and the removal is
+  // still attempted, exactly as before — a real fs error surfaces in `errors` instead of
+  // being silently swallowed into "must have been taken over".
   const dropOwnPauses = () => {
     const errors = [];
     if (ownedGlobal) {
-      try { removeGlobalPause(root); } catch (err) { errors.push(`removeGlobalPause: ${err.message}`); }
+      try {
+        const cur = readGlobalPause(root);
+        const takenOver = cur != null && cur.origin != null && cur.origin !== 'deploy';
+        if (!takenOver) removeGlobalPause(root);
+      } catch (err) { errors.push(`removeGlobalPause: ${err.message}`); }
     }
     for (const id of pausedIds) {
-      try { removePause(root, id); } catch (err) { errors.push(`removePause(${id}): ${err.message}`); }
+      try {
+        const cur = readPauseRecord(root, id);
+        const takenOver = cur != null && cur.origin !== 'deploy';
+        if (!takenOver) removePause(root, id);
+      } catch (err) { errors.push(`removePause(${id}): ${err.message}`); }
     }
     pausedIds = [];
     ownedGlobal = false;
@@ -164,6 +189,14 @@ export async function runDeploy({
         };
         return result;
       }
+      // Rate-limit the retry the same way waitForIdle rate-limits its own polling. In
+      // ordinary operation waitForIdle's own poll loop already paces this (the straggler
+      // it just saw is still live, so the next waitForIdle call sleeps before its first
+      // re-check) — this only matters in the unlucky case where the straggler finishes
+      // between the recheck above and the next waitForIdle call, which would otherwise
+      // loop back to 'pause' with no delay at all. Effectively unreachable in practice,
+      // but nothing above prevented it from spinning.
+      await d.sleep(pollMs);
     }
 
     const spawned = await d.spawn({ cmd, args });

@@ -20,7 +20,29 @@ export function readGlobalPause(root) {
 
 export function writeGlobalPause(root, { reason, origin, now = Date.now() } = {}) {
   const existing = readGlobalPause(root);
-  if (existing) return { paused: true, alreadyPaused: true, createdAt: existing.createdAt ?? null, reason: existing.reason };
+  if (existing) {
+    // An operator pause landing on a deploy-origin marker takes OWNERSHIP of it: origin
+    // flips away from 'deploy' (to this caller's own, 'operator' unless stated
+    // otherwise) and the reason is replaced when one was given — so the human's halt
+    // survives the deploy's own release, which only clears a marker still carrying ITS
+    // origin (see dropOwnPauses in lib/deploy.mjs). A marker already 'operator' (or any
+    // non-deploy origin) is unchanged here: pausing an already-paused job keeps the
+    // FIRST reason, which is what explains why it actually stopped.
+    if (existing.origin === 'deploy' && origin !== 'deploy') {
+      const claimedOrigin = origin ?? 'operator';
+      const state = { createdAt: existing.createdAt ?? now, origin: claimedOrigin };
+      if (reason != null) state.reason = reason;
+      else if (existing.reason != null) state.reason = existing.reason;
+      const dir = paths(root).runDir;
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(globalPausePath(root), JSON.stringify(state, null, 2) + '\n', 'utf-8');
+      return { paused: true, alreadyPaused: true, tookOwnership: true, createdAt: state.createdAt, reason: state.reason, origin: state.origin };
+    }
+    // Surfaces the existing marker's origin (not just its reason) so an operator can see
+    // WHAT they walked into — a deploy pause and a forgotten operator pause used to look
+    // identical in this response.
+    return { paused: true, alreadyPaused: true, createdAt: existing.createdAt ?? null, reason: existing.reason, origin: existing.origin };
+  }
   const state = { createdAt: now };
   if (reason != null) state.reason = reason;
   if (origin != null) state.origin = origin;

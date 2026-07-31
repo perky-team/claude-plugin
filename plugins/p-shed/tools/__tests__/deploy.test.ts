@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { runDeploy } from '../lib/deploy.mjs';
 import { readGlobalPause, writeGlobalPause, globalPausePath } from '../lib/pause.mjs';
 import { writePause, readPauseRecord, pausePath } from '../lib/breaker.mjs';
-import { readDeployOwner, deployOwnerPath } from '../lib/owner.mjs';
+import { readDeployOwner, deployOwnerPath, writeDeployOwner } from '../lib/owner.mjs';
 import { writePid } from '../lib/pids.mjs';
 
 let root: string;
@@ -205,5 +205,128 @@ describe('timeout', () => {
     expect(order).not.toContain('run');
     expect(existsSync(globalPausePath(root))).toBe(false);
     expect(existsSync(deployOwnerPath(root))).toBe(false);
+  });
+});
+
+// C1: reproduces, at the lib level, the two-deploy scenario from the final review —
+// deploy A owns run/DEPLOY and holds a live pause; deploy B must refuse outright instead
+// of overwriting A's ownership and running its own command alongside A's. See
+// cli-deploy-e2e.test.ts for the same scenario driven through two real OS processes.
+describe('C1 — refusing a concurrent deploy', () => {
+  it('refuses to start when run/DEPLOY names a LIVE pid, and touches nothing', async () => {
+    writeDeployOwner(root, { pid: 555, scope: 'global', reason: 'other deploy', now: 0 });
+    const order: string[] = [];
+    const res = await runDeploy(base({
+      pid: 4242,
+      deps: {
+        spawn: fakeSpawn(0), isAlive: (pid: number) => pid === 555, now: () => 0, sleep: async () => {},
+        onStep: (s: string) => order.push(s),
+      },
+    }));
+    expect(res.outcome).toBe('busy');
+    expect(res.exit).toBe(2);
+    expect(res.holder).toEqual({ pid: 555, reason: 'other deploy' });
+    expect(res.message).toMatch(/555/);
+    expect(res.message).toMatch(/other deploy/);
+    // No wait, pause, run, or release was even attempted — this is a refusal, not a
+    // dance that unwound partway through.
+    expect(order).toEqual([]);
+    expect(readDeployOwner(root)).toMatchObject({ pid: 555, reason: 'other deploy' });
+    expect(readGlobalPause(root)).toBeNull();
+  });
+
+  it('still overwrites a DEAD owner — a crashed deploy must not wedge every later one', async () => {
+    writeDeployOwner(root, { pid: 555, scope: 'global', reason: 'crashed', now: 0 });
+    const res = await runDeploy(base({
+      pid: 4242,
+      deps: { spawn: fakeSpawn(0), isAlive: (pid: number) => pid !== 555, now: () => 0, sleep: async () => {} },
+    }));
+    expect(res.outcome).toBe('ok');
+    expect(readDeployOwner(root)).toBeNull(); // released normally, back to nothing
+  });
+
+  it("release() never removes run/DEPLOY once it no longer names this run's own pid", async () => {
+    // onStep('release') fires BEFORE release() executes (see lib/deploy.mjs), so this
+    // simulates another deploy having already claimed ownership by the moment this run's
+    // OWN release runs — exactly the t=1.0 step in the review's timeline, where B's exit
+    // used to delete A's still-live ownership.
+    const res = await runDeploy(base({
+      pid: 4242,
+      deps: {
+        spawn: fakeSpawn(0), isAlive: () => false, now: () => 0, sleep: async () => {},
+        onStep: (s: string) => { if (s === 'release') writeDeployOwner(root, { pid: 9999, scope: 'global', now: 0 }); },
+      },
+    }));
+    expect(res.outcome).toBe('ok');
+    expect(existsSync(deployOwnerPath(root))).toBe(true);
+    expect(readDeployOwner(root)).toMatchObject({ pid: 9999 });
+  });
+});
+
+// I1: an operator `pause` landing on a deploy-origin marker WHILE the deploy is still
+// running must take ownership of it, so the deploy's own release (which only clears a
+// marker still carrying ITS origin) leaves the human's halt in place.
+describe('I1 — an operator pause during a deploy survives the deploy release', () => {
+  it('global scope: writeGlobalPause takes ownership mid-run, and release leaves it alone', async () => {
+    let duringRun: any = null;
+    const res = await runDeploy(base({
+      deps: {
+        spawn: async () => {
+          // The operator's own call shape (lib/pause.mjs / pshed.mjs's `pause` command
+          // never passes an explicit origin for the global marker).
+          duringRun = writeGlobalPause(root, { reason: 'incident: stop everything' });
+          return { exit: 0, signal: null };
+        },
+        isAlive: () => false, now: () => 0, sleep: async () => {},
+      },
+    }));
+    expect(res.outcome).toBe('ok');
+    expect(duringRun).toMatchObject({ alreadyPaused: true, tookOwnership: true, origin: 'operator', reason: 'incident: stop everything' });
+    const after = readGlobalPause(root);
+    expect(after).not.toBeNull();
+    expect(after).toMatchObject({ origin: 'operator', reason: 'incident: stop everything' });
+  });
+
+  it('group scope: writePause takes ownership mid-run, and release leaves it alone', async () => {
+    let duringRun: any = null;
+    const res = await runDeploy(base({
+      group: 'hft',
+      deps: {
+        spawn: async () => {
+          duringRun = writePause(root, 'worker', { reason: 'incident: stop everything', origin: 'operator' });
+          return { exit: 0, signal: null };
+        },
+        isAlive: () => false, now: () => 0, sleep: async () => {},
+      },
+    }));
+    expect(res.outcome).toBe('ok');
+    expect(duringRun).toMatchObject({ alreadyPaused: true, tookOwnership: true, origin: 'operator', reason: 'incident: stop everything' });
+    expect(readPauseRecord(root, 'worker')).toEqual({ origin: 'operator', reason: 'incident: stop everything' });
+  });
+});
+
+describe('M7 — the undo-and-retry path rate-limits its retry', () => {
+  it('sleeps pollMs between an undo and the next wait instead of spinning', async () => {
+    let phase = 0;
+    let sleepCalls = 0;
+    const res = await runDeploy(base({
+      pollMs: 250,
+      deps: {
+        spawn: fakeSpawn(0),
+        isAlive: () => phase === 1, // pid 111 is "alive" only during the first re-check
+        now: () => 0,
+        sleep: async () => { sleepCalls++; },
+        onStep: (s: string) => {
+          if (s === 'pause' && phase === 0) { writePid(root, 'worker', 111); phase = 1; }
+          if (s === 'recheck' && phase === 1) { phase = 2; }
+        },
+      },
+    }));
+    expect(res.outcome).toBe('ok');
+    expect(res.attempts).toBe(2);
+    // Neither waitForIdle call in this run ever finds a live holder at its own check (the
+    // straggler only ever shows up at the deploy-level recheck), so its only source is the
+    // undo-and-retry sleep this fix adds.
+    expect(sleepCalls).toBe(1);
   });
 });

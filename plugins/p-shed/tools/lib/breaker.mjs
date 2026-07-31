@@ -63,17 +63,38 @@ export function readPause(root, id) {
   return rec === null ? null : rec.reason;
 }
 
+// The literal header line for a given non-self origin — built from the constants above
+// instead of re-templating `#pshed origin=${origin}` here, so ORIGIN_HEADER's regex and
+// the two lines it must match never drift apart.
+function originLine(origin) {
+  return origin === 'deploy' ? DEPLOY_ORIGIN_LINE : OPERATOR_ORIGIN_LINE;
+}
+
 // Create the marker. Idempotent by design: pausing an already-paused job is a no-op
 // that KEEPS the existing reason — the first reason is the one that explains why the
 // job stopped, and an operator pause must not paper over a self-pause it walked into.
 export function writePause(root, id, { reason, origin = 'operator' } = {}) {
   const existing = readPauseRecord(root, id);
-  if (existing) return { id, paused: true, alreadyPaused: true, origin: existing.origin, reason: existing.reason };
+  if (existing) {
+    // An operator pause landing on a deploy-origin marker takes OWNERSHIP of it: origin
+    // flips to the caller's own and the reason is replaced when one was given — so the
+    // human's halt survives the deploy's own release, which only clears a marker still
+    // carrying ITS origin (see dropOwnPauses in lib/deploy.mjs). A marker already
+    // 'operator' or 'self' is unchanged: pausing an already-paused job keeps the FIRST
+    // reason, which is what explains why the job actually stopped.
+    if (existing.origin === 'deploy' && origin !== 'deploy') {
+      const text = typeof reason === 'string' && reason.trim() !== '' ? reason : existing.reason;
+      mkdirSync(paths(root).runDir, { recursive: true });
+      writeFileSync(pausePath(root, id), `${originLine(origin)}\n${text}\n`, 'utf-8');
+      return { id, paused: true, alreadyPaused: true, tookOwnership: true, origin, reason: text };
+    }
+    return { id, paused: true, alreadyPaused: true, origin: existing.origin, reason: existing.reason };
+  }
   const text = typeof reason === 'string' && reason.trim() !== ''
     ? reason
     : (origin === 'self' ? '' : `paused by ${origin}`);
   mkdirSync(paths(root).runDir, { recursive: true });
-  const body = origin === 'self' ? `${text}\n` : `#pshed origin=${origin}\n${text}\n`;
+  const body = origin === 'self' ? `${text}\n` : `${originLine(origin)}\n${text}\n`;
   writeFileSync(pausePath(root, id), body, 'utf-8');
   return { id, paused: true, alreadyPaused: false, origin, reason: text };
 }
