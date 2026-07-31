@@ -19,5 +19,8 @@ export default defineConfig({
       'tests/**/*.test.ts',
       'plugins/**/tools/__tests__/**/*.test.ts',
     ],
+    // Keeps the worker's event loop breathing between synchronous e2e tests — see
+    // vitest.setup.ts for why the run otherwise dies on an onTaskUpdate RPC timeout.
+    setupFiles: ['./vitest.setup.ts'],
   },
 });
