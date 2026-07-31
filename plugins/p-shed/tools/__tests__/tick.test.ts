@@ -511,5 +511,27 @@ describe('tick', () => {
       expect(res).toEqual({ action: 'tick', paused: true, launched: 0 });
       expect(readGlobalPause(root)).not.toBeNull();
     });
+
+    // I3: the README's run-log contract promises `ts`/`job`/`durationMs` always and
+    // `outcome` only ever one of success|failure|skipped|guard-error. The reclaim row
+    // used to violate both (`{ ts, outcome: 'reclaimed-deploy-pause', reclaimed }` — no
+    // `job` field at all, and an `outcome` value outside the documented enum), which is
+    // exactly what made plugins/p-observe's adapter fall through to a phantom
+    // `job.launched` for job "-" on every reclaim (it has no `exit` field, so it isn't a
+    // real completion either). The fix logs a distinct `action` and an explicit `job:
+    // null`, honest about not being a run record.
+    it('logs the reclaim as a distinct action with an explicit job:null, not an outcome', async () => {
+      writeJobs(root, { version: 1, defaults: {}, jobs: [{ id: 'w', schedule: '* * * * *', enabled: true, prompt: 'go' }] });
+      writeGlobalPause(root, { reason: 'prompt update', origin: 'deploy', now: NOW });
+      writeDeployOwner(root, { pid: 999001, scope: 'global', now: NOW });
+
+      const deps = fakeDeps({ isPidAlive: vi.fn(() => false) });
+      await tick({ root, now: NOW, deps });
+
+      expect(deps.appendLog).toHaveBeenCalledOnce();
+      const row = deps.appendLog.mock.calls[0][1];
+      expect(row).toEqual({ ts: NOW, job: null, action: 'reclaimed-deploy-pause', reclaimed: [{ scope: 'global' }] });
+      expect(row.outcome).toBeUndefined();
+    });
   });
 });

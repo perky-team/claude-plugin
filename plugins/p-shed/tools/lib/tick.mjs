@@ -28,7 +28,13 @@ export async function tick({ root, now = Date.now(), deps = {} }) {
   const preamble = [];
   if (reclaimed.length) {
     preamble.push({ action: 'reclaimed-deploy-pause', reclaimed });
-    d.appendLog(root, { ts: now, outcome: 'reclaimed-deploy-pause', reclaimed }, now);
+    // NOT a run record: no job launched, so `job` is explicit null rather than an absent
+    // field, and this gets its own `action` rather than an `outcome` value — the README's
+    // run-log contract promises `ts`/`job`/`durationMs` always and `outcome` only ever
+    // `success`|`failure`|`skipped`|`guard-error` for a real run. A consumer keyed on that
+    // contract (see plugins/p-observe's adapter) needs a distinct, recognisable shape here
+    // instead of a row that quietly fails both promises.
+    d.appendLog(root, { ts: now, job: null, action: 'reclaimed-deploy-pause', reclaimed }, now);
   }
 
   // Global pause: while run/PAUSED exists the whole scheduler is halted (cron stays
