@@ -31,8 +31,14 @@ export async function runCommand(ctx) {
     const st = store.status();
     const change = gitChangedFiles(root, st.indexed_sha);
     st.drift = change ? change.modified.length + change.deleted.length : null;
-    return opts.json ? emitJson(st)
-      : out(`schema ${st.schema_version} - ${st.nodes} nodes - ${st.edges} edges - ${st.files} files - sha ${st.indexed_sha ?? '-'} - fts ${st.fts} - drift ${st.drift ?? 'n/a'} - unattributed calls ${st.unresolved_calls}/${st.call_edges}`);
+    // status never calls ensureFresh, but openStore already dropped the graph
+    // tables on a schema upgrade — say so, or "0 nodes" reads like an empty
+    // repo instead of a rebuild waiting on the next query.
+    const schemaStale = store.schemaStale?.() ?? false;
+    st.schema_stale = schemaStale;
+    if (opts.json) return emitJson(st);
+    const hint = schemaStale ? ' - rebuild pending (schema upgrade)' : '';
+    return out(`schema ${st.schema_version} - ${st.nodes} nodes - ${st.edges} edges - ${st.files} files - sha ${st.indexed_sha ?? '-'} - fts ${st.fts} - drift ${st.drift ?? 'n/a'} - unattributed calls ${st.unresolved_calls}/${st.call_edges}${hint}`);
   }
 
   const fmtNode = (n) => `${n.kind} ${n.qname}  ${n.file}:${n.start_line}  ${n.signature}`;

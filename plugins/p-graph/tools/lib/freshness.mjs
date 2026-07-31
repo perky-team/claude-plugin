@@ -63,15 +63,20 @@ export async function ensureFresh(ctx) {
   const { command, opts, root, store, ignorePatterns, pgraphDir, warn } = ctx;
   if (!QUERY_COMMANDS.has(command)) return;
 
+  // A schema upgrade must rebuild even when git can't report drift at all (a
+  // non-git checkout, or git missing): openStore already dropped the graph
+  // tables in that case, so skipping the rebuild here would leave every query
+  // answering empty, with an empty gap report, forever.
+  const schemaStale = store.schemaStale?.() ?? false;
+
   let change;
   try { change = gitChangedFiles(root, store.getMeta('indexed_sha')); }
   catch { change = null; }
-  if (change === null) { warn(UNKNOWN_BANNER); return; } // not a git checkout
+  if (change === null && !schemaStale) { warn(UNKNOWN_BANNER); return; } // not a git checkout, nothing else forces a rebuild
 
-  const drift = driftCount(computeActionable(change, ignorePatterns));
+  const drift = change === null ? 0 : driftCount(computeActionable(change, ignorePatterns));
   // A schema upgrade must rebuild even when no files changed: the stored graph
   // was written in an older node/qname shape, so it's wrong until reindexed.
-  const schemaStale = store.schemaStale?.() ?? false;
   if (drift === 0 && !schemaStale) return; // fresh — fast path
 
   if (!autorefreshEnabled(opts)) { warn(schemaStale ? SCHEMA_STALE_BANNER : staleBanner(drift)); return; } // opt-out

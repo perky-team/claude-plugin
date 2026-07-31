@@ -102,6 +102,22 @@ describe('cli auto-refresh', () => {
     expect(run(['callers', 'bar', '--json']).stderr).not.toContain('rebuilding');
   }, 30000);
 
+  it('rebuilds on schema upgrade even when git cannot report drift (non-git tree)', () => {
+    dir = mkdtempSync(join(tmpdir(), 'pg-'));
+    mkdirSync(join(dir, '.git'));    // empty dir: findRepoRoot stops here, git commands fail
+    mkdirSync(join(dir, '.pgraph'));
+    writeFileSync(join(dir, 'a.ts'), 'export function foo() { bar(); }\nexport function bar() {}');
+    run(['index', '--full']);
+    // Simulate a plugin upgrade on a tree where git status can never be read.
+    const store = openStore(join(dir, '.pgraph', 'graph.db'));
+    store.setMeta('schema_version', '1');
+    store.close();
+    const r = run(['callers', 'bar', '--json']);
+    // The schema upgrade must force a rebuild even though drift is unknown —
+    // otherwise openStore already dropped the tables and the answer is empty.
+    expect(JSON.parse(r.stdout).callers.map((x) => x.name)).toEqual(['foo']);
+  }, 30000);
+
   it('status does not reindex', () => {
     initRepo();
     run(['index', '--full']);
