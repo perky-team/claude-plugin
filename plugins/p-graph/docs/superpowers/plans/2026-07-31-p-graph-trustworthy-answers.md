@@ -272,10 +272,11 @@ In `openStore`, replace `db.exec(DDL);` with:
     for (const t of ['nodes_fts', 'edges', 'nodes', 'files', 'field_types']) {
       db.exec(`DROP TABLE IF EXISTS ${t}`);
     }
-    db.prepare(`DELETE FROM meta WHERE key = 'schema_version'`).run();
   }
   db.exec(DDL);
 ```
+
+**Leave the stored `schema_version` row alone.** Do not clear it here. `openStore` re-stamps a missing version to the current one a few lines further down, which would make the empty, just-dropped graph look current — `ensureFresh()` would then skip the rebuild, and the existing "rebuilds after a schema upgrade" test in `cli-autorefresh.test.ts` fails. Only `markSchemaCurrent()`, called at the end of a real `indexFull`, may raise the version.
 
 Widen the insert statement:
 
@@ -539,10 +540,19 @@ In `plugins/p-graph/tools/lib/destinations/local-sqlite.mjs`, replace the whole 
                AND n.lang = edges.lang AND n.kind IN ${CALLABLE}) = 1`).run();
 
     // Pass B — a unique bare-name match, only when no qualified candidate exists.
-    // The extra guard is the one the evaluation showed missing: when the call goes
-    // through a field whose type IS known and is NOT a repo type, the call leaves
-    // the repo. Linking the bare name to the one repo method that shares it
-    // produced 13 false callers for a single symbol in hugo.
+    // The extra guard is the one the evaluation showed missing: a call through a
+    // field must not fall back to an unrelated same-named method just because
+    // Pass F's exact `<type>.<method>` lookup failed. The only other legitimate
+    // target is a method PROMOTED into the field's type from an embedded repo
+    // type — the same rule Pass C applies to a call on the method's own
+    // receiver. So when the field's type is known, require it to embed a repo
+    // type (a `"<type>#embed"` row pointing at a node that exists); otherwise
+    // refuse. This also covers a field typed as a repo-defined interface: the
+    // interface node exists, so a plain "is it a repo type" check would let it
+    // through, but an interface embeds nothing and has no method declarations of
+    // its own, so it can never supply a legitimate target. Linking the bare name
+    // to the one repo method that shares it produced 13 false callers for a
+    // single symbol in hugo.
     db.prepare(`
       UPDATE edges SET dst_id = (
         SELECT n.id FROM nodes n
@@ -556,7 +566,9 @@ In `plugins/p-graph/tools/lib/destinations/local-sqlite.mjs`, replace the whole 
         AND NOT EXISTS (
           SELECT 1 FROM field_types ft
           WHERE ft.key = edges.field_key
-            AND NOT EXISTS (SELECT 1 FROM nodes n2 WHERE n2.qname = ft.type))`).run();
+            AND NOT EXISTS (
+              SELECT 1 FROM field_types emb JOIN nodes en ON en.qname = emb.type
+              WHERE emb.key = ft.type || '#embed'))`).run();
 
     resolveOwnReceiverFallback();
   };
