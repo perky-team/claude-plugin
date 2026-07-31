@@ -8,6 +8,7 @@ import { readGlobalPause } from './pause.mjs';
 import { isPidAlive, readPid, writePid, removePid } from './pids.mjs';
 import { findGroupHolder } from './concurrency.mjs';
 import { classifyRun, classifySkipReason, parseUsage, resolveUsageLimitPattern, parseResetAt, truncateOutput } from './classify.mjs';
+import { reclaimOrphanedDeployPauses } from './owner.mjs';
 
 export async function tick({ root, now = Date.now(), deps = {} }) {
   const d = {
@@ -15,20 +16,31 @@ export async function tick({ root, now = Date.now(), deps = {} }) {
     runJob: realRunJob, appendLog: realAppendLog, rotateLogs: realRotateLogs,
     runGuard: (job, defaults) => realRunGuard({ job, defaults, root }),
     isPidAlive, writePid: (id, pid) => writePid(root, id, pid), removePid: (id) => removePid(root, id),
-    readGlobalPause,
+    readGlobalPause, reclaimOrphanedDeployPauses,
     ...deps,
   };
+
+  // Reclaim FIRST. A pause abandoned by a dead `pshed deploy` must be lifted before the
+  // gate below, because that gate short-circuits on ANY marker regardless of origin — a
+  // reclaim placed after it would never run and the loop would stay silently halted.
+  // Only deploy-origin markers are eligible; an operator pause survives untouched.
+  const { reclaimed } = d.reclaimOrphanedDeployPauses(root, { isAlive: d.isPidAlive });
+  const preamble = [];
+  if (reclaimed.length) {
+    preamble.push({ action: 'reclaimed-deploy-pause', reclaimed });
+    d.appendLog(root, { ts: now, outcome: 'reclaimed-deploy-pause', reclaimed }, now);
+  }
 
   // Global pause: while run/PAUSED exists the whole scheduler is halted (cron stays
   // installed). This is the FIRST gate in the launch flow — before log rotation and any
   // job evaluation — so a paused tick is a genuine no-op, mirroring the per-job pause
   // marker but for every job at once.
-  if (d.readGlobalPause(root)) return { action: 'tick', paused: true, launched: 0 };
+  if (d.readGlobalPause(root)) return { action: 'tick', paused: true, launched: 0, ...(reclaimed.length ? { reclaimed } : {}) };
 
   d.rotateLogs(root, now);
   const { defaults, jobs } = d.readJobs(root);
   const config = d.readConfig(root);
-  const results = [];
+  const results = [...preamble];
 
   for (const job of jobs) {
     if (job.enabled === false) continue;
