@@ -1,5 +1,22 @@
 # Contributing
 
+## Never use the global `fetch` in the CLI
+
+`makeRealTransport()` deliberately uses `node:https` with a per-request agent set to
+`keepAlive: false`. Do not "simplify" it to `fetch`.
+
+The CLI calls `process.exit()` as soon as a command finishes. `fetch` is undici, which
+holds a socket pool open after the response resolves, and exiting into that teardown
+aborts the process on Windows with a libuv assertion
+(`!(handle->flags & UV_HANDLE_CLOSING)`, `src\win\async.c`) and exit code 3221226505 —
+after the command already did its work and printed correct output. Two requests in one
+run are enough; `sync` against Confluence makes many. The CLI suites cannot catch it:
+they inject a fake transport, so no real socket is open at exit.
+
+If you ever do need `fetch` here, drop `process.exit()` first: set `process.exitCode`
+and return, the way `p-chat` does. `tests/cli-exit-safety.test.ts` enforces that a
+plugin picks one of the two, never both.
+
 ## Running E2E tests against real Confluence
 
 The Confluence E2E suite is gated by `PWIKI_E2E_CONFLUENCE=1` and skipped by default in CI and `npm test`. Before tagging a new minor or major release of p-wiki, run E2E locally against a **dedicated test space** — never against a real working space.

@@ -30,6 +30,21 @@ Rules for future changes:
 - To add or update a vendored dependency, bump it in the **root** `package.json`, run `node plugins/p-tasks/scripts/vendor-deps.mjs`, and commit the refreshed `tools/lib/vendor/` file.
 - `tests/p-tasks-packaging.test.ts` (in the root suite, run by `npm test` / the `/release` audit) enforces this: it fails on any bare runtime import and runs the CLI from an isolated copy with no `node_modules` above it.
 
+## HTTP transport — never the global `fetch`
+
+`makeTransport()` in `tools/lib/destination.mjs` uses `node:https` with a per-request
+agent set to `keepAlive: false`. Do not replace it with `fetch`.
+
+The CLI calls `process.exit()` right after a command finishes. `fetch` is undici, which
+keeps a socket pool alive past the response, and exiting into that teardown aborts the
+process on Windows with a libuv assertion (`!(handle->flags & UV_HANDLE_CLOSING)`,
+`src\win\async.c`) and exit code 3221226505 — after the work is done and the output is
+already correct. Two Jira calls in one run are enough. The CLI tests inject a fake
+transport, so they never see it.
+
+If `fetch` is ever needed, drop `process.exit()` first: set `process.exitCode` and
+return, as `p-chat` does. `tests/cli-exit-safety.test.ts` enforces one of the two.
+
 ## Commands
 
 | Command | What it does |
