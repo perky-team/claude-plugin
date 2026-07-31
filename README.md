@@ -13,6 +13,10 @@ Open Claude Code CLI and add this repository as a marketplace, then install any 
 
 `<plugin-name>` is one of `p-wiki`, `p-flow`, `p-tasks`, `p-statusline`, `p-graph`, `p-shed`, `p-observe`, `p-chat` (see below).
 
+`/plugin install` asks for an install scope: **user** (you, in every project — the usual pick), **project** (everyone on this repo; the entry goes into `.claude/settings.json`), or **local** (you, this repo only). From a shell, `claude plugin install <plugin-name>@perky.team --scope user` skips the prompt. Run `/reload-plugins` afterwards to pick the plugin up in the current session.
+
+Each plugin then needs a one-time setup inside the repo you work in — `/p-wiki:init`, `/p-graph:init`, `/p-tasks:init`, `/p-flow:init`, and so on. That step writes the plugin's files into the project and the rule that tells Claude the plugin is available here.
+
 From a non-GitHub git host:
 
 ```text
@@ -39,21 +43,30 @@ Uninstall:
 
 Persistent markdown knowledge wiki under `docs/wiki/` of the project repo, with a bundled `pwiki` CLI. Captures external sources (URLs, files, pastes) into `raw/`, then synthesizes them into linked concept pages on demand. Answers questions with citations from accumulated project knowledge.
 
-Skills: `init`, `ingest`, `compile`, `query`, `lint`.
+Pages live on the filesystem or in Confluence Cloud: one primary destination plus any number of mirrors that `pwiki sync` overwrites one-way. A wiki can also read other wikis as **read-only sources** — an on-disk clone, a foreign Confluence space, or a published `index.json` bundle over GitHub / GitLab / HTTP. Search covers the primary first, then each source in declaration order, and cuts the merged list to the limit. `/p-wiki:init` offers to connect sources, and re-running it on an existing wiki skips the scaffold and goes straight to that offer; `pwiki source add` is the CLI behind it.
+
+Skills: `init`, `ingest`, `compile`, `query`, `lint`, `reconcile`, `sync`.
 
 ### [`p-flow`](./plugins/p-flow/)
 
-Disciplined task development flow for Claude: secrets deny-list, Conventional Commits + `<type>/<slug>` branch naming, spec templates (ADR, Gherkin, full specification), and a skill+agent stack for brainstorm → plan → verify → review → push.
+A development process, not a set of tips: one feature or one bug is one branch, one spec folder, one plan, one MR. The unit of work is picked first (`feature` / `bugfix` / `hotfix` / `chore` / `docs`), then it walks brainstorm → spec → plan → implement → verify → review → push with a ready-to-copy MR command. Ships the repo-level rules too: secrets deny-list, Conventional Commits + `<type>/<slug>` branch naming, and spec templates (ADR, Gherkin, full specification).
+
+By default each plan step runs in a fresh implementer subagent with a per-step review, so the main context stays clean; implementing inline in the current session is the opt-in alternative. Reviews are read-only and dispatched as `Task` + `general-purpose` with inline templates colocated with the requesting skill — there is no `agents/` directory. The one exception is the spec auditor, which fixes the spec itself. A `SessionStart` hook surfaces the flow on every fresh session, after `/clear`, and after auto-compaction, so Claude finds it without keyword guessing.
+
+Optional one-way bridges, active only when the other plugin is initialised in the same repo: the plan lives in `p-tasks` (and then no `plan.md` is written at all), task decisions compile into `p-wiki`, and `p-graph` informs step granularity with the change's impact set. None of them is required — p-flow installs and runs standalone.
 
 Commands: `init`, `task-start`, `task-end`.
-Skills: `init`, `task-brainstorming`, `writing-plan`, `verification-before-completion`, `requesting-code-review`, `requesting-task-review`.
-Subagents: `code-reviewer`, `task-reviewer`.
+Skills: `using-p-flow`, `init`, `task-start`, `task-end`, `task-brainstorming`, `writing-plan`, `subagent-driven-development`, `executing-plan`, `test-driven-development`, `verification-before-completion`, `systematic-debugging`, `requesting-code-review`, `requesting-task-review`, `receiving-code-review`, `using-git-worktrees`, `writing-skills`.
+
+Requires Sonnet or stronger for the review dispatches — weaker models ignore the reviewers' scope rules.
 
 ### [`p-tasks`](./plugins/p-tasks/)
 
 Two-level task tracker (`task` → `sub-task`) with FS and Jira destinations. One-way `primary → mirrors` sync.
 
-Skills: `init`, `add`, `set`, `next`, `summary`, `sync`.
+Items carry `todo` / `in_progress` / `done` and blocker links; a sub-task can also hold an acceptance criterion, expected files, its kind, where it came from, and the reason a review finding was rejected. The CLI validates every write: an unknown status, a blocker that does not exist, or a blocker cycle is refused, and `next` never offers a step whose blockers are still open — that is what a plain TODO file cannot do.
+
+Skills: `init`, `add`, `set`, `next`, `list`, `summary`, `sync`.
 
 ### [`p-statusline`](./plugins/p-statusline/)
 
@@ -73,25 +86,29 @@ The status line shows:
 
 The leading segments of both lines (context / model+effort) are padded so the first `|` separator vertically aligns.
 
-Skills: `install`.
+Skills: `install`, `help`.
 
 ### [`p-graph`](./plugins/p-graph/)
 
 A local code knowledge graph with a bundled `pgraph` CLI. Indexes the project (TypeScript/JavaScript, Go, C++, Python) into a SQLite graph of symbols and their call/import/extend edges, so Claude answers structural questions — where a symbol is defined, what calls it, what breaks if it changes, how one symbol reaches another — from the index instead of grepping. Fully local, no MCP server.
 
-Skills: `init`, `sync`, `help`.
+Why it matters: `impact` returns the whole transitive set in one small answer, including callers that never mention the symbol's name and so are invisible to grep. Ambiguous names stay unresolved rather than linked to a guess, so the graph never invents an edge. Queries refresh the changed files first, so day-to-day freshness needs no manual sync.
+
+Requires Node ≥ 22.5 (built-in `node:sqlite`).
+
+Skills: `init`, `sync`, `query`, `help`.
 
 ### [`p-shed`](./plugins/p-shed/)
 
 Scheduler/launcher for Claude Code headless runs. `p-shed` schedules jobs (cron timer + folder + prompt) and, on each due minute, launches `claude -p` in the job's folder. It is a pure scheduler: it does not store or resolve work items and installs no rules — what to do lives entirely in each job's prompt and in the target folder.
 
-Skills: `init`, `start`, `stop`, `job`.
+Skills: `init`, `start`, `stop`, `job`, `reset-breaker`.
 
 ### [`p-observe`](./plugins/p-observe/)
 
 Zero-touch realtime observability with a bundled `pobserve` CLI. Watches the runtime state of `p-shed`, `p-tasks`, `p-graph`, and `p-wiki` in the current repo — without modifying them — and emits a normalized, human-readable event stream (`pobserve watch`), a one-shot snapshot (`pobserve status`), and an opt-in headless journal (`pobserve capture`). Fully local, zero dependencies.
 
-Skills: `init`, `watch`, `help`.
+Skills: `init`, `watch`, `tui`, `help`.
 
 ### [`p-chat`](./plugins/p-chat/)
 
@@ -101,14 +118,14 @@ Skills: `init`, `respond`.
 
 ## Tests
 
-Static validation of `marketplace.json`, every `plugin.json`, every `SKILL.md`, and template references.
-
 ```bash
 npm install   # first time only
 npm test
 ```
 
-Tests are static — no network, no `claude` CLI, no fixtures. See [`docs/superpowers/specs/2026-05-12-marketplace-tests-design.md`](./docs/superpowers/specs/2026-05-12-marketplace-tests-design.md) for the rationale.
+Two layers run together. The marketplace layer is static: it validates `marketplace.json`, every `plugin.json`, every `SKILL.md`, template references, and cross-skill invariants (see [`docs/superpowers/specs/2026-05-12-marketplace-tests-design.md`](./docs/superpowers/specs/2026-05-12-marketplace-tests-design.md) for the rationale). On top of that, each bundled CLI has its own suite that runs the real binary in a temporary repo and uses local fixtures — a fake Confluence transport, throwaway wikis and task stores — so behaviour is covered, not just structure.
+
+No test needs the network or a logged-in service. The few that do talk to a real Confluence are skipped unless their environment variables are set.
 
 ## Validate
 
@@ -138,9 +155,10 @@ Complements `npm test`: tests catch structural drift in our manifests/skills, `v
 │   │   ├── .claude-plugin/
 │   │   │   └── plugin.json
 │   │   ├── README.md
-│   │   ├── agents/          ← read-only review subagents
-│   │   ├── docs/superpowers/  ← per-plugin design spec + implementation plan
-│   │   └── skills/
+│   │   ├── CLAUDE.md        ← contributor guide (architecture decisions, invariants)
+│   │   ├── hooks/           ← SessionStart hook that surfaces the flow
+│   │   ├── docs/            ← per-task design specs + implementation plans
+│   │   └── skills/          ← reviewer prompts live inside their requesting skill
 │   ├── p-tasks/             ← two-level task tracker with FS / Jira destinations
 │   │   ├── .claude-plugin/
 │   │   │   └── plugin.json
@@ -165,7 +183,8 @@ Complements `npm test`: tests catch structural drift in our manifests/skills, `v
 │   │   ├── .claude-plugin/
 │   │   │   └── plugin.json
 │   │   ├── README.md
-│   │   └── skills/
+│   │   ├── skills/
+│   │   └── tools/           ← the pshed CLI (timer, guard, breaker, log rotation)
 │   ├── p-chat/              ← dumb Telegram channel (pchat CLI + p-shed guard)
 │   │   ├── .claude-plugin/
 │   │   │   └── plugin.json
