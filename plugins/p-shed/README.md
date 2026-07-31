@@ -25,8 +25,8 @@ Tool: `node tools/pshed.mjs <command>` (all support `--json`; exit `0` ok / `1` 
 | `run <id>` `[--no-guard]` `[--force]` | Run one job immediately, bypassing the schedule (manual/testing). Respects the job's guard (`--no-guard` bypasses) and refuses while the job or its concurrency group is already live (`--force` bypasses). |
 | `set-job` | Add or modify a job (`--schedule`, `--prompt`, `--id`, `--cwd`, `--timeoutSec`, `--permission-mode`, `--allowed-tools`, `--model`, `--effort`, `--max-consecutive-failures`, `--guard`, `--guard-timeout-sec`, `--concurrency-group`). |
 | `rm-job` | Delete a job (`--id`). |
-| `reset-breaker <id>` | Clear a job's tripped circuit breaker and self-pause marker so it schedules again. |
-| `pause` / `resume` | Reversibly halt / resume the **whole** scheduler (`run/PAUSED`; cron stays installed). `pause` accepts `--reason`; both idempotent. |
+| `reset-breaker <id>` | Clear a job's tripped circuit breaker and its **self**-pause marker so it schedules again. An operator pause (`pause --id`) survives — lift that with `resume --id`. |
+| `pause` / `resume` | Reversibly halt / resume the **whole** scheduler (`run/PAUSED`; cron stays installed), or with `--id <job>` / `--group <name>` just that job or every member of that concurrency group (`run/<id>.pause`). `pause` accepts `--reason`; both idempotent. An unknown id, an unmatched group, or both flags at once is an error (exit 2) — never a global pause. |
 | `status` | Report, from disk + the OS scheduler: installed?, globally paused?, and per job running/paused/breaker/last-run. JSON by default, `--human` for a text table. |
 | `stop` `[--kill]` | Honest teardown of the OS scheduler entry — reports `removed: true|false` (see below). `--kill` also SIGTERM→SIGKILLs any in-flight jobs (`--grace-ms` tunes the escalation delay). |
 | `install-cron` / `remove-cron` | Register/unregister the every-minute `tick` in the OS scheduler for this folder. `remove-cron` reports `removed` and warns on a cwd mismatch (see below). |
@@ -42,7 +42,7 @@ Tool: `node tools/pshed.mjs <command>` (all support `--json`; exit `0` ok / `1` 
 | `state/<id>.json` | gitignore | per-job `{ lastRun, lastExit, pid, consecutiveFailures, consecutiveGuardFailures?, lastGuard?, breakerTripped?, breakerReason?, breakerAt?, lastSkipReason?, lastSkipAt?, lastSkipResetAt? }` — one file per job (no shared state file). `lastSkip*` records the most recent skip (`lastSkipReason` is `usage-limit` or `api-overload`) and is cleared once the job runs for real again; `lastGuard` records the most recent guard check (`{ at, outcome, exit }`) |
 | `logs/<date>.jsonl` | gitignore | one record per run (see below); auto-rotated (7-day retention) |
 | `run/<id>.pid` | gitignore | duplicate-guard pidfile |
-| `run/<id>.pause` | gitignore | per-job self-pause marker (contents = reason); a job's own run writes it to stop being scheduled |
+| `run/<id>.pause` | gitignore | per-job pause marker (contents = a human-readable reason). A job's own run writes it to stop being scheduled; `pause --id/--group` writes the same file with a leading `#pshed origin=operator` line. Presence pauses, so a bare `touch` works and an empty marker is a valid self-pause |
 | `run/PAUSED` | gitignore | global pause marker (`{ createdAt, reason? }`); halts every job while cron stays installed. Written by `pause`, removed by `resume` |
 
 ### Run log records (`logs/<date>.jsonl`)
@@ -223,6 +223,23 @@ are cleared with `reset-breaker <id>` (or `/p-shed:reset-breaker`).
   can write `run/<id>.pause` (contents = a human-readable reason) to signal "stop
   scheduling me". While that marker exists the job is skipped (`skipped-paused`).
 
+#### Who wrote the marker matters
+
+The same file is written by two very different actors, so it records its **origin**:
+
+| Written by | Contents | Cleared by |
+|---|---|---|
+| the job itself (`echo "verify went red" > run/<id>.pause`, or a bare `touch`) | the plain reason, no header | `reset-breaker <id>` — un-sticking it is the whole point — or `resume --id` |
+| an operator (`pshed pause --id <job>` / `--group <name>`) | `#pshed origin=operator` + the reason | `resume --id` / `--group` **only** |
+
+`reset-breaker` deliberately does **not** lift an operator pause: an unrelated failure
+reset must never cancel a halt a human put there on purpose. It reports
+`{ pauseCleared: false, operatorPause: true }` and says which command lifts it. The
+reason stays plain text in both cases, so `status` (`pauseReason`, and the `paused`
+column of `--human`) and the tick's `skipped-paused` keep showing a readable line
+rather than a machine blob. Pausing an already-paused job is a no-op that keeps the
+**first** reason — the one that explains why the job actually stopped.
+
 ### Usage limits and API overload are skips, not failures
 
 When a run fails **only** because the Claude subscription usage limit is exhausted (the
@@ -265,6 +282,17 @@ Three levers, deliberately distinct:
   true, "launched": 0 }`) and launches nothing until `resume` deletes the marker. Cron
   stays installed, so this is the right tool to "halt to reconfigure, then resume"
   without re-running `install-cron`. It does not depend on the folder-scoped task id.
+  - **Targeted:** `pause --id <job>` halts one job and `pause --group <name>` halts every
+    member of one concurrency group (membership resolved exactly like the group gate, so
+    a job inheriting `defaults.concurrencyGroup` is included and an explicit
+    `concurrencyGroup: null` is not). Each writes that job's `run/<id>.pause`; the tick
+    reports `skipped-paused` and every other job keeps running. `resume` takes the same
+    flags. The output names what changed — `pausedIds` / `alreadyPausedIds`,
+    `resumedIds` / `notPausedIds`.
+  - **An unmatched target is an error, not a wider pause.** `--id` and `--group`
+    together, an unknown job id, a group no job belongs to, or a flag with no value all
+    exit 2 with a validation error and write **nothing**. A typo must never escalate
+    "stop this one job" into "stop the whole scheduler".
 - **`stop` (teardown).** Removes the OS scheduler entry for this folder — the honest
   `remove-cron` (below) — reporting a `removed` verdict. `stop --kill` additionally
   terminates in-flight jobs: SIGTERM every live pid, then SIGKILL any survivor after a

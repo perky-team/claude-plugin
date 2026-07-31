@@ -67,11 +67,17 @@ export function formatHuman(status, now = Date.now()) {
     const guard = j.lastGuard
       ? `${j.lastGuard.outcome} ${Math.max(0, Math.round((now - j.lastGuard.at) / 1000))}s ago`
       : '-';
+    // Show WHY a job is paused, like the global `paused:` line above — a bare `true`
+    // makes a job that stopped itself look identical to one an operator halted. Newlines
+    // are collapsed so a multi-line marker can't break the row into fake table rows.
+    const paused = j.paused
+      ? (j.pauseReason ? `true (${String(j.pauseReason).replace(/\s+/g, ' ').trim()})` : 'true')
+      : 'false';
     lines.push([
       j.id,
       j.enabled,
       j.running,
-      j.paused,
+      paused,
       j.breakerTripped ? (j.breakerReason ?? 'tripped') : '-',
       j.consecutiveFailures,
       j.lastExit ?? '-',

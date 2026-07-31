@@ -48,6 +48,29 @@ Pure scheduler/launcher. Key decisions:
   marker the job's own prompt writes, because `claude -p` exits 0 even when its internal
   work failed. The pause is a **file under `run/`, not a state field** — so the state
   orphan-prune never clobbers it and clearing it is a plain delete.
+- **`pause`/`resume` targeting: an unmatched target MUST fail loudly.** `--id <job>` and
+  `--group <name>` write/remove the same `run/<id>.pause` marker; no flags keeps the
+  global `run/PAUSED`. `resolveTarget` (`lib/target.mjs`) throws on an unknown id, a
+  group no job belongs to, both flags at once, or a valueless flag (`parseArgs` yields
+  boolean `true` for `--id` with nothing after it). Do **not** "simplify" any of those
+  back into a fallback: before this existed, `pause --id worker` silently ignored the
+  flag and halted the ENTIRE scheduler, chat jobs included, while answering
+  `{"action":"pause","paused":true}`. Widening a blast radius on a typo is the opposite
+  of `rm-job`, which errors on a missing `--id`. Group membership comes from
+  `resolveGroup`, never re-derived from `defaults`, so targeting and the tick's group
+  gate can never disagree about who is in a group.
+- **The pause marker records its ORIGIN, and `reset-breaker` clears only self-pauses.**
+  A marker with no header is a self-pause (that is what a prompt's `echo reason >`
+  and a bare `touch` produce); `pause --id/--group` prepends `#pshed origin=operator`.
+  `reset-breaker` removes the first and keeps the second, reporting
+  `pauseCleared`/`operatorPause` — otherwise resetting an unrelated breaker trip would
+  silently lift a halt a human set deliberately, and the only lever to set one is the
+  same file. Two invariants constrain the format and must not be traded away:
+  **presence pauses** (never make it truthiness-of-contents, or `touch` stops working)
+  and **the reason stays plain text** (`status`'s `pauseReason` / `--human` column and
+  the tick's `skipped-paused` are where a human reads it — a JSON blob there is a
+  regression). Pausing an already-paused job keeps the FIRST reason: it explains why
+  the job actually stopped.
 - **Three-way run classification, not two.** `tick` no longer branches on `exit === 0`
   alone; it calls `classifyRun(exit, out, err)` (`lib/classify.mjs`) → `success` |
   `usage_limit` | `failure`. A Claude usage-limit or transient API overload (`429`/`529`,

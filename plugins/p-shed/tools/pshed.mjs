@@ -1,10 +1,10 @@
 #!/usr/bin/env node
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readJobs, readConfig } from './lib/io.mjs';
 import { setJob, rmJob, ValidationError } from './lib/jobs.mjs';
-import { resetBreaker } from './lib/breaker.mjs';
+import { resetBreaker, writePause, readPause, removePause } from './lib/breaker.mjs';
 import { tick as runTick } from './lib/tick.mjs';
 import { runJob } from './lib/launch.mjs';
 import { runGuard } from './lib/guard.mjs';
@@ -13,10 +13,23 @@ import { buildInstall, buildRemove, taskName, crontabLine, applyCrontab, planRem
 import { writeGlobalPause, removeGlobalPause } from './lib/pause.mjs';
 import { listRunningJobs, terminateJobs, readPid, writePid, removePid, isPidAlive } from './lib/pids.mjs';
 import { findGroupHolder } from './lib/concurrency.mjs';
+import { resolveTarget } from './lib/target.mjs';
 import { collectStatus, formatHuman } from './lib/status.mjs';
 import { execFileSync } from 'node:child_process';
 
-export const VERSION = '0.1.0';
+// The version is read from the plugin manifest, never hardcoded: a release bumps
+// plugin.json#version only, so a constant here drifts silently (this one sat at 0.1.0
+// while the plugin shipped 0.8.0). The manifest ships in the same copied tree, so the
+// relative path holds in the installed plugin cache too. Never throws — a missing
+// manifest degrades to 0.0.0 instead of killing an unrelated command.
+export function readVersion() {
+  try {
+    const manifest = new URL('../.claude-plugin/plugin.json', import.meta.url);
+    return JSON.parse(readFileSync(manifest, 'utf-8')).version || '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+}
 
 export function parseArgs(argv) {
   const out = { _: [] };
@@ -68,7 +81,7 @@ const KNOWN = ['tick', 'run', 'install-cron', 'remove-cron', 'set-job', 'rm-job'
 
 async function main() {
   if (process.argv[2] === '--version') {
-    process.stdout.write(`${VERSION}\n`);
+    process.stdout.write(`${readVersion()}\n`);
     process.exit(0);
   }
   const command = process.argv[2];
@@ -158,13 +171,34 @@ async function main() {
       return emitJson(resetBreaker(root, id), 0);
     }
 
-    if (command === 'pause') {
-      const reason = typeof args.reason === 'string' ? args.reason : undefined;
-      return emitJson({ action: 'pause', ...writeGlobalPause(root, { reason }) }, 0);
-    }
+    // pause/resume act on the whole scheduler, ONE job (--id), or ONE concurrency group
+    // (--group). resolveTarget throws on anything it cannot match, which is the point:
+    // `pause --id worker` used to silently ignore the flag and halt everything.
+    if (command === 'pause' || command === 'resume') {
+      const { defaults, jobs } = readJobs(root);
+      const target = resolveTarget({ jobs, defaults, id: args.id, group: args.group });
+      const scoped = target ? (target.scope === 'job' ? { id: target.id } : { group: target.group }) : null;
 
-    if (command === 'resume') {
-      return emitJson({ action: 'resume', ...removeGlobalPause(root) }, 0);
+      if (command === 'pause') {
+        const reason = typeof args.reason === 'string' ? args.reason : undefined;
+        if (!target) return emitJson({ action: 'pause', scope: 'global', ...writeGlobalPause(root, { reason }) }, 0);
+        // Already-paused jobs are reported apart from the ones this call stopped, and
+        // keep their original reason (see writePause).
+        const pausedIds = [], alreadyPausedIds = [];
+        for (const id of target.ids) {
+          (writePause(root, id, { reason, origin: 'operator' }).alreadyPaused ? alreadyPausedIds : pausedIds).push(id);
+        }
+        return emitJson({ action: 'pause', scope: target.scope, ...scoped, pausedIds, alreadyPausedIds }, 0);
+      }
+
+      if (!target) return emitJson({ action: 'resume', scope: 'global', ...removeGlobalPause(root) }, 0);
+      const resumedIds = [], notPausedIds = [];
+      for (const id of target.ids) {
+        const wasPaused = readPause(root, id) != null;
+        if (wasPaused) removePause(root, id);
+        (wasPaused ? resumedIds : notPausedIds).push(id);
+      }
+      return emitJson({ action: 'resume', scope: target.scope, ...scoped, resumedIds, notPausedIds }, 0);
     }
 
     if (command === 'status') {
