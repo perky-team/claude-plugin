@@ -1,17 +1,17 @@
 #!/usr/bin/env node
 
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { resolve, join } from 'node:path';
+import { resolve, join, dirname, relative } from 'node:path';
 import { parseFrontmatter, serializeFrontmatter } from './lib/fm.mjs';
 import { extractSummary, renderIndex } from './lib/index.mjs';
-import { resolveDestination } from './lib/destination.mjs';
+import { resolveDestination, makeDestination, DEFAULT_FS_CONFIG } from './lib/destination.mjs';
 import { TYPES, templateBody, isRawType } from './lib/schema.mjs';
 import { kebab, stripDatePrefix } from './lib/slug.mjs';
 import { today, findWikiRoot } from './lib/paths.mjs';
 import { createHttpClient } from './lib/confluence/http.mjs';
 import { ensureSubParent } from './lib/confluence/tree.mjs';
-import { writeConfig, validateConfig } from './lib/config.mjs';
+import { readConfig, writeConfig, validateConfig } from './lib/config.mjs';
 import { syncToMirror } from './lib/sync.mjs';
 import { buildBundle } from './lib/bundle.mjs';
 
@@ -293,6 +293,144 @@ export async function searchCommand(args, _opts = {}) {
   emitJson({ query, total: trimmed.length, results: trimmed, warnings }, 0);
 }
 
+// ---------------------------------------------------------------------------
+// source add — register another wiki as a read-only source
+// ---------------------------------------------------------------------------
+
+const SOURCE_KINDS = ['fs', 'github', 'gitlab', 'http'];
+
+/** Build a destinations block from --kind plus its per-kind flags. Returns {block} or {error}. */
+function buildSourceBlock(args) {
+  const kind = typeof args.kind === 'string' ? args.kind : '';
+  if (kind === 'fs') {
+    if (typeof args.path !== 'string' || !args.path) {
+      return { error: '--path required for --kind=fs (the other wiki\'s repo root, the folder holding docs/wiki)' };
+    }
+    return { block: { kind: 'fs', path: args.path } };
+  }
+  if (kind === 'github') {
+    for (const f of ['owner', 'repo']) if (typeof args[f] !== 'string' || !args[f]) return { error: `--${f} required for --kind=github` };
+    const block = { kind: 'github', owner: args.owner, repo: args.repo };
+    if (typeof args.ref === 'string') block.ref = args.ref;
+    if (typeof args['index-path'] === 'string') block.indexPath = args['index-path'];
+    if (typeof args['api-base-url'] === 'string') block.apiBaseUrl = args['api-base-url'];
+    return { block };
+  }
+  if (kind === 'gitlab') {
+    if (typeof args.project !== 'string' || !args.project) return { error: '--project required for --kind=gitlab (group/repo form)' };
+    const block = { kind: 'gitlab', project: args.project };
+    if (typeof args['base-url'] === 'string') block.baseUrl = args['base-url'];
+    if (typeof args.ref === 'string') block.ref = args.ref;
+    if (typeof args['index-path'] === 'string') block.indexPath = args['index-path'];
+    return { block };
+  }
+  if (kind === 'http') {
+    if (typeof args.url !== 'string' || !args.url) return { error: '--url required for --kind=http' };
+    const block = { kind: 'http', url: args.url };
+    const header = args['auth-header'];
+    const tokenEnv = args['auth-token-env'];
+    if (header !== undefined || tokenEnv !== undefined) {
+      if (typeof header !== 'string' || !header || typeof tokenEnv !== 'string' || !tokenEnv) {
+        return { error: '--auth-header and --auth-token-env must be set together' };
+      }
+      block.authHeader = header;
+      block.authTokenEnv = tokenEnv;
+    }
+    return { block };
+  }
+  if (kind === 'confluence') {
+    return { error: 'a confluence source needs that space\'s ids — point --from-config at the other wiki\'s .pwiki.json instead of passing --kind=confluence' };
+  }
+  return { error: `--kind must be one of ${SOURCE_KINDS.join(', ')} (or use --from-config=<path to another wiki's .pwiki.json>)` };
+}
+
+/** Copy a destinations block out of another wiki's .pwiki.json. Returns {block} or {error}. */
+function blockFromConfig(fromPath, args, root) {
+  let raw;
+  try {
+    raw = JSON.parse(readFileSync(fromPath, 'utf-8'));
+  } catch (e) {
+    return { error: `cannot read ${fromPath}: ${e?.message ?? String(e)}` };
+  }
+  const fromName = typeof args['from-destination'] === 'string' ? args['from-destination'] : raw?.primary;
+  const block = raw?.destinations?.[fromName];
+  if (!block || typeof block !== 'object') {
+    return { error: `no destination "${fromName}" in ${fromPath}` };
+  }
+  const copy = { ...block };
+  if (copy.kind === 'fs' && !copy.path) {
+    // That config lives at <its-root>/docs/wiki/.pwiki.json, so its repo root is two
+    // levels up. Store the path relative to our root (forward slashes) so the config
+    // stays readable and portable across machines.
+    const otherRoot = resolve(dirname(resolve(fromPath)), '..', '..');
+    copy.path = relative(root, otherRoot).split('\\').join('/') || '.';
+  }
+  return { block: copy };
+}
+
+/** Cheap reachability probe: FS checks the folder, every other kind runs a 1-hit search. */
+async function verifySource(name, block, root, transport) {
+  if (block.kind === 'fs') {
+    const abs = resolve(root, block.path);
+    if (!existsSync(join(abs, 'docs', 'wiki'))) throw new Error(`no wiki at ${join(abs, 'docs', 'wiki')}`);
+    return;
+  }
+  const dest = makeDestination(name, block, root, { transport });
+  await dest.search('p-wiki-source-check', { type: [], tags: [], in: 'pages', limit: 1, snippet: false });
+}
+
+export async function sourceAdd(args, _opts = {}) {
+  const name = args._[0];
+  if (!name) emitJson({ error: { code: 'bad-args', message: 'source add: <name> required' } }, 1);
+  const root = findWikiRoot(process.cwd());
+  if (root === null) die('not inside a p-wiki repo', 1);
+
+  let cfg;
+  try {
+    cfg = readConfig(root) ?? JSON.parse(JSON.stringify(DEFAULT_FS_CONFIG));
+  } catch (e) {
+    emitJson({ error: { code: 'config-invalid', message: `cannot read .pwiki.json: ${e?.message ?? String(e)}` } }, 1);
+  }
+  // One name, one role: a name already in destinations is the primary, a mirror, or an
+  // existing source, and silently repurposing it would change where writes go.
+  if (cfg?.destinations?.[name]) {
+    emitJson({ error: { code: 'source-exists', message: `destinations.${name} already exists — pick another name` } }, 1);
+  }
+
+  const built = typeof args['from-config'] === 'string'
+    ? blockFromConfig(args['from-config'], args, root)
+    : buildSourceBlock(args);
+  if (built.error) emitJson({ error: { code: 'bad-args', message: built.error } }, 1);
+
+  const next = {
+    ...cfg,
+    sources: [...(cfg.sources ?? []), name],
+    destinations: { ...cfg.destinations, [name]: built.block },
+  };
+  const v = validateConfig(next);
+  if (!v.ok) emitJson({ error: { code: 'config-invalid', message: v.error } }, 1);
+
+  // Verify before writing: a wrong path or repo name would otherwise sit in the config
+  // and only surface later, as empty search results in an unrelated session.
+  let verified = false;
+  if (!args['no-verify']) {
+    try {
+      await verifySource(name, built.block, root, _opts.transport ?? makeRealTransport());
+      verified = true;
+    } catch (e) {
+      emitJson({
+        error: {
+          code: 'source-unreachable',
+          message: `${e?.message ?? String(e)} — fix the details, or pass --no-verify to add it anyway`,
+        },
+      }, 1);
+    }
+  }
+
+  writeConfig(root, next);
+  emitJson({ ok: true, name, kind: built.block.kind, sources: next.sources, verified }, 0);
+}
+
 const isMain = process.argv[1] && resolve(fileURLToPath(import.meta.url)) === resolve(process.argv[1]);
 
 if (isMain) {
@@ -305,7 +443,7 @@ if (process.argv.slice(2)[0] === '--version') {
 const command = process.argv[2];
 const args = parseArgs(process.argv.slice(3));
 
-const KNOWN = ['new', 'set', 'promote', 'search', 'lint', 'backlinks', 'index', 'reindex', 'init', 'sync', 'get'];
+const KNOWN = ['new', 'set', 'promote', 'search', 'lint', 'backlinks', 'index', 'reindex', 'init', 'sync', 'get', 'source'];
 if (!KNOWN.includes(command)) die(`unknown command: ${command}`, 1);
 
 try {
@@ -474,6 +612,12 @@ try {
 
   if (command === 'get') {
     await getPage(args);
+  }
+
+  if (command === 'source') {
+    const sub = args._[0];
+    if (sub !== 'add') die(`unknown source subcommand: ${sub ?? '(none)'} — only "add" exists`, 1);
+    await sourceAdd({ ...args, _: args._.slice(1) });
   }
 
   if (command === 'lint') {

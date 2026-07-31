@@ -22,9 +22,9 @@ import { readConfig, validateConfig } from './config.mjs';
  * @property {string[]} sourceNames
  */
 
-const DEFAULT_FS_CONFIG = { primary: 'fs', mirrors: [], destinations: { fs: { kind: 'fs' } } };
+export const DEFAULT_FS_CONFIG = { primary: 'fs', mirrors: [], destinations: { fs: { kind: 'fs' } } };
 
-function makeDestination(name, block, root, env) {
+export function makeDestination(name, block, root, env) {
   if (block.kind === 'fs') {
     const fsRoot = block.path ? resolve(root, block.path) : root;
     return createFsDestination({ root: fsRoot, destinationConfig: block });

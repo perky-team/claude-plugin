@@ -42,7 +42,12 @@ After edits, run `/reload-plugins` inside Claude Code to pick them up without re
 | `/p-wiki:reconcile [path]` | Resolves conflict callouts and stale pages: re-merges a derived page with its current sources and removes the superseded callout. Genuine conflicts are left flagged for a human. |
 | `/p-wiki:sync` | Syncs the primary destination to every configured mirror (one-way primary → mirrors, idempotent). No-op when no mirrors are configured. |
 
-**CLI-only command** (no `/p-wiki:` slash wrapper): `pwiki reindex` — regenerates `docs/wiki/index.md` and writes the `docs/wiki/index.json` bundle that git/HTTP read-only sources consume. Run it as `node "${CLAUDE_PLUGIN_ROOT}/tools/pwiki.mjs" reindex` (or wire it to a pre-push hook) before publishing. See [Publishing a bundle for consumption](#publishing-a-bundle-for-consumption).
+`/p-wiki:init` also offers to connect other wikis as read-only sources (its Step 8) — that is the normal way to set them up. Re-run it on a wiki that already exists and it skips the scaffold and goes straight to that offer, so sources can be added at any time, not only at creation.
+
+**CLI-only commands** (no `/p-wiki:` slash wrapper):
+
+- `pwiki reindex` — regenerates `docs/wiki/index.md` and writes the `docs/wiki/index.json` bundle that git/HTTP read-only sources consume. Run it as `node "${CLAUDE_PLUGIN_ROOT}/tools/pwiki.mjs" reindex` (or wire it to a pre-push hook) before publishing. See [Publishing a bundle for consumption](#publishing-a-bundle-for-consumption).
+- `pwiki source add <name> …` — registers another wiki as a read-only source, validating the block and probing the source before it touches `.pwiki.json`. See [Adding a source with one command](#adding-a-source-with-one-command).
 
 ## Storage backends
 
@@ -78,7 +83,26 @@ node "${CLAUDE_PLUGIN_ROOT}/tools/pwiki.mjs" sync
 
 `sync` walks the primary, writes every page into each mirror (translating cross-link targets to the mirror's format), deletes mirror-only pages (true-mirror semantics), and regenerates the Index on each mirror. Sync is **one-way** (primary → mirrors) with no conflict resolution — mirrors are overwritten. Run it from chat with `/p-wiki:sync` (a thin wrapper over this CLI command, listed in the table above), directly via the CLI, or from cron.
 
-A wiki may also declare **read-only sources** — `"sources": ["other-wiki"]`, referencing `destinations` entries that p-wiki only *reads* (never writes). `search` and `query` union results from the primary plus every source (each result is tagged with its `source`; an unreachable source is reported in a `warnings` array rather than failing the search), and `pwiki get <path> --source=<name>` reads a page from a named source. Sources are p-wiki-formatted stores: a foreign Confluence space populated by another p-wiki (its block needs that space's `spaceId` / `rootPageId` / `subParents` — copy them from the source wiki's own `.pwiki.json`), or another on-disk wiki via an `fs` block with a `path`. All Confluence blocks share the same `PWIKI_CONFLUENCE_EMAIL` / `PWIKI_CONFLUENCE_TOKEN`, so a source on a different Atlassian account is not supported.
+A wiki may also declare **read-only sources** — `"sources": ["other-wiki"]`, referencing `destinations` entries that p-wiki only *reads* (never writes). `search` and `query` union results from the primary plus every source (primary hits come first, sources follow in declaration order, and the merged list is cut to `--limit`, so a wiki with many local hits can push source hits out of the answer; each result is tagged with its `source`; an unreachable source is reported in a `warnings` array rather than failing the search), and `pwiki get <path> --source=<name>` reads a page from a named source. Sources are p-wiki-formatted stores: a foreign Confluence space populated by another p-wiki (its block needs that space's `spaceId` / `rootPageId` / `subParents`), or another on-disk wiki via an `fs` block with a `path`. All Confluence blocks share the same `PWIKI_CONFLUENCE_EMAIL` / `PWIKI_CONFLUENCE_TOKEN`, so a source on a different Atlassian account is not supported.
+
+#### Adding a source with one command
+
+Don't hand-write the block. `/p-wiki:init` asks about sources in its Step 8, and both it and you use the same CLI command:
+
+```bash
+# another wiki cloned on this machine (path = that repo's root, the folder holding docs/wiki)
+node "${CLAUDE_PLUGIN_ROOT}/tools/pwiki.mjs" source add specs --kind=fs --path=../repo-specs
+
+# copy a whole block out of another wiki's config — the practical way to add a Confluence source
+node "${CLAUDE_PLUGIN_ROOT}/tools/pwiki.mjs" source add specs --from-config=../repo-specs/docs/wiki/.pwiki.json
+
+# no clone: read the published bundle straight from GitHub / GitLab / any URL
+node "${CLAUDE_PLUGIN_ROOT}/tools/pwiki.mjs" source add specs --kind=github --owner=my-org --repo=repo-specs
+node "${CLAUDE_PLUGIN_ROOT}/tools/pwiki.mjs" source add specs --kind=gitlab --project=my-org/repo-specs
+node "${CLAUDE_PLUGIN_ROOT}/tools/pwiki.mjs" source add specs --kind=http --url=https://example.com/wiki/index.json
+```
+
+What the command does, in order: refuses a `<name>` already used by the primary, a mirror, or another source (`source-exists`); builds the block from the flags, or copies it from `--from-config` (with `--from-destination=<name>` when that wiki's block you want isn't its primary — an `fs` block with no `path` gets one derived from the config's location); validates the whole config; probes the source — a folder check for `fs`, a one-hit search for everything else — and **writes nothing** if the probe fails (`source-unreachable`, exit 1). Pass `--no-verify` to skip the probe when the source is legitimately unreachable right now, e.g. the token lives on another machine. Optional bundle fields (`--ref`, `--index-path`, `--base-url`, `--api-base-url`, `--auth-header` + `--auth-token-env`) are carried through. There is no `source remove` — drop the name from `sources` and its `destinations` block by hand.
 
 #### Git and HTTP read-only sources
 
@@ -146,19 +170,13 @@ No `pwiki sync`, no Confluence required. Consumers on GitLab/GitHub fetch `index
 #### Shared wiki over git — quick recipe
 
 1. In the **shared wiki repo**, run `pwiki reindex` and push `docs/wiki/index.json` to the default branch (or set up CI to generate and publish it).
-2. In each **consumer repo**, add a source block to `docs/wiki/.pwiki.json`:
+2. In each **consumer repo**, add the source:
 
-   ```json
-   {
-     "sources": ["shared"],
-     "destinations": {
-       "shared": {
-         "kind": "gitlab",
-         "project": "my-org/shared-wiki"
-       }
-     }
-   }
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/tools/pwiki.mjs" source add shared --kind=gitlab --project=my-org/shared-wiki
    ```
+
+   The command writes the `sources` entry and its `destinations` block, and fails without touching the config if the bundle isn't reachable. Skip this step if you answered the sources question during `/p-wiki:init`.
 
 3. `pwiki search "<question>"` and `/p-wiki:query` now union results from both wikis. `pwiki get <path> --source=shared` reads a page from the shared wiki directly.
 

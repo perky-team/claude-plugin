@@ -66,9 +66,15 @@ Run `git rev-parse --show-toplevel` via Bash. If it fails (not a git repo), ask 
 
 Hereafter `<root>` = the resolved repo root.
 
-## Step 4 — Refuse if already initialised
+## Step 4 — Already initialised? Offer sources instead of refusing
 
-If `<root>/docs/wiki/` exists, stop and tell the user: "Wiki already initialised at `<root>/docs/wiki/`. Remove the directory by hand if you want to reset it."
+If `<root>/docs/wiki/` exists, the scaffold is done and must not be rewritten. Do **not** stop outright — say:
+
+> Wiki already initialised at `<root>/docs/wiki/`. Nothing to scaffold — remove the directory by hand if you want a full reset.
+
+Then ask whether they want to connect other wikis as read-only sources. If yes, jump straight to **Step 8** and skip Steps 5–7 (layout, content files, and the rule are already in place). If no, stop here.
+
+This is the only way an existing wiki reaches Step 8: re-running `/p-wiki:init` is how sources get added later, not just at creation time.
 
 ## Step 5 — Create the layout
 
@@ -106,16 +112,47 @@ Ensure `<root>/.claude/rules/` exists (`mkdir -p`). Then:
 - If `<root>/.claude/rules/p-wiki.md` already exists, do NOT overwrite. Tell the user the file is present and they should review it before proceeding.
 - Otherwise, copy `${CLAUDE_SKILL_DIR}/../_shared/templates/p-wiki-rule.template.md` to `<root>/.claude/rules/p-wiki.md` verbatim.
 
-## Step 8 — Final message
+## Step 8 — Connect other wikis as read-only sources? (optional)
+
+This step runs **after** the scaffold exists — the CLI needs `<root>/docs/wiki/` in place.
+
+Ask the user (single question):
+
+> Should this wiki read from other wikis? A read-only source is another p-wiki that `search` and `query` look into as well as this one — nothing is ever written back to it. Typical case: specs live in their own repo, this repo holds the code.
+>
+> Pick: `none` (default), or name the wikis to connect.
+
+If the user picks `none`, skip to Step 9.
+
+For each wiki they want to connect, ask two things — a short name (used as `--source=<name>` later) and where it lives — then run **one** command per source. Never hand-edit `.pwiki.json`; the CLI validates the block and probes the source before writing.
+
+| Where the other wiki lives | Command |
+|---|---|
+| Its repo is cloned on this machine | `node "${CLAUDE_PLUGIN_ROOT}/tools/pwiki.mjs" source add <name> --kind=fs --path=<path to that repo root>` |
+| Its `.pwiki.json` is readable on this machine (any backend, including Confluence) | `node "${CLAUDE_PLUGIN_ROOT}/tools/pwiki.mjs" source add <name> --from-config=<path to that .pwiki.json> [--from-destination=<block name>]` |
+| GitHub, no clone | `node "${CLAUDE_PLUGIN_ROOT}/tools/pwiki.mjs" source add <name> --kind=github --owner=<org> --repo=<repo> [--ref=<branch>]` |
+| GitLab, no clone | `node "${CLAUDE_PLUGIN_ROOT}/tools/pwiki.mjs" source add <name> --kind=gitlab --project=<group/repo> [--base-url=<host>] [--ref=<branch>]` |
+| Hosted `index.json` over HTTP | `node "${CLAUDE_PLUGIN_ROOT}/tools/pwiki.mjs" source add <name> --kind=http --url=<url> [--auth-header=<header> --auth-token-env=<env var>]` |
+
+Rules for this step:
+
+- Prefer `--from-config` when the other wiki's config is reachable — it copies the whole block, which is the only practical way to add a **Confluence** source (that block carries space and page ids you should not retype).
+- `github` / `gitlab` / `http` sources read a published `docs/wiki/index.json` bundle. If the source repo has never published one, tell the user to run `pwiki index` there and commit the file, otherwise the source stays empty.
+- Private GitHub/GitLab repos need `PWIKI_GITHUB_TOKEN` / `PWIKI_GITLAB_TOKEN` in the environment. Never put a token in the config — the CLI rejects it.
+- On `error.code = source-unreachable`, show the message and ask whether to correct the details or add it anyway with `--no-verify` (right choice when the token is only set on another machine).
+- On `error.code = source-exists`, ask for a different name — the one given is already the primary, a mirror, or an existing source.
+
+## Step 9 — Final message
 
 Tell the user, in order:
 
 1. Where the wiki was created (`<root>/docs/wiki/`).
 2. That the global rule was created (or already existed) at `<root>/.claude/rules/p-wiki.md`.
-3. Suggest next steps:
+3. Which read-only sources were connected, if any, and that search now covers this wiki first and those sources after it.
+4. Suggest next steps:
    - For an external source: `/p-wiki:ingest <url-or-path>`.
    - For a doc already in the repo (spec, README, ADR, etc.): `/p-wiki:compile <path>`.
-4. Remind them this is just a scaffold — they're free to commit it or not.
+5. Remind them this is just a scaffold — they're free to commit it or not.
 
 ## Edge cases
 
