@@ -90,10 +90,14 @@ export async function runDeploy({
       if (!waited.idle) {
         // Nothing was paused and nothing ran — the honest failure, whether the wait ran
         // out or the operator interrupted it. Ownership is dropped by the finally below.
+        // `preserved` reflects this run's actual state, not a literal: on attempt 1 it is
+        // still the initial [] (nothing has been placed yet), but after an undo-and-retry
+        // it may hold pre-existing pauses walked into last attempt — dropOwnPauses() never
+        // touches those, so they are still genuinely sitting on disk when this fires again.
         result = {
           outcome: waited.aborted ? 'aborted' : 'timeout', exit: waited.aborted ? 130 : 1,
           waitedMs: d.now() - started, attempts,
-          scope, group, pausedIds: [], ownedGlobal: false, preserved: [], holders: waited.holders,
+          scope, group, pausedIds: [], ownedGlobal: false, preserved, holders: waited.holders,
         };
         return result;
       }
