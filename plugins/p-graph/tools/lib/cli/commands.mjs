@@ -71,7 +71,11 @@ export async function runCommand(ctx) {
       out(`${lead}${unrelated} same-name call site${unrelated === 1 ? '' : 's'} in files that do not import the target's package — likely unrelated, not listed.`);
     }
     if (external) {
-      out(`${lead}${external} call${external === 1 ? '' : 's'} that leave${external === 1 ? 's' : ''} the repo (stdlib, third party, builtins) — nothing to link.`);
+      // Not every row here truly left the repo: a Go conversion into a repo
+      // type (`Duration(v)`), or a call into a repo package that produced no
+      // indexed symbols, land here too. Say what is actually true — the graph
+      // found nothing to link the call to — instead of claiming it left.
+      out(`${lead}${external} call${external === 1 ? '' : 's'} the graph found nothing to link to (stdlib, third party, builtins, or a repo call it never indexed).`);
     }
     out('  Confirm with a text search before treating this answer as complete.');
   };
@@ -126,16 +130,28 @@ export async function runCommand(ctx) {
   }
   if (command === 'context') {
     const n = store.node(opts._[0]); if (!n) die('symbol not found', 1);
+    const gapsIn = store.gapsFor(opts._[0]);
+    const gapsOut = store.gapsFrom(opts._[0]);
+    // A call from X whose bare name matches X's own name (wrapper delegation,
+    // e.g. Counter.Write calling a field's Write) shows up in BOTH gapsIn (it
+    // names the target) and gapsOut (X itself made the call). Dedupe on the
+    // call site, not the direction, so it is reported once.
+    const seen = new Set();
+    const gaps = [...gapsIn, ...gapsOut].filter((r) => {
+      const key = `${r.file}|${r.line}|${r.dst_name}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
     const ctxObj = {
       node: n, callers: store.callers(opts._[0]), callees: store.callees(opts._[0]),
-      gaps_in: store.gapsFor(opts._[0]),
-      gaps_out: store.gapsFrom(opts._[0]),
+      gaps_in: gapsIn, gaps_out: gapsOut, gaps,
     };
     if (opts.json) return emitJson(ctxObj);
     out(fmtNode(n));
     out('callers:'); ctxObj.callers.forEach((r) => out('  ' + fmtNode(r)));
     out('callees:'); ctxObj.callees.forEach((r) => out('  ' + fmtNode(r)));
-    return emitGaps([...ctxObj.gaps_in, ...ctxObj.gaps_out]);
+    return emitGaps(gaps);
   }
   if (command === 'explore') {
     const rows = opts._.map((q) => store.node(q)).filter(Boolean);

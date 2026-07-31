@@ -85,7 +85,10 @@ describe('cli reports where the graph gave up', () => {
     run(['index', '--full']);
     const text = run(['callers', 'bar']);
     expect(text).toContain('foo');
-    expect(text).not.toContain('unattributed');
+    // The banner text is "call sites missing from this answer" — "unattributed"
+    // never appears in callers' output (only status/trace use that word), so
+    // that assertion could never fail. Assert against the real banner text.
+    expect(text).not.toContain('missing from this answer');
   }, 30000);
 
   it('lists likely gaps and only counts the noisy ones', () => {
@@ -115,15 +118,30 @@ func TestB(t *testing.T) { t.Errorf("b") }
     expect(text).not.toContain('far/far_test.go:4');
   }, 30000);
 
-  it('counts calls that leave the repo without listing them', () => {
+  it('counts calls the graph found nothing to link to, without listing them', () => {
     write('svc/svc.go', `package svc
 import "fmt"
 func Do() { fmt.Println("x") }
 `);
     run(['index', '--full']);
     const text = run(['callees', 'svc.Do']);
-    expect(text).toContain('1 call that leaves the repo');
+    expect(text).toContain('1 call the graph found nothing to link to');
     expect(text).not.toContain('svc/svc.go:3');
+  }, 30000);
+
+  it('does not claim a repo-type conversion "leaves the repo" — it never left', () => {
+    // Duration(v) converts to a repo-defined type. It parses as a call, so it
+    // lands in the same "nothing to link" bucket as a real external call —
+    // but calling that bucket "leaves the repo" is a lie for this row: the
+    // type IS in the repo, just not something a call can target.
+    write('cfg/cfg.go', `package cfg
+type Duration int64
+func Parse(v int64) Duration { return Duration(v) }
+`);
+    run(['index', '--full']);
+    const text = run(['callees', 'cfg.Parse']);
+    expect(text).not.toContain('leaves the repo');
+    expect(text).toContain('1 call the graph found nothing to link to');
   }, 30000);
 
   it('moves a stdlib call out of the listed gaps even when a repo method shares its bare name', () => {
@@ -147,7 +165,7 @@ func Do() { fmt.Errorf("x") }
     const text = run(['callers', 'logs.Adapter.Errorf']);
     expect(text).not.toContain('caller/caller.go');
     expect(text).not.toContain('missing from this answer');
-    expect(text).toContain('1 call that leaves the repo');
+    expect(text).toContain('1 call the graph found nothing to link to');
   }, 30000);
 
   it('names a resolved call site that has no caller row', () => {

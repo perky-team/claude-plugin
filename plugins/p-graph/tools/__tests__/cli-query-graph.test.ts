@@ -27,3 +27,39 @@ describe('cli graph queries', () => {
     expect(JSON.parse(run(['explore', 'foo', 'baz', '--json'])).length).toBe(2);
   }, 30000);
 });
+
+describe('context does not double-count a gap that matches both directions', () => {
+  let d;
+  const w = (rel, src) => {
+    const abs = join(d, rel);
+    mkdirSync(join(abs, '..'), { recursive: true });
+    writeFileSync(abs, src);
+  };
+  beforeEach(() => {
+    d = mkdtempSync(join(tmpdir(), 'pg-ctx-'));
+    mkdirSync(join(d, '.git')); mkdirSync(join(d, '.pgraph'));
+    // Wrapper delegation: Counter.Write calls Write on a field of an external
+    // type. The call site's bare name ("Write") matches Counter.Write's own
+    // name, so gapsFor (calls INTO Counter.Write) and gapsFrom (calls OUT OF
+    // it) both pick up this SAME call site.
+    w('iox/iox.go', `package iox
+import "bytes"
+type Counter struct{ inner bytes.Buffer }
+func (c *Counter) Write(p []byte) (int, error) { return c.inner.Write(p) }
+`);
+  });
+  afterEach(() => rmSync(d, { recursive: true, force: true }));
+  const r = (args) => execFileSync('node', [CLI, ...args], { cwd: d, encoding: 'utf-8' });
+
+  it('lists the call site once in the banner and once in --json gaps', () => {
+    r(['index', '--full']);
+    const text = r(['context', 'iox.Counter.Write']);
+    expect(text).toContain('1 call site missing from this answer');
+    // The gap-listing line itself, not the node header (which also names
+    // iox.go:4 as Counter.Write's own definition site).
+    expect(text.match(/iox\.Counter\.Write -> Write/g)).toHaveLength(1);
+
+    const ctxJson = JSON.parse(r(['context', 'iox.Counter.Write', '--json']));
+    expect(ctxJson.gaps).toHaveLength(1);
+  }, 30000);
+});
