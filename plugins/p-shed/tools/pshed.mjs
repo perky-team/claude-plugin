@@ -81,6 +81,7 @@ export function findRoot(startDir) {
 export function timeoutMsFrom(args) {
   const raw = args['timeout-sec'];
   if (raw === undefined) return 1_800_000;
+  if (raw === true) throw new ValidationError('--timeout-sec requires a value');
   const n = Number(raw);
   if (!Number.isFinite(n) || n < 0) throw new ValidationError('--timeout-sec must be a non-negative number of seconds');
   return Math.round(n * 1000);
@@ -89,6 +90,7 @@ export function timeoutMsFrom(args) {
 export function pollMsFrom(args) {
   const raw = args['poll-ms'];
   if (raw === undefined) return 1000;
+  if (raw === true) throw new ValidationError('--poll-ms requires a value');
   const n = Number(raw);
   if (!Number.isFinite(n) || n < 1) throw new ValidationError('--poll-ms must be at least 1');
   return Math.round(n);

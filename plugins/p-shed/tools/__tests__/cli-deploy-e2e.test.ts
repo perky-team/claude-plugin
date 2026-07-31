@@ -71,4 +71,28 @@ describe('wait-idle', () => {
     expect(JSON.parse(r.stdout).error.code).toBe('validation');
     expect(existsSync(pshed('run', 'PAUSED'))).toBe(false);
   });
+
+  it('rejects --id (not allowed) and pauses nothing', () => {
+    writeJobs(TWO_JOBS);
+    const r = cli(['wait-idle', '--id', 'worker', '--json']);
+    expect(r.status).toBe(2);
+    expect(JSON.parse(r.stdout).error.code).toBe('validation');
+    expect(existsSync(pshed('run', 'PAUSED'))).toBe(false);
+  });
+
+  it('rejects valueless --timeout-sec and pauses nothing', () => {
+    writeJobs(TWO_JOBS);
+    const r = cli(['wait-idle', '--timeout-sec', '--json']);
+    expect(r.status).toBe(2);
+    expect(JSON.parse(r.stdout).error.code).toBe('validation');
+    expect(existsSync(pshed('run', 'PAUSED'))).toBe(false);
+  });
+
+  it('rejects valueless --poll-ms and pauses nothing', () => {
+    writeJobs(TWO_JOBS);
+    const r = cli(['wait-idle', '--poll-ms', '--json']);
+    expect(r.status).toBe(2);
+    expect(JSON.parse(r.stdout).error.code).toBe('validation');
+    expect(existsSync(pshed('run', 'PAUSED'))).toBe(false);
+  });
 });
