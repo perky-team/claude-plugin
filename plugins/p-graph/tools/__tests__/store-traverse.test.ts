@@ -42,7 +42,7 @@ describe('store traverse', () => {
     s.replaceFileSymbols('a.ts', [node('a')], [
       { src_id: 'a', dst_id: null, dst_name: 'b', kind: 'call', file: 'a.ts', line: 1 },
     ]);
-    s.replaceFileSymbols('b.ts', [{ ...node('b'), id: 'b_old' }], []);
+    s.replaceFileSymbols('b.ts', [{ ...node('b'), id: 'b_old', file: 'b.ts' }], []);
     s.resolvePending();
     expect(s.callees('a').map((x) => x.qname)).toContain('b');
 

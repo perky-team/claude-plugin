@@ -1,0 +1,135 @@
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { openStore } from '../lib/destinations/local-sqlite.mjs';
+import { indexFull } from '../lib/index/build.mjs';
+
+let dir;
+beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'pg-false-')); });
+afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
+const write = (rel, src) => {
+  const abs = join(dir, rel);
+  mkdirSync(join(abs, '..'), { recursive: true });
+  writeFileSync(abs, src);
+};
+async function indexed() {
+  const store = openStore(':memory:');
+  await indexFull({ root: dir, store, ignorePatterns: [] });
+  return store;
+}
+
+// Each case below is a false edge the evaluation found in hugo, shrunk to the
+// smallest source that reproduces it.
+describe('the resolver refuses links it cannot justify', () => {
+  it('never links a Go builtin call to a same-named method', async () => {
+    write('exec/exec.go', `package exec
+type E struct{ a []int; b []int }
+func (e *E) Run() { copy(e.b, e.a) }
+`);
+    write('tpl/tpl.go', `package tpl
+type Template struct{}
+func (t *Template) copy() {}
+`);
+    const store = await indexed();
+    expect(store.callers('tpl.Template.copy')).toEqual([]);
+    store.close();
+  }, 30000);
+
+  it('never links a call across languages', async () => {
+    write('live/live.js', 'function boot(result, key) { result.push(key); }');
+    write('tpl/tpl.go', `package tpl
+type state struct{}
+func (s *state) push() {}
+`);
+    const store = await indexed();
+    expect(store.callers('tpl.state.push')).toEqual([]);
+    store.close();
+  }, 30000);
+
+  it('never links a call to a type or a struct', async () => {
+    write('cfg/cfg.go', `package cfg
+type Duration int64
+func Parse(v int64) Duration { return Duration(v) }
+`);
+    const store = await indexed();
+    expect(store.callers('cfg.Duration')).toEqual([]);
+    store.close();
+  }, 30000);
+
+  it('never falls back to a bare name when the receiver field has a known external type', async () => {
+    write('goldmark/autoid.go', `package goldmark
+import "bytes"
+type W struct{ buf bytes.Buffer }
+func (w *W) Do() { w.buf.WriteRune('-') }
+`);
+    write('highlight/highlight.go', `package highlight
+type counter struct{}
+func (c *counter) WriteRune(r rune) {}
+`);
+    const store = await indexed();
+    // bytes.Buffer is not a repo type, so this call leaves the repo. Linking it
+    // to the one repo method that happens to be called WriteRune is a lie.
+    expect(store.callers('highlight.counter.WriteRune')).toEqual([]);
+    store.close();
+  }, 30000);
+
+  it('never treats a func-typed field as a promoted method', async () => {
+    write('filecache/filecache.go', `package filecache
+type L struct{ unlock func() }
+func (l *L) Do() { l.unlock() }
+`);
+    write('doctree/doctree.go', `package doctree
+type T struct{}
+func (t *T) unlock() {}
+`);
+    const store = await indexed();
+    expect(store.callers('doctree.T.unlock')).toEqual([]);
+    store.close();
+  }, 30000);
+
+  it('never treats a method of an embedded external type as a repo method', async () => {
+    write('svc/svc.go', `package svc
+import "sync"
+type S struct{ sync.Mutex }
+func (s *S) Do() { s.Lock() }
+`);
+    write('other/other.go', `package other
+type Gate struct{}
+func (g *Gate) Lock() {}
+`);
+    const store = await indexed();
+    expect(store.callers('other.Gate.Lock')).toEqual([]);
+    store.close();
+  }, 30000);
+
+  it('still links a method promoted from an embedded repo type', async () => {
+    write('base/base.go', `package base
+type Base struct{}
+func (b *Base) Shared() {}
+`);
+    write('wrap/wrap.go', `package wrap
+import "x/base"
+type Wrap struct{ base.Base }
+func (w *Wrap) Do() { w.Shared() }
+`);
+    const store = await indexed();
+    expect(store.callers('base.Base.Shared').map((n) => n.qname)).toEqual(['wrap.Wrap.Do']);
+    store.close();
+  }, 30000);
+
+  it('never resolves an import edge to a symbol', async () => {
+    write('a/a.go', `package a
+import "x/b"
+func Use() { b.Do() }
+`);
+    write('b/b.go', `package b
+func Do() {}
+`);
+    const store = await indexed();
+    const resolvedImports = store.db.prepare(
+      `SELECT count(*) c FROM edges WHERE kind = 'import' AND dst_id IS NOT NULL`).get().c;
+    expect(resolvedImports).toBe(0);
+    store.close();
+  }, 30000);
+});

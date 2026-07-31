@@ -172,68 +172,104 @@ export function openStore(dbPath, opts = {}) {
   store.fileHash = (path) =>
     db.prepare('SELECT hash FROM files WHERE path = ?').get(path)?.hash ?? null;
   attachReadHelpers(store, db, hasFts);
+  // Pass C — a receiver-qualified guess that missed. `s.M()` is stored as
+  // "<own type>.M"; when no such node exists, M is inherited or promoted. Falling
+  // back to a unique bare name is right for real promotion and wrong when the
+  // type only embeds something external (`struct{ sync.Mutex }` then `s.Lock()`)
+  // or embeds nothing at all (`unlock` is a func-typed field, not a method). Go
+  // records what it embeds, so require an embedded repo type there. Other
+  // languages do not index inheritance, so they keep the plain fallback — that is
+  // what links Python's `self._find_error_handler` to the base class.
+  const resolveOwnReceiverFallback = () => {
+    const candidates = db.prepare(`
+      SELECT rowid, dst_name, dst_bare, lang FROM edges
+      WHERE kind = 'call' AND dst_id IS NULL AND external = 0
+        AND method IS NOT NULL AND field_key IS NULL AND dst_bare IS NOT NULL`).all();
+    if (!candidates.length) return;
+    const embedsRepoType = db.prepare(`
+      SELECT 1 FROM field_types ft JOIN nodes n ON n.qname = ft.type
+      WHERE ft.key = ? LIMIT 1`);
+    const byBareName = db.prepare(`
+      SELECT n.id FROM nodes n
+      WHERE n.name = ? AND n.lang = ? AND n.kind IN ('function','method','class') LIMIT 2`);
+    const setDst = db.prepare('UPDATE edges SET dst_id = ? WHERE rowid = ?');
+    for (const e of candidates) {
+      const owner = e.dst_name.slice(0, Math.max(0, e.dst_name.length - e.dst_bare.length - 1));
+      if (e.lang === 'go' && !(owner && embedsRepoType.get(`${owner}#embed`))) continue;
+      const hits = byBareName.all(e.dst_bare, e.lang);
+      if (hits.length === 1) setDst.run(hits[0].id, e.rowid);
+    }
+  };
+
   store.resolvePending = () => {
-    // Invalidate edges whose resolved target no longer exists (its defining
-    // file was reindexed or deleted). Without this an incremental sync keeps a
-    // stale dst_id forever, so callers/callees/trace/impact silently drop the
-    // edge — diverging from what a full rebuild would produce.
-    db.prepare(`
-      UPDATE edges SET dst_id = NULL
-      WHERE dst_id IS NOT NULL AND dst_id NOT IN (SELECT id FROM nodes)`).run();
-    // Pass A — prefer an exact qualified match. A qualified call target like
-    // "filesink.New" links straight to the node whose qname is "filesink.New".
+    // Only these kinds can be the target of a call. A Go conversion
+    // (`Duration(v)`) and a composite literal parse as calls but name a type, and
+    // a call edge into a type node makes callers/impact report a caller that does
+    // not exist. `class` stays in: `new Service()` in TS and a C++ constructor
+    // call really do target one.
+    const CALLABLE = `('function','method','class')`;
+    // An edge with no recorded language never comes from the real driver (it
+    // always tags one) — only from a caller that builds rows by hand, bypassing
+    // the indexer. Treat that case as "unknown, don't gate on it" rather than as
+    // a mismatch, so the language guards below cannot disable resolution for a
+    // caller that predates lang tagging.
+    const SAME_LANG = `(edges.lang IS NULL OR n.lang = edges.lang)`;
+    // Invalidate every call edge and resolve from scratch. A resolved edge can
+    // become ambiguous when a new same-named symbol appears, so keeping it would
+    // make an incremental index answer differently from a full rebuild —
+    // silently, and in the direction of false confidence.
+    db.prepare(`UPDATE edges SET dst_id = NULL WHERE kind = 'call'`).run();
+
+    // Pass A — exact qualified match. "filesink.New" links to the node whose
+    // qname is "filesink.New", in the same language, and only when it is unique.
     db.prepare(`
       UPDATE edges SET dst_id = (
-        SELECT n.id FROM nodes n WHERE n.qname = dst_name LIMIT 1
+        SELECT n.id FROM nodes n
+        WHERE n.qname = edges.dst_name AND ${SAME_LANG} AND n.kind IN ${CALLABLE}
+        LIMIT 1
       )
-      WHERE dst_id IS NULL AND dst_name IS NOT NULL
-        AND (SELECT count(*) FROM nodes n WHERE n.qname = dst_name) = 1`).run();
-    // A field-selector target depends on the field_types table, which can change
-    // in a DIFFERENT file than the call site (the struct's field type is edited
-    // but the calling method's file isn't reparsed, so its dst_id would go
-    // stale). Clear every field-selector edge so Pass F recomputes it from the
-    // current field_types. The bare-name fallback (Pass B) re-links any that
-    // Pass F can't resolve, so this never loses a legitimately fallback-linked edge.
-    db.prepare(`UPDATE edges SET dst_id = NULL WHERE field_key IS NOT NULL`).run();
-    // Pass F — Go recv.field.Method() resolution via the field-type table. An
-    // edge tagged with field_key ("<pkg>.<Struct>.<field>") + method resolves to
-    // the node "<field type>.<method>". This runs BEFORE the bare-name fallback
-    // so an ambiguous method name (two types with a same-named method) links to
-    // the RIGHT type. Guarded twice — exactly one known field type for the key
-    // AND exactly one node with the target qname — so an unknown/ambiguous field
-    // type creates no edge and falls through to the bare-name fallback instead.
+      WHERE kind = 'call' AND dst_id IS NULL AND dst_name IS NOT NULL AND external = 0
+        AND (SELECT count(*) FROM nodes n
+             WHERE n.qname = edges.dst_name AND ${SAME_LANG} AND n.kind IN ${CALLABLE}) = 1`).run();
+
+    // Pass F — Go recv.field.Method() through the field-type table. Runs before
+    // the bare-name fallback so an ambiguous method name links to the RIGHT type.
+    // Guarded twice: exactly one known field type for the key, and exactly one
+    // node with the target qname.
     db.prepare(`
       UPDATE edges SET dst_id = (
         SELECT n.id FROM nodes n
         WHERE n.qname = (SELECT ft.type FROM field_types ft WHERE ft.key = edges.field_key LIMIT 1) || '.' || edges.method
+          AND ${SAME_LANG} AND n.kind IN ${CALLABLE}
         LIMIT 1
       )
-      WHERE dst_id IS NULL AND field_key IS NOT NULL AND method IS NOT NULL
+      WHERE kind = 'call' AND dst_id IS NULL AND field_key IS NOT NULL AND method IS NOT NULL
         AND (SELECT count(DISTINCT ft.type) FROM field_types ft WHERE ft.key = edges.field_key) = 1
         AND (SELECT count(*) FROM nodes n
-             WHERE n.qname = (SELECT ft.type FROM field_types ft WHERE ft.key = edges.field_key LIMIT 1) || '.' || edges.method) = 1`).run();
-    // Pass B — fall back to a unique bare-name match only when no qualified
-    // candidate exists (e.g. a method call left bare, or a non-Go language).
-    // The "exactly one" guard is preserved: a genuinely ambiguous bare name
-    // stays NULL rather than linking to a guessed target (no false edges).
+             WHERE n.qname = (SELECT ft.type FROM field_types ft WHERE ft.key = edges.field_key LIMIT 1) || '.' || edges.method
+               AND ${SAME_LANG} AND n.kind IN ${CALLABLE}) = 1`).run();
+
+    // Pass B — a unique bare-name match, only when no qualified candidate exists.
+    // The extra guard is the one the evaluation showed missing: when the call goes
+    // through a field whose type IS known and is NOT a repo type, the call leaves
+    // the repo. Linking the bare name to the one repo method that shares it
+    // produced 13 false callers for a single symbol in hugo.
     db.prepare(`
       UPDATE edges SET dst_id = (
-        SELECT n.id FROM nodes n WHERE n.name = dst_name LIMIT 1
+        SELECT n.id FROM nodes n
+        WHERE n.name = edges.dst_name AND ${SAME_LANG} AND n.kind IN ${CALLABLE}
+        LIMIT 1
       )
-      WHERE dst_id IS NULL AND dst_name IS NOT NULL
-        AND (SELECT count(*) FROM nodes n WHERE n.qname = dst_name) = 0
-        AND (SELECT count(*) FROM nodes n WHERE n.name = dst_name) = 1`).run();
-    // Pass C — a receiver-qualified guess that missed. `s.M()` / `this.M()` is
-    // stored as "<own type>.M", which does not exist when M is inherited or
-    // promoted from an embedded type. `method` holds the bare name, so retry the
-    // unique-bare-name rule on it; without this the qualified guess would lose
-    // edges Pass B used to link.
-    db.prepare(`
-      UPDATE edges SET dst_id = (
-        SELECT n.id FROM nodes n WHERE n.name = edges.method LIMIT 1
-      )
-      WHERE dst_id IS NULL AND method IS NOT NULL
-        AND (SELECT count(*) FROM nodes n WHERE n.name = edges.method) = 1`).run();
+      WHERE kind = 'call' AND dst_id IS NULL AND dst_name IS NOT NULL AND external = 0
+        AND (SELECT count(*) FROM nodes n WHERE n.qname = edges.dst_name AND ${SAME_LANG}) = 0
+        AND (SELECT count(*) FROM nodes n
+             WHERE n.name = edges.dst_name AND ${SAME_LANG} AND n.kind IN ${CALLABLE}) = 1
+        AND NOT EXISTS (
+          SELECT 1 FROM field_types ft
+          WHERE ft.key = edges.field_key
+            AND NOT EXISTS (SELECT 1 FROM nodes n2 WHERE n2.qname = ft.type))`).run();
+
+    resolveOwnReceiverFallback();
   };
   store.markSchemaCurrent = () => store.setMeta('schema_version', SCHEMA_VERSION);
 
