@@ -1,5 +1,5 @@
 import { readJobs, readJobState } from './io.mjs';
-import { readPause } from './breaker.mjs';
+import { readPauseRecord } from './breaker.mjs';
 import { readGlobalPause } from './pause.mjs';
 import { readPid, isPidAlive } from './pids.mjs';
 import { taskName } from './scheduler.mjs';
@@ -8,13 +8,18 @@ import { taskName } from './scheduler.mjs';
 // `installed` verdict the caller probes from the OS scheduler. Readers are injectable so
 // the aggregation is testable without real processes or crontab.
 export function collectStatus(root, { installed = null, deps = {} } = {}) {
-  const d = { readJobs, readJobState, readPause, readGlobalPause, readPid, isPidAlive, ...deps };
+  const d = { readJobs, readJobState, readPauseRecord, readGlobalPause, readPid, isPidAlive, ...deps };
   const { jobs } = d.readJobs(root);
   const gp = d.readGlobalPause(root);
 
   const jobStatuses = jobs.map((job) => {
     const st = d.readJobState(root, job.id) ?? {};
-    const pauseReason = d.readPause(root, job.id);
+    // origin ('self' | 'operator' | 'deploy') so a deploy-held pause never LOOKS like an
+    // operator forgot to `resume` — this is the exact confusion the origin field was
+    // introduced to remove; resetBreaker already surfaces it (`deployPause: true`), and
+    // status is the surface the README points an operator at first.
+    const pauseRec = d.readPauseRecord(root, job.id);
+    const pauseReason = pauseRec != null ? pauseRec.reason : null;
     const pid = d.readPid(root, job.id) ?? st.pid ?? null;
     const running = d.isPidAlive(pid);
     return {
@@ -24,6 +29,7 @@ export function collectStatus(root, { installed = null, deps = {} } = {}) {
       pid: running ? pid : null,
       paused: pauseReason != null,
       pauseReason: pauseReason != null ? pauseReason : undefined,
+      pauseOrigin: pauseRec != null ? pauseRec.origin : undefined,
       breakerTripped: st.breakerTripped === true,
       breakerReason: st.breakerReason,
       consecutiveFailures: st.consecutiveFailures ?? 0,
@@ -47,6 +53,9 @@ export function collectStatus(root, { installed = null, deps = {} } = {}) {
     installed,
     paused: gp != null,
     pauseReason: gp != null ? gp.reason : undefined,
+    // Same origin visibility as per-job, above, for the global marker: a live `deploy`
+    // and a halt an operator set and forgot about used to be indistinguishable here.
+    pauseOrigin: gp != null ? gp.origin : undefined,
     jobs: jobStatuses,
   };
 }
@@ -57,9 +66,14 @@ export function formatHuman(status, now = Date.now()) {
   const lines = [];
   lines.push(`task:      ${status.task}`);
   lines.push(`installed: ${status.installed === null ? 'unknown' : status.installed}`);
-  lines.push(`paused:    ${status.paused}${status.pauseReason ? ` (${status.pauseReason})` : ''}`);
+  // origin distinguishes "a deploy is holding this open" from "an operator paused it and
+  // forgot" — the whole reason the pause marker records an origin at all (see
+  // lib/breaker.mjs / lib/pause.mjs). A plain operator pause has no origin field, so it
+  // adds nothing here; only a non-default origin (deploy) is worth calling out.
+  const originSuffix = status.pauseOrigin && status.pauseOrigin !== 'operator' ? ` [${status.pauseOrigin}]` : '';
+  lines.push(`paused:    ${status.paused}${status.pauseReason ? ` (${status.pauseReason})` : ''}${originSuffix}`);
   lines.push('');
-  lines.push(['id', 'enabled', 'running', 'paused', 'breaker', 'fails', 'lastExit', 'lastSkip', 'guard'].join('\t'));
+  lines.push(['id', 'enabled', 'running', 'paused', 'origin', 'breaker', 'fails', 'lastExit', 'lastSkip', 'guard'].join('\t'));
   for (const j of status.jobs) {
     const skip = j.lastSkipReason
       ? (j.lastSkipResetAt ? `${j.lastSkipReason} (resets ${j.lastSkipResetAt})` : j.lastSkipReason)
@@ -78,6 +92,7 @@ export function formatHuman(status, now = Date.now()) {
       j.enabled,
       j.running,
       paused,
+      j.paused ? (j.pauseOrigin ?? '-') : '-',
       j.breakerTripped ? (j.breakerReason ?? 'tripped') : '-',
       j.consecutiveFailures,
       j.lastExit ?? '-',
