@@ -402,6 +402,21 @@ function scanSchtasksTaskIds() {
   } catch { return []; }
 }
 
+// Windows CommandLineToArgvW rules: a run of backslashes is only special immediately
+// before a quote, or at the very end of the argument where it would run into the closing
+// quote. Everywhere else backslashes are literal — doubling them unconditionally (the old
+// behavior) is what turned `C:\path\file` into `C:\\path\\file` for the deployed command.
+// Known, unfixable-here limitation: cmd.exe expands `%VAR%` even inside double quotes, so
+// an argument containing `%SOMETHING%` can still be substituted on Windows. That is
+// inherent to going through a shell at all (required for .cmd/.bat, see below) — quoting
+// closes the backslash/quote holes, not that one.
+function quoteWinArg(arg) {
+  const escaped = String(arg)
+    .replace(/(\\*)"/g, '$1$1\\"')
+    .replace(/(\\+)$/, '$1$1');
+  return `"${escaped}"`;
+}
+
 // Run the deployed command with stdio inherited, so its output reaches the operator
 // unchanged and p-shed adds nothing to it. `shell` on win32 only: measured,
 // spawn('npm', …) is ENOENT there because npm is a .cmd shim, while POSIX must stay
@@ -417,13 +432,9 @@ function spawnInherit({ cmd, args }) {
     // cmd.exe will parse it correctly. On POSIX, use the normal cmd + args approach.
     let spawnCmd, spawnArgs;
     if (useShell) {
-      // Escape each argument for the shell: wrap in double quotes and escape inner quotes
-      const escapedArgs = args.map(arg => {
-        // Escape backslashes and double quotes for cmd.exe
-        const escaped = String(arg).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-        return `"${escaped}"`;
-      });
-      spawnCmd = `"${cmd}" ${escapedArgs.join(' ')}`;
+      // The command itself is quoted the same way as every argument: its path can
+      // contain spaces too, and it is just as subject to CommandLineToArgvW's rules.
+      spawnCmd = [cmd, ...args].map(quoteWinArg).join(' ');
       spawnArgs = [];
     } else {
       spawnCmd = cmd;
@@ -444,10 +455,19 @@ function osSignalNumber(signal) {
   return table[signal];
 }
 
-function formatDeploy(r) {
+export function formatDeploy(r) {
   if (r.outcome === 'timeout') {
     const who = r.holders.map((h) => `${h.id} (pid ${h.pid})`).join(', ') || 'unknown';
     return `deploy: timed out after ${Math.round(r.waitedMs / 1000)}s waiting for ${who}; nothing paused, nothing run`;
+  }
+  // Ctrl+C during the wait, before anything was paused and before any command ran (see
+  // lib/deploy.mjs: waited.aborted returns pausedIds: [], ownedGlobal: false). Falling
+  // through to the generic branch below would print "paused the scheduler, command
+  // exited 130, released" — every clause false, since the operator interrupted the
+  // WAITING phase, not a running deploy. Same voice as the timeout branch above.
+  if (r.outcome === 'aborted') {
+    const who = r.holders.map((h) => `${h.id} (pid ${h.pid})`).join(', ') || 'unknown';
+    return `deploy: interrupted after ${Math.round(r.waitedMs / 1000)}s waiting for ${who}; nothing paused, nothing run`;
   }
   const scope = r.scope === 'group' ? `group ${r.group}` : 'the scheduler';
   const kept = r.preserved.length ? `; kept ${r.preserved.length} pre-existing pause(s)` : '';

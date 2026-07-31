@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { formatDeploy } from '../pshed.mjs';
 
 const CLI = join(process.cwd(), 'plugins/p-shed/tools/pshed.mjs');
 
@@ -35,6 +36,40 @@ function claimPid(id: string, pid = process.pid) {
   mkdirSync(pshed('run'), { recursive: true });
   writeFileSync(pshed('run', `${id}.pid`), String(pid), 'utf-8');
 }
+
+// Unit-level, not e2e: 'aborted' is what runDeploy reports when Ctrl+C lands during the
+// wait (see lib/deploy.mjs, waited.aborted branch) — nothing was paused, nothing ran,
+// pausedIds is [] and ownedGlobal is false on that path. Exercising this honestly through
+// a real signal would be POSIX-only (measured: Windows delivers neither SIGINT nor SIGTERM
+// to a Node handler — see the skipIf block below), so formatDeploy is tested directly
+// against the exact shape runDeploy produces, which keeps this test meaningful on every
+// platform instead of adding a second always-skipped-on-Windows case.
+describe('formatDeploy', () => {
+  it('reports an interrupted-during-wait deploy honestly: no pause claimed, no command run claimed', () => {
+    const report = {
+      action: 'deploy',
+      outcome: 'aborted',
+      exit: 130,
+      waitedMs: 12_345,
+      attempts: 1,
+      scope: 'global',
+      group: null,
+      pausedIds: [],
+      ownedGlobal: false,
+      preserved: [],
+      holders: [{ id: 'worker', pid: 111 }],
+      releaseErrors: [],
+    };
+    const text = formatDeploy(report);
+    // "nothing paused, nothing run" is the honest claim (see the timeout branch, which
+    // uses identical wording) — what must NOT appear is the generic branch's false claims
+    // that something WAS paused, a command exited, or a release happened.
+    expect(text).not.toMatch(/paused (the scheduler|group)/i);
+    expect(text).not.toMatch(/command exited/i);
+    expect(text).not.toMatch(/, released/i);
+    expect(text).toMatch(/nothing paused, nothing run/i);
+  });
+});
 
 describe('wait-idle', () => {
   it('exits 0 immediately on an idle loop and pauses nothing', () => {
@@ -125,6 +160,23 @@ describe('deploy', () => {
     expect(r.stdout).toContain('"--group"');
     // p-shed's report must be human-readable (not JSON), proving --json went to the script, not to p-shed
     expect(() => JSON.parse(r.stderr)).toThrow();
+  });
+
+  // Regression for the win32 spawnInherit escaping: the old regex doubled EVERY backslash
+  // unconditionally, which is not how CommandLineToArgvW parses a command line (a run of
+  // backslashes is only special immediately before a quote or at the end of the argument).
+  // A literal `C:\Users\...` path has no quote following its backslashes, so doubling them
+  // corrupted the value the deployed command actually received. This is why the existing
+  // deploy tests (single-token args, no backslashes/spaces/metacharacters) never caught it.
+  // On POSIX this exercises the shell-less array-based branch instead, which was never
+  // broken, so the same assertion must hold on both platforms.
+  it('round-trips a Windows-hostile argument set to the deployed command, byte-identical', () => {
+    writeJobs(TWO_JOBS);
+    const script = 'console.log(JSON.stringify(process.argv.slice(1)))';
+    const payload = ['C:\\Users\\test\\file.txt', 'hello world', 'a&b'];
+    const r = cli(['deploy', '--reason', 'x', '--', NODE, '-e', script, '--', ...payload]);
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout)).toEqual(payload);
   });
 
   it('keeps its own report out of the command stdout', () => {
