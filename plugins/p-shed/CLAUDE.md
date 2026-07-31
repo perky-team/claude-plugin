@@ -8,6 +8,35 @@ Pure scheduler/launcher. Key decisions:
   self-contained.
 - **Duplicate guard, not a lock:** a per-job pidfile (`.pshed/run/<id>.pid`) skips a
   launch while the previous run is alive. No cross-job lock.
+- **Concurrency groups extend that guard across jobs — still a skip, never a wait.**
+  An optional `concurrencyGroup` (per job, or in `defaults`) means "at most one LIVE run
+  per group": a due job whose group is held by a live groupmate reports
+  `skipped-group` (+ `group`, `holder`) and writes **nothing** — no `lastRun`, no
+  breaker movement — so catch-up starts it on the first tick after the group frees.
+  `resolveGroup`/`findGroupHolder` live in `lib/concurrency.mjs`; an explicit
+  `concurrencyGroup: null` on a job beats `defaults`, and no group anywhere is
+  unconstrained (the pre-existing behavior). This exists so a deployment does not wrap
+  `claudeBin` in an external `flock`: `timeoutSec` covers the whole spawn, so queued
+  time is charged to the run's own budget — measured, a 600 s chat job was killed while
+  waiting behind a 30-minute job. A scheduler with missed-tick catch-up must answer
+  "not now, next tick", so do **not** turn this into a lock, a queue, or any form of
+  waiting.
+  - **Do not add a `run/<group>.pid`.** `listPidEntries()` maps every `run/*.pid`
+    basename to a job id, and `status` + `stop`'s `terminateJobs` treat each entry as a
+    job — a group pidfile would invent a phantom job for both. Group liveness is
+    derived from the per-job pidfiles that already exist: zero new state, nothing to
+    orphan-prune.
+  - **Within one tick the loop stays sequential** (`for` + `await`), so two groupmates
+    due in the same minute run back-to-back — never simultaneously, which is what the
+    invariant actually requires. The gate is what stops a job from starting while a
+    groupmate from an *earlier, still-running* tick holds the group. Evaluation is in
+    `jobs.yml` order; no fairness scheme.
+  - **`run <id>` claims the same pidfile.** It writes `run/<id>.pid` at spawn and
+    clears it at exit, and refuses (`skipped` / `skipped-group`) when the job or its
+    group is live; `--force` bypasses the refusal and then deliberately does NOT
+    touch the incumbent's pidfile. Without this, a manual run is invisible to the tick
+    and double-launches in the same working directory — the hole the external `flock`
+    used to mask.
 - **Timeout is the recovery mechanism:** because runs are unattended and the duplicate
   guard skips live runs, a hung run would wedge the job forever; the timeout kills the
   process tree so the next tick recovers.

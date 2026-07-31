@@ -11,7 +11,8 @@ import { runGuard } from './lib/guard.mjs';
 import { classifyRun, resolveUsageLimitPattern, truncateOutput } from './lib/classify.mjs';
 import { buildInstall, buildRemove, taskName, crontabLine, applyCrontab, planRemoveCron, scanCrontabTaskIds, crontabHasTask } from './lib/scheduler.mjs';
 import { writeGlobalPause, removeGlobalPause } from './lib/pause.mjs';
-import { listRunningJobs, terminateJobs } from './lib/pids.mjs';
+import { listRunningJobs, terminateJobs, readPid, writePid, removePid, isPidAlive } from './lib/pids.mjs';
+import { findGroupHolder } from './lib/concurrency.mjs';
 import { collectStatus, formatHuman } from './lib/status.mjs';
 import { execFileSync } from 'node:child_process';
 
@@ -91,6 +92,18 @@ async function main() {
       const job = jobs.find((j) => j.id === id);
       if (!job) return emitJson({ error: { code: 'validation', message: `no such job: ${id}` } }, 2);
       const config = readConfig(root);
+      // Duplicate + group guard. `run` used to write no pidfile at all, so a manual
+      // run was invisible to the scheduled tick — `pshed run worker` while the
+      // scheduled worker was live started a second one in the same working directory.
+      // Refuse instead (--force is the debugging escape hatch); this is a refusal, not
+      // a queue, exactly like the tick's skip.
+      const own = readPid(root, id);
+      const ownLive = own != null && isPidAlive(own);
+      if (!args.force) {
+        if (ownLive) return emitJson({ id, outcome: 'skipped', reason: 'already-running', pid: own }, 0);
+        const holder = findGroupHolder({ root, job, jobs, defaults });
+        if (holder) return emitJson({ id, outcome: 'skipped-group', group: holder.group, holder: holder.id }, 0);
+      }
       // Manual runs respect the guard (--no-guard bypasses for debugging) but stay
       // STATELESS: no counters, no history log — exactly like guardless `run` today.
       if (job.guard && !args['no-guard']) {
@@ -100,7 +113,16 @@ async function main() {
           return emitJson({ id, outcome: `guard-${g.outcome}`, guard: { exit: g.exit, timedOut: g.timedOut, durationMs: g.durationMs, ...(raw ? { raw } : {}) } }, 0);
         }
       }
-      const result = await runJob({ job, defaults, claudeBin: config.claudeBin });
+      // Publish the pidfile for the duration of the run so the tick's duplicate guard
+      // and the group guard can see this manual run. A --force run that stepped over a
+      // live incumbent leaves the incumbent's pidfile alone: taking it over and then
+      // deleting it on exit would strip the guard from a run that is still going.
+      const claim = !ownLive;
+      const result = await runJob({
+        job, defaults, claudeBin: config.claudeBin,
+        onSpawn: (p) => { if (p && claim) writePid(root, id, p); },
+      });
+      if (claim) removePid(root, id);
       // Expose the classification (success | usage_limit | failure) and a truncated
       // output tail instead of dumping the full capture buffers inline.
       const outcome = classifyRun(result.exit, result.out, result.err, resolveUsageLimitPattern(defaults));
@@ -120,6 +142,7 @@ async function main() {
         maxConsecutiveFailures: args['max-consecutive-failures'] !== undefined ? Number(args['max-consecutive-failures']) : undefined,
         guard: args.guard,
         guardTimeoutSec: args['guard-timeout-sec'] !== undefined ? Number(args['guard-timeout-sec']) : undefined,
+        concurrencyGroup: args['concurrency-group'],
       });
       return emitJson(res, 0);
     }

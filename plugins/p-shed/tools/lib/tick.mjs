@@ -6,6 +6,7 @@ import { appendLog as realAppendLog, rotateLogs as realRotateLogs } from './logs
 import { readPause } from './breaker.mjs';
 import { readGlobalPause } from './pause.mjs';
 import { isPidAlive, readPid, writePid, removePid } from './pids.mjs';
+import { findGroupHolder } from './concurrency.mjs';
 import { classifyRun, classifySkipReason, parseUsage, resolveUsageLimitPattern, parseResetAt, truncateOutput } from './classify.mjs';
 
 export async function tick({ root, now = Date.now(), deps = {} }) {
@@ -52,6 +53,18 @@ export async function tick({ root, now = Date.now(), deps = {} }) {
 
     if (!isDue(parseCron(job.schedule), st.lastRun, now)) {
       results.push({ id: job.id, action: 'not-due' });
+      continue;
+    }
+
+    // Cross-job duplicate guard: a groupmate is live, so this job does not start —
+    // SKIPPED, not queued, exactly like the same-job guard above. Nothing is written:
+    // no lastRun (the slot is not consumed), no breaker movement, so catch-up starts
+    // this job on the first tick after the group frees. Placed after the schedule
+    // check (only DUE jobs contend) and before the guard (no point running a guard
+    // command for a launch that cannot happen).
+    const holder = findGroupHolder({ root, job, jobs, defaults, isAlive: d.isPidAlive });
+    if (holder) {
+      results.push({ id: job.id, action: 'skipped-group', group: holder.group, holder: holder.id });
       continue;
     }
 

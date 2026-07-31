@@ -22,8 +22,8 @@ Tool: `node tools/pshed.mjs <command>` (all support `--json`; exit `0` ok / `1` 
 | Command | Purpose |
 |---|---|
 | `tick` | Cron entry point — run every due job once. Invoked by the OS scheduler each minute. |
-| `run <id>` `[--no-guard]` | Run one job immediately, bypassing the schedule (manual/testing). Respects the job's guard; `--no-guard` bypasses it for debugging. |
-| `set-job` | Add or modify a job (`--schedule`, `--prompt`, `--id`, `--cwd`, `--timeoutSec`, `--permission-mode`, `--allowed-tools`, `--model`, `--effort`, `--max-consecutive-failures`, `--guard`, `--guard-timeout-sec`). |
+| `run <id>` `[--no-guard]` `[--force]` | Run one job immediately, bypassing the schedule (manual/testing). Respects the job's guard (`--no-guard` bypasses) and refuses while the job or its concurrency group is already live (`--force` bypasses). |
+| `set-job` | Add or modify a job (`--schedule`, `--prompt`, `--id`, `--cwd`, `--timeoutSec`, `--permission-mode`, `--allowed-tools`, `--model`, `--effort`, `--max-consecutive-failures`, `--guard`, `--guard-timeout-sec`, `--concurrency-group`). |
 | `rm-job` | Delete a job (`--id`). |
 | `reset-breaker <id>` | Clear a job's tripped circuit breaker and self-pause marker so it schedules again. |
 | `pause` / `resume` | Reversibly halt / resume the **whole** scheduler (`run/PAUSED`; cron stays installed). `pause` accepts `--reason`; both idempotent. |
@@ -37,7 +37,7 @@ Tool: `node tools/pshed.mjs <command>` (all support `--json`; exit `0` ok / `1` 
 
 | File | Tracked? | Contents |
 |---|---|---|
-| `jobs.yml` | git | `version`, `defaults`, `jobs[]{ id, schedule, enabled, cwd?, prompt, timeoutSec?, permissionMode?, allowedTools?, model?, effort?, maxConsecutiveFailures?, guard?, guardTimeoutSec? }` |
+| `jobs.yml` | git | `version`, `defaults`, `jobs[]{ id, schedule, enabled, cwd?, prompt, timeoutSec?, permissionMode?, allowedTools?, model?, effort?, maxConsecutiveFailures?, guard?, guardTimeoutSec?, concurrencyGroup? }` |
 | `config.json` | gitignore | `{ nodeBin, claudeBin }` (resolved at init) |
 | `state/<id>.json` | gitignore | per-job `{ lastRun, lastExit, pid, consecutiveFailures, consecutiveGuardFailures?, lastGuard?, breakerTripped?, breakerReason?, breakerAt?, lastSkipReason?, lastSkipAt?, lastSkipResetAt? }` — one file per job (no shared state file). `lastSkip*` records the most recent skip (`lastSkipReason` is `usage-limit` or `api-overload`) and is cleared once the job runs for real again; `lastGuard` records the most recent guard check (`{ at, outcome, exit }`) |
 | `logs/<date>.jsonl` | gitignore | one record per run (see below); auto-rotated (7-day retention) |
@@ -109,6 +109,56 @@ run; a per-job `effort` overrides `defaults.effort`. Valid levels are `low`, `me
 it (on both the job and `defaults`) to let `claude` use its own default. The flag is
 **silently skipped for Haiku models** — `--effort` errors on Haiku 4.5 — so a job whose
 resolved `model` matches `haiku` never receives it even when `effort` is set.
+
+## Concurrency groups (coordinating different jobs)
+
+Jobs that share a working directory must not run at the same time. Set
+`concurrencyGroup` — per job, or on `defaults` for every job that does not override it —
+and p-shed allows **at most one live run per group**:
+
+    version: 1
+    defaults:
+      concurrencyGroup: tree      # every job inherits this…
+    jobs:
+      - id: worker                # …so `worker` is in group `tree`
+        schedule: "*/15 * * * *"
+        prompt: "Take the next work item."
+      - id: chat-responder
+        schedule: "* * * * *"
+        concurrencyGroup: chat    # its own group — runs even while `tree` is busy
+        prompt: "Answer the pending question."
+      - id: probe
+        schedule: "0 * * * *"
+        concurrencyGroup: null    # explicitly unconstrained, ignores the default
+        prompt: "Report health."
+
+- A due job whose group is held by a live groupmate is **skipped for this tick** —
+  `{"action":"skipped-group","group":"tree","holder":"worker"}`. There is no queue, no
+  lock file and no waiting.
+- The skip writes **nothing**: no `lastRun`, no breaker movement. Missed-tick catch-up
+  starts the job on the first tick after the group frees, so nothing is lost.
+- Jobs with no group (neither their own nor a default) are unconstrained — the
+  behavior every existing config already has.
+- `skipped` (this job's own previous run is still alive) and `skipped-group` (a
+  groupmate is) are different diagnoses and are reported separately.
+- Within one tick, due jobs are evaluated in `jobs.yml` order and launched one after
+  another, so two groupmates due in the same minute run back-to-back — never at the
+  same time. The gate is what stops a job from starting while a groupmate launched by
+  an earlier, still-running tick holds the group. Ordering is deterministic; there is
+  no fairness scheme.
+- `pshed run <id>` obeys the same rule: it refuses with `skipped`/`skipped-group` while
+  the job or its group is live, and `--force` overrides for debugging.
+
+**Why not `flock`?** Because `timeoutSec` covers the whole spawn, so time spent waiting
+for a lock is charged to the run's own budget: a chat job with a 600 s timeout queued
+behind a 30-minute job gets killed before it ever starts, and raising its timeout to
+1800 s just turns a one-minute job into one that may answer half an hour late. A
+scheduler with catch-up should say "not now, next tick" instead of waiting.
+
+Set it from the CLI with `--concurrency-group <name>`; `--concurrency-group ""` writes
+an explicit `null`, i.e. "this job is unconstrained even if `defaults` sets a group".
+(Unlike `--guard ""`, it does not delete the field — deleting it would silently
+re-inherit the default.)
 
 ## Job guards
 

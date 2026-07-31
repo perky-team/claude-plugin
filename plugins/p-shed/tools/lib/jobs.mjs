@@ -44,6 +44,16 @@ export function setJob(root, spec) {
     throw new ValidationError(`invalid guardTimeoutSec: ${spec.guardTimeoutSec} (expected a positive number)`);
   }
 
+  // concurrencyGroup: a name; '' is the documented clear sentinel
+  // (--concurrency-group ""), which stores an explicit null — see below.
+  if (spec.concurrencyGroup !== undefined && spec.concurrencyGroup !== null && typeof spec.concurrencyGroup !== 'string') {
+    throw new ValidationError('concurrencyGroup must be a string name (use --concurrency-group "" to clear)');
+  }
+  // Unlike --guard "", clearing does NOT delete the key: an absent field inherits
+  // defaults.concurrencyGroup, so deleting it would re-attach the job to the default
+  // group. An explicit null is what "this job is unconstrained" has to look like.
+  const concurrencyGroup = spec.concurrencyGroup === '' ? null : spec.concurrencyGroup;
+
   if (existing) {
     Object.assign(existing, pruneUndefined({
       schedule: spec.schedule,
@@ -58,6 +68,7 @@ export function setJob(root, spec) {
       maxConsecutiveFailures: spec.maxConsecutiveFailures,
       guard: spec.guard || undefined,          // '' falls through to the delete below
       guardTimeoutSec: spec.guardTimeoutSec,
+      concurrencyGroup,
     }));
     // Clearing the guard also clears its timeout — an orphaned guardTimeoutSec is
     // meaningless (an idle timeout with nothing to time out).
@@ -81,6 +92,7 @@ export function setJob(root, spec) {
     maxConsecutiveFailures: spec.maxConsecutiveFailures,
     guard: spec.guard || undefined,
     guardTimeoutSec: spec.guardTimeoutSec,
+    concurrencyGroup,
   }));
   writeJobs(root, data);
   return { id, created: true };

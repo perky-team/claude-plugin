@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { tick } from '../lib/tick.mjs';
 import { writeJobs, writeJobState, readState, paths } from '../lib/io.mjs';
+import { writePid } from '../lib/pids.mjs';
 import { pausePath } from '../lib/breaker.mjs';
 import { writeGlobalPause } from '../lib/pause.mjs';
 
@@ -351,6 +352,116 @@ describe('tick', () => {
       const row = loggedRow(deps);
       expect(row).toMatchObject({ outcome: 'skipped', reason: 'api-overload' });
       expect(row.usage).toMatchObject({ costUsd: 0.42, in: 1234 });
+    });
+  });
+
+  // Cross-job coordination: jobs sharing a working directory must not run at once, and
+  // the answer is "not now, next tick" — never a wait. A lock would charge the queued
+  // time to the run's own timeoutSec; catch-up starts the skipped job as soon as the
+  // group frees.
+  describe('concurrency groups', () => {
+    // 'a' is live (pidfile -> pid 111, which the fake liveness probe calls alive);
+    // 'b' is due. Both are in jobs.yml, 'a' first.
+    const grouped = (aGroup?: string | null, bGroup?: string | null, defaults: Record<string, unknown> = {}) => {
+      const withGroup = (id: string, g?: string | null) => ({
+        id, schedule: '* * * * *', enabled: true, prompt: 'go',
+        ...(g === undefined ? {} : { concurrencyGroup: g }),
+      });
+      writeJobs(root, { version: 1, defaults: { maxConsecutiveFailures: 3, ...defaults }, jobs: [withGroup('a', aGroup), withGroup('b', bGroup)] });
+      writeJobState(root, 'a', { lastRun: NOW - MIN, lastExit: 0, pid: null });
+      writeJobState(root, 'b', { lastRun: NOW - MIN, lastExit: 0, pid: null, consecutiveFailures: 2, note: 'keep-me' });
+      writePid(root, 'a', 111);
+    };
+    const liveDeps = (overrides = {}) => fakeDeps({ isPidAlive: vi.fn((pid: number) => pid === 111), ...overrides });
+    const resultFor = (res: any[], id: string) => res.find((r) => r.id === id);
+
+    it('skips a due job whose group is held by a live groupmate, naming the holder', async () => {
+      grouped('tree', 'tree');
+      const deps = liveDeps();
+      const res = await tick({ root, now: NOW, deps });
+      expect(resultFor(res, 'b')).toEqual({ id: 'b', action: 'skipped-group', group: 'tree', holder: 'a' });
+      expect(deps.runJob).not.toHaveBeenCalled();
+    });
+
+    it('leaves the skipped job\'s state completely untouched (no slot consumed)', async () => {
+      grouped('tree', 'tree');
+      await tick({ root, now: NOW, deps: liveDeps() });
+      expect(readState(root).jobs.b).toEqual({
+        lastRun: NOW - MIN, lastExit: 0, pid: null, consecutiveFailures: 2, note: 'keep-me',
+      });
+    });
+
+    it('launches a due job whose group is free (different group)', async () => {
+      grouped('tree', 'chat');
+      const deps = liveDeps();
+      const res = await tick({ root, now: NOW, deps });
+      expect(resultFor(res, 'b')).toMatchObject({ id: 'b', action: 'launched' });
+      expect(deps.runJob).toHaveBeenCalledOnce();
+    });
+
+    it('launches both when no group is configured anywhere (backward compatible)', async () => {
+      grouped(undefined, undefined);
+      const deps = liveDeps();
+      const res = await tick({ root, now: NOW, deps });
+      expect(resultFor(res, 'b')).toMatchObject({ id: 'b', action: 'launched' });
+    });
+
+    it('inherits defaults.concurrencyGroup for a job with no explicit field', async () => {
+      grouped(undefined, undefined, { concurrencyGroup: 'tree' });
+      const res = await tick({ root, now: NOW, deps: liveDeps() });
+      expect(resultFor(res, 'b')).toMatchObject({ action: 'skipped-group', group: 'tree', holder: 'a' });
+    });
+
+    it('a per-job group overrides the default', async () => {
+      grouped(undefined, 'chat', { concurrencyGroup: 'tree' });
+      const res = await tick({ root, now: NOW, deps: liveDeps() });
+      expect(resultFor(res, 'b')).toMatchObject({ action: 'launched' });
+    });
+
+    it('an explicit clear beats the default — the job stays unconstrained', async () => {
+      grouped(undefined, null, { concurrencyGroup: 'tree' });
+      const res = await tick({ root, now: NOW, deps: liveDeps() });
+      expect(resultFor(res, 'b')).toMatchObject({ action: 'launched' });
+    });
+
+    it('a stale pidfile pointing at a dead pid does not hold the group', async () => {
+      grouped('tree', 'tree');
+      const deps = fakeDeps({ isPidAlive: vi.fn(() => false) }); // same probe the duplicate guard uses
+      const res = await tick({ root, now: NOW, deps });
+      expect(resultFor(res, 'b')).toMatchObject({ action: 'launched' });
+    });
+
+    // Two different diagnoses: 'skipped' = this job is still running, 'skipped-group' =
+    // a groupmate is. A log reader must not have to conflate them.
+    it('distinguishes the same-job skip from the groupmate skip', async () => {
+      grouped('tree', 'tree');
+      const res = await tick({ root, now: NOW, deps: liveDeps() });
+      expect(res).toEqual([
+        { id: 'a', action: 'skipped' },
+        { id: 'b', action: 'skipped-group', group: 'tree', holder: 'a' },
+      ]);
+    });
+
+    // The group gate stops a job from STARTING while a groupmate is live. Within one
+    // tick the loop is sequential (deliberately — see CLAUDE.md), so groupmates due in
+    // the same minute run back-to-back and are never live at the same time.
+    it('does not skip a groupmate when nothing is actually live', async () => {
+      grouped('tree', 'tree');
+      const deps = fakeDeps({ isPidAlive: vi.fn(() => false) });
+      const res = await tick({ root, now: NOW, deps });
+      expect(res.map((r: any) => r.action)).toEqual(['launched', 'launched']);
+      expect(deps.runJob).toHaveBeenCalledTimes(2);
+    });
+
+    it('does not evaluate the group before the schedule (a not-due groupmate stays not-due)', async () => {
+      grouped('tree', 'tree');
+      writeJobs(root, { version: 1, defaults: {}, jobs: [
+        { id: 'a', schedule: '* * * * *', enabled: true, prompt: 'go', concurrencyGroup: 'tree' },
+        { id: 'b', schedule: '*/15 * * * *', enabled: true, prompt: 'go', concurrencyGroup: 'tree' },
+      ] });
+      writeJobState(root, 'b', { lastRun: new Date(2026, 6, 16, 1, 16).getTime(), lastExit: 0, pid: null });
+      const res = await tick({ root, now: NOW, deps: liveDeps() });
+      expect(resultFor(res, 'b')).toEqual({ id: 'b', action: 'not-due' });
     });
   });
 

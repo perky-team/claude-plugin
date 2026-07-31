@@ -17,9 +17,14 @@ to `claude --effort`; one of `low|medium|high|xhigh`; omitted ⇒ claude's defau
 ignored for Haiku models), optional `maxConsecutiveFailures` (circuit breaker
 threshold; default 3, `0` disables), optional `guard` (a shell command run before each
 due launch: exit 0 ⇒ launch, exit 75 ⇒ quiet skip, anything else ⇒ guard error counting
-toward the breaker; pass `--guard ""` to clear), and optional `guardTimeoutSec`
-(seconds before the guard is killed; default 30). To modify an existing job, pass its `--id`. Run:
-    node "${CLAUDE_PLUGIN_ROOT}/tools/pshed.mjs" set-job --schedule "<cron>" --prompt "<text>" [--id <id>] [--cwd <path>] [--timeoutSec <n>] [--permission-mode <mode>] [--allowed-tools "<list>"] [--model <name>] [--effort <low|medium|high|xhigh>] [--max-consecutive-failures <n>] [--guard "<cmd>"] [--guard-timeout-sec <n>] --json
+toward the breaker; pass `--guard ""` to clear), optional `guardTimeoutSec`
+(seconds before the guard is killed; default 30), and optional `concurrencyGroup` (a
+name; at most one live run per group — a due job whose group is held by another live
+job is skipped for that tick and retried on the next one, never queued; inherited from
+`defaults.concurrencyGroup` when unset, `--concurrency-group ""` marks the job
+explicitly unconstrained). Jobs sharing a `cwd` usually want the same group. To modify
+an existing job, pass its `--id`. Run:
+    node "${CLAUDE_PLUGIN_ROOT}/tools/pshed.mjs" set-job --schedule "<cron>" --prompt "<text>" [--id <id>] [--cwd <path>] [--timeoutSec <n>] [--permission-mode <mode>] [--allowed-tools "<list>"] [--model <name>] [--effort <low|medium|high|xhigh>] [--max-consecutive-failures <n>] [--guard "<cmd>"] [--guard-timeout-sec <n>] [--concurrency-group <name>] --json
 On exit code 2 (`error.code = validation`), show the message (e.g. bad cron) and ask again.
 
 ## Delete
