@@ -18,11 +18,12 @@ export function readGlobalPause(root) {
   catch { return {}; } // present but unreadable -> still paused (truthy)
 }
 
-export function writeGlobalPause(root, { reason, now = Date.now() } = {}) {
+export function writeGlobalPause(root, { reason, origin, now = Date.now() } = {}) {
   const existing = readGlobalPause(root);
   if (existing) return { paused: true, alreadyPaused: true, createdAt: existing.createdAt ?? null, reason: existing.reason };
   const state = { createdAt: now };
   if (reason != null) state.reason = reason;
+  if (origin != null) state.origin = origin;
   const dir = paths(root).runDir;
   mkdirSync(dir, { recursive: true });
   writeFileSync(globalPausePath(root), JSON.stringify(state, null, 2) + '\n', 'utf-8');

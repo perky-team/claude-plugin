@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { paths, readJobState, writeJobState } from './io.mjs';
 
@@ -48,7 +48,7 @@ export function readPauseRecord(root, id) {
   const nl = raw.indexOf('\n');
   const first = (nl === -1 ? raw : raw.slice(0, nl)).replace(/\r$/, '');
   const m = ORIGIN_HEADER.exec(first);
-  if (!m) return { origin: 'self', reason: raw };
+  if (!m) return { origin: 'self', reason: raw.replace(/\r?\n$/, '') };
   const body = nl === -1 ? '' : raw.slice(nl + 1);
   // An unrecognised header value still reads as `operator`: only p-shed writes headers,
   // and refusing to auto-clear a marker we don't fully understand is the safe direction.
@@ -109,4 +109,16 @@ export function resetBreaker(root, id) {
         : { operatorPause: true, pauseReason: pause.reason, hint: `operator pause kept; lift it with: pshed resume --id ${id}` })
     : {};
   return { id, cleared: true, pauseCleared: pause != null && !keep, ...held };
+}
+
+// Every job id with a pause marker on disk, stale ones included. Symmetric with
+// listPidEntries() in pids.mjs and deliberately independent of jobs.yml: a job deleted
+// from jobs.yml can still have left a marker behind, and the reclaim must find it.
+export function listPauseIds(root) {
+  const dir = paths(root).runDir;
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .map((f) => /^(.+)\.pause$/.exec(f))
+    .filter(Boolean)
+    .map((m) => m[1]);
 }
