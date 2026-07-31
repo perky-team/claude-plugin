@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { paths } from './io.mjs';
 import { isPidAlive } from './pids.mjs';
@@ -32,10 +32,22 @@ export function readDeployOwner(root) {
 // Written BEFORE any pause is placed, so the "marker exists, owner unknown" window
 // cannot open. The reverse window (owner recorded, nothing paused yet) is harmless:
 // there is nothing to reclaim.
+//
+// Atomic: write to a temp file in the SAME directory, then renameSync over the real
+// path. A plain writeFileSync can be read mid-write by a concurrent readDeployOwner
+// (another `deploy` process, or the tick), which sees a truncated/partial JSON blob,
+// fails to parse it, and reads back as "no owner" — a live deploy's pause then looks
+// like an orphan and gets reclaimed out from under it. rename() on the same filesystem
+// is atomic on both POSIX and Windows: readers only ever see the old complete content
+// or the new complete content, never a half-written one.
 export function writeDeployOwner(root, { pid, scope, group = null, reason = null, now = Date.now() } = {}) {
   const state = { pid, scope, group, reason, createdAt: now };
-  mkdirSync(paths(root).runDir, { recursive: true });
-  writeFileSync(deployOwnerPath(root), JSON.stringify(state, null, 2) + '\n', 'utf-8');
+  const dir = paths(root).runDir;
+  mkdirSync(dir, { recursive: true });
+  const target = deployOwnerPath(root);
+  const tmp = join(dir, `.DEPLOY.${process.pid}.${now}.tmp`);
+  writeFileSync(tmp, JSON.stringify(state, null, 2) + '\n', 'utf-8');
+  renameSync(tmp, target);
   return state;
 }
 

@@ -1,6 +1,6 @@
 import { isPidAlive } from './pids.mjs';
 import { listHolders, waitForIdle } from './idle.mjs';
-import { writeDeployOwner, removeDeployOwner } from './owner.mjs';
+import { readDeployOwner, writeDeployOwner, removeDeployOwner } from './owner.mjs';
 import { writeGlobalPause, removeGlobalPause, readGlobalPause } from './pause.mjs';
 import { writePause, readPauseRecord, removePause } from './breaker.mjs';
 import { resolveGroup } from './concurrency.mjs';
@@ -33,6 +33,30 @@ export async function runDeploy({
     ...deps,
   };
   const scope = group ? 'group' : 'global';
+
+  // run/DEPLOY has ONE slot, not a lock — two overlapping `deploy` invocations would
+  // otherwise both overwrite it and run their commands side by side, which is exactly
+  // the double-launch this command exists to prevent (a live deploy pause then also
+  // looks like an orphan to whichever of the two exits first, and its release() deletes
+  // the survivor's ownership — see the release() fix below). So refuse outright when the
+  // current owner is a LIVE pid. A dead or absent owner is NOT refused: it is overwritten
+  // below exactly as before, so a crashed deploy can never wedge every later one.
+  //
+  // This check is inherently best-effort: a second `deploy` can still slip through in
+  // the window between this read and writeDeployOwner() below. That race is accepted,
+  // not fixed — run/DEPLOY is a marker, not a mutex (see CLAUDE.md), and closing it
+  // would mean building real lock semantics this file deliberately does not have.
+  const existingOwner = readDeployOwner(root);
+  if (existingOwner && d.isAlive(existingOwner.pid)) {
+    const reasonText = existingOwner.reason ? `"${existingOwner.reason}"` : 'unknown';
+    return {
+      outcome: 'busy', exit: 2, waitedMs: 0, attempts: 0,
+      scope, group, pausedIds: [], ownedGlobal: false, preserved: [],
+      holder: { pid: existingOwner.pid, reason: existingOwner.reason ?? null },
+      message: `another deploy is in progress (pid ${existingOwner.pid}, reason ${reasonText})`,
+    };
+  }
+
   const started = d.now();
   const remaining = () => Math.max(0, timeoutMs - (d.now() - started));
   const members = () => jobs.filter((j) => resolveGroup(j, defaults) === group).map((j) => j.id);
@@ -74,7 +98,16 @@ export async function runDeploy({
   // block already produced rather than letting it replace that result.
   const release = () => {
     const errors = dropOwnPauses();
-    try { removeDeployOwner(root); } catch (err) { errors.push(`removeDeployOwner: ${err.message}`); }
+    // Only remove run/DEPLOY when it still names OUR pid. Another `deploy` can have
+    // overwritten it after this run's ownership check above (the accepted race) or —
+    // before the refusal check existed — two deploys could both be running at once; in
+    // either case an unconditional removeDeployOwner() here would delete a LIVE deploy's
+    // ownership out from under it, which is exactly what let the tick misread that
+    // deploy's still-active pause as an orphan and reclaim it mid-run.
+    try {
+      const owner = readDeployOwner(root);
+      if (owner && owner.pid === pid) removeDeployOwner(root);
+    } catch (err) { errors.push(`removeDeployOwner: ${err.message}`); }
     return errors;
   };
 
