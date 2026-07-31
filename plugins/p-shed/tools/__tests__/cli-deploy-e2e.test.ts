@@ -119,10 +119,12 @@ describe('deploy', () => {
   it('passes a command carrying its own flags through untouched', () => {
     writeJobs(TWO_JOBS);
     const script = 'console.log(JSON.stringify(process.argv.slice(1)))';
-    const r = cli(['deploy', '--reason', 'x', '--', NODE, '-e', script, '--json', '--group', 'not-ours']);
+    const r = cli(['deploy', '--reason', 'x', '--', NODE, '-e', script, '--', '--json', '--group', 'not-ours']);
     expect(r.status).toBe(0);
     expect(r.stdout).toContain('"--json"');
     expect(r.stdout).toContain('"--group"');
+    // p-shed's report must be human-readable (not JSON), proving --json went to the script, not to p-shed
+    expect(() => JSON.parse(r.stderr)).toThrow();
   });
 
   it('keeps its own report out of the command stdout', () => {
