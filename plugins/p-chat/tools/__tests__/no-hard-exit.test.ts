@@ -1,8 +1,23 @@
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
-const CLI_SRC = readFileSync(join(process.cwd(), 'plugins/p-chat/tools/pchat.mjs'), 'utf-8');
+const TOOLS = join(process.cwd(), 'plugins/p-chat/tools');
+
+/** Every runtime .mjs under tools/, tests excluded — lib/ counts as much as the entry. */
+function runtimeFiles(dir = TOOLS): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir)) {
+    if (entry === '__tests__' || entry === 'vendor' || entry === 'node_modules') continue;
+    const abs = join(dir, entry);
+    if (statSync(abs).isDirectory()) out.push(...runtimeFiles(abs));
+    else if (entry.endsWith('.mjs')) out.push(abs);
+  }
+  return out;
+}
+
+const SOURCES = runtimeFiles().map((path) => ({ path, src: readFileSync(path, 'utf-8') }));
+const CLI_SRC = readFileSync(join(TOOLS, 'pchat.mjs'), 'utf-8');
 
 /**
  * Regression guard for the Windows crash: `process.exit()` while undici still holds a
@@ -15,11 +30,23 @@ const CLI_SRC = readFileSync(join(process.cwd(), 'plugins/p-chat/tools/pchat.mjs
  * "tidy-up" that reintroduces process.exit() would look harmless in review.
  */
 describe('pchat never hard-exits', () => {
-  it('the CLI contains no process.exit() call', () => {
-    const hits = CLI_SRC.split('\n')
-      .map((line, i) => ({ line: line.trim(), n: i + 1 }))
-      .filter(({ line }) => /process\.exit\s*\(/.test(line) && !line.startsWith('//') && !line.startsWith('*'));
-    expect(hits, `use process.exitCode instead:\n${hits.map((h) => `  ${h.n}: ${h.line}`).join('\n')}`).toEqual([]);
+  it('finds the runtime sources it is meant to check', () => {
+    expect(SOURCES.map((s) => s.path.replace(/\\/g, '/'))).toContain(
+      join(TOOLS, 'pchat.mjs').replace(/\\/g, '/'),
+    );
+    expect(SOURCES.length).toBeGreaterThan(1); // lib/ files too, not just the entry point
+  });
+
+  it('no runtime file contains a process.exit() call', () => {
+    const hits: string[] = [];
+    for (const { path, src } of SOURCES) {
+      src.split('\n').forEach((raw, i) => {
+        const line = raw.trim();
+        if (line.startsWith('//') || line.startsWith('*')) return;
+        if (/process\.exit\s*\(/.test(line)) hits.push(`${path.replace(/\\/g, '/')}:${i + 1}: ${line}`);
+      });
+    }
+    expect(hits, `use process.exitCode instead:\n${hits.join('\n')}`).toEqual([]);
   });
 
   it('exits are set through process.exitCode', () => {
@@ -27,14 +54,18 @@ describe('pchat never hard-exits', () => {
   });
 
   it('every emitJson / die call site returns, since they no longer stop execution', () => {
-    const offenders = CLI_SRC.split('\n')
-      .map((line, i) => ({ line: line.trim(), n: i + 1 }))
-      .filter(({ line }) => /\b(emitJson|die)\s*\(/.test(line))
-      .filter(({ line }) => !line.startsWith('export function'))
-      .filter(({ line }) => !line.startsWith('//') && !line.startsWith('*'))
-      // Control flow is kept when the call is returned — either at the start of the line
-      // or after a guard, as in `if (cond) return die(...)`. A bare call falls through.
-      .filter(({ line }) => !/\breturn\s+(emitJson|die)\s*\(/.test(line));
-    expect(offenders, `these calls would fall through:\n${offenders.map((h) => `  ${h.n}: ${h.line}`).join('\n')}`).toEqual([]);
+    const offenders: string[] = [];
+    for (const { path, src } of SOURCES) {
+      src.split('\n').forEach((raw, i) => {
+        const line = raw.trim();
+        if (!/\b(emitJson|die)\s*\(/.test(line)) return;
+        if (line.startsWith('export function') || line.startsWith('//') || line.startsWith('*')) return;
+        // Control flow is kept when the call is returned — either at the start of the line
+        // or after a guard, as in `if (cond) return die(...)`. A bare call falls through.
+        if (/\breturn\s+(emitJson|die)\s*\(/.test(line)) return;
+        offenders.push(`${path.replace(/\\/g, '/')}:${i + 1}: ${line}`);
+      });
+    }
+    expect(offenders, `these calls would fall through:\n${offenders.join('\n')}`).toEqual([]);
   });
 });
