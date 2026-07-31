@@ -2,7 +2,7 @@
 // pausing before waiting for idle silenced the read-only chat jobs for the entire
 // remaining run of a 30-minute worker (phone dark for 20 minutes).
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runDeploy } from '../lib/deploy.mjs';
@@ -112,6 +112,33 @@ describe('release is unconditional', () => {
     await expect(runDeploy(base({ deps: { spawn: boom, isAlive: () => false, now: () => 0, sleep: async () => {} } }))).rejects.toThrow('spawn exploded');
     expect(readGlobalPause(root)).toBeNull();
     expect(existsSync(deployOwnerPath(root))).toBe(false);
+  });
+
+  it('a real removal failure does not destroy a successful result, and the rest of cleanup still runs', async () => {
+    // rmSync({force:true}) swallows "already gone" (ENOENT), not "is a directory". Swap
+    // the 'worker' pause file for a directory of the same name right after it's placed,
+    // so release()'s removePause('worker') hits a genuine, non-ENOENT fs failure.
+    const res = await runDeploy(base({
+      group: 'hft',
+      deps: {
+        spawn: fakeSpawn(0), isAlive: () => false, now: () => 0, sleep: async () => {},
+        onStep: (s: string) => {
+          if (s === 'recheck') {
+            rmSync(pausePath(root, 'worker'), { force: true });
+            mkdirSync(pausePath(root, 'worker'));
+          }
+        },
+      },
+    }));
+    expect(res.outcome).toBe('ok');
+    expect(res.exit).toBe(0);
+    expect(res.releaseErrors.length).toBeGreaterThan(0);
+    expect(res.releaseErrors[0]).toMatch(/removePause\(worker\)/);
+    // The failing removal didn't stop the rest: chat's pause and the deploy owner are
+    // both gone despite worker's directory still sitting where its pause file was.
+    expect(existsSync(pausePath(root, 'chat'))).toBe(false);
+    expect(existsSync(deployOwnerPath(root))).toBe(false);
+    rmSync(pausePath(root, 'worker'), { recursive: true, force: true });
   });
 });
 

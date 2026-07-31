@@ -17,6 +17,10 @@ const noop = () => {};
 // The re-check exists because a job can launch in the gap between "idle" and "paused".
 // When that happens we undo our own pause and go back to waiting, inside whatever is
 // left of the timeout, rather than deploying into a live run.
+//
+// onStep fires AFTER the operation for 'wait' / 'recheck' / 'run' (reporting what just
+// happened) but BEFORE the operation for 'pause' / 'release' (reporting what is about to
+// happen) — a caller reusing this hook for live progress display needs to know which.
 export async function runDeploy({
   root, jobs = [], defaults = {}, group = null, reason,
   timeoutMs = 1_800_000, pollMs = 1000,
@@ -43,14 +47,38 @@ export async function runDeploy({
   let preserved = [];
   let attempts = 0;
 
-  const release = () => {
-    if (ownedGlobal) removeGlobalPause(root);
-    for (const id of pausedIds) removePause(root, id);
+  // Clears whatever pauses THIS run placed (never one it walked into) — shared by the
+  // mid-loop "undo" (a job started in the gap between idle and paused) and by release()
+  // below, so a future change to how placed pauses are cleared has exactly one place to
+  // edit. Each removal is isolated in its own try/catch: rmSync({force:true}) suppresses
+  // ENOENT but still throws on a real I/O failure (a locked file, a permission error —
+  // a live concern on Windows), and one such failure must not stop the rest of the
+  // cleanup, nor ever throw out of here. Failures come back as short messages.
+  const dropOwnPauses = () => {
+    const errors = [];
+    if (ownedGlobal) {
+      try { removeGlobalPause(root); } catch (err) { errors.push(`removeGlobalPause: ${err.message}`); }
+    }
+    for (const id of pausedIds) {
+      try { removePause(root, id); } catch (err) { errors.push(`removePause(${id}): ${err.message}`); }
+    }
     pausedIds = [];
     ownedGlobal = false;
-    removeDeployOwner(root);
+    return errors;
   };
 
+  // Unconditional: success, non-zero exit, a throw, or (on POSIX) a signal that got this
+  // far all call this. A deploy that dies holding a global pause takes the whole loop
+  // down, so release() must never itself throw — a cleanup failure is recorded here
+  // instead of raised, and the finally block below attaches it onto the result the try
+  // block already produced rather than letting it replace that result.
+  const release = () => {
+    const errors = dropOwnPauses();
+    try { removeDeployOwner(root); } catch (err) { errors.push(`removeDeployOwner: ${err.message}`); }
+    return errors;
+  };
+
+  let result;
   try {
     for (;;) {
       attempts++;
@@ -62,11 +90,12 @@ export async function runDeploy({
       if (!waited.idle) {
         // Nothing was paused and nothing ran — the honest failure, whether the wait ran
         // out or the operator interrupted it. Ownership is dropped by the finally below.
-        return {
+        result = {
           outcome: waited.aborted ? 'aborted' : 'timeout', exit: waited.aborted ? 130 : 1,
           waitedMs: d.now() - started, attempts,
           scope, group, pausedIds: [], ownedGlobal: false, preserved: [], holders: waited.holders,
         };
+        return result;
       }
 
       d.onStep('pause');
@@ -90,29 +119,33 @@ export async function runDeploy({
 
       // A job started in the gap. Undo only what we placed, then wait again.
       d.onStep('undo');
-      if (ownedGlobal) removeGlobalPause(root);
-      for (const id of pausedIds) removePause(root, id);
-      pausedIds = [];
-      ownedGlobal = false;
+      dropOwnPauses();
       if (remaining() === 0) {
-        return {
+        result = {
           outcome: 'timeout', exit: 1, waitedMs: d.now() - started, attempts,
-          scope, group, pausedIds: [], ownedGlobal: false, preserved: [], holders: stragglers,
+          scope, group, pausedIds: [], ownedGlobal: false, preserved, holders: stragglers,
         };
+        return result;
       }
     }
 
-    const result = await d.spawn({ cmd, args });
+    const spawned = await d.spawn({ cmd, args });
     d.onStep('run');
-    return {
-      outcome: 'ok', exit: result.exit, signal: result.signal ?? null,
+    result = {
+      outcome: 'ok', exit: spawned.exit, signal: spawned.signal ?? null,
       waitedMs: d.now() - started, attempts, scope, group,
       pausedIds: [...pausedIds], ownedGlobal, preserved,
     };
+    return result;
   } finally {
-    // Unconditional: success, non-zero exit, a throw, or (on POSIX) a signal that got
-    // this far. A deploy that dies holding a global pause takes the whole loop down.
     d.onStep('release');
-    release();
+    const releaseErrors = release();
+    // Attach onto the object the try block already built, rather than letting release()
+    // stand in for it: `return result` above already captured the reference before this
+    // finally runs, and mutating it here is visible on the value the caller receives. If
+    // the try block never got as far as building a result (spawn threw, or a signal cut
+    // in), there is nothing to attach to — the original error/interrupt still propagates
+    // once this finally exits, since release() never throws.
+    if (result) result.releaseErrors = releaseErrors;
   }
 }
