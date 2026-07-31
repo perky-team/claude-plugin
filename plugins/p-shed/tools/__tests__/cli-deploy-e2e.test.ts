@@ -2,10 +2,10 @@
 // so every assertion here also checks that run/PAUSED stayed absent.
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { formatDeploy } from '../pshed.mjs';
+import { formatDeploy, quoteWinArg } from '../pshed.mjs';
 
 const CLI = join(process.cwd(), 'plugins/p-shed/tools/pshed.mjs');
 
@@ -239,9 +239,80 @@ describe('deploy', () => {
   });
 });
 
-// POSIX only: measured, a Node process on Windows receives neither SIGINT nor SIGTERM —
-// the handler never fires — so there is nothing to assert there. The reclaim in the tick
-// is what covers Windows, and owner.test.ts covers the reclaim.
+// POSIX only: measured, a spawn error other than ENOENT (e.g. EACCES on a file without
+// the execute bit) has no Windows equivalent that arises the same way — on win32 the
+// shell (spawnInherit uses shell:true there) reports a missing/unrunnable command as a
+// plain exit 1 from cmd.exe itself, never a rejected spawn 'error' event. This is why the
+// finding's own reproduction is POSIX-only, and why the existing SIGINT test above uses
+// the same skipIf pattern.
+describe.skipIf(process.platform === 'win32')('deploy reports an unexpected spawn error on stderr, never stdout', () => {
+  it('keeps stdout clean and puts the diagnosis on stderr when the target cannot be spawned (EACCES)', () => {
+    writeJobs(TWO_JOBS);
+    const scriptPath = join(root, 'not-executable.sh');
+    writeFileSync(scriptPath, '#!/bin/sh\necho MUST-NOT-RUN\n', 'utf-8');
+    chmodSync(scriptPath, 0o644); // no execute bit: spawn rejects with EACCES, not ENOENT
+
+    const r = cli(['deploy', '--reason', 'x', '--json', '--', scriptPath]);
+
+    // The deployed command's channel (stdout) must stay untouched by p-shed's own
+    // failure report — that guarantee is the entire point of `deploy`.
+    expect(r.stdout).toBe('');
+    expect(r.status).toBe(1);
+    const report = JSON.parse(r.stderr);
+    expect(report.action).toBe('deploy');
+    expect(report.outcome).not.toBe('ok');
+    expect(JSON.stringify(report)).toMatch(/EACCES/);
+    // The pause is still released even though the command never ran.
+    expect(existsSync(pshed('run', 'PAUSED'))).toBe(false);
+    expect(existsSync(pshed('run', 'DEPLOY'))).toBe(false);
+  });
+
+  it('renders the same failure in human format (no --json) without touching stdout', () => {
+    writeJobs(TWO_JOBS);
+    const scriptPath = join(root, 'not-executable-2.sh');
+    writeFileSync(scriptPath, '#!/bin/sh\necho MUST-NOT-RUN\n', 'utf-8');
+    chmodSync(scriptPath, 0o644);
+
+    const r = cli(['deploy', '--reason', 'x', '--', scriptPath]);
+
+    expect(r.stdout).toBe('');
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/EACCES/);
+    expect(() => JSON.parse(r.stderr)).toThrow(); // human format, not JSON
+  });
+});
+
+// Pure string assertions on quoteWinArg's output — no shell involved, so these run and
+// mean the same thing on every platform, unlike the e2e round-trip above which only
+// exercises the win32 branch when the suite itself runs on win32. These lock in the
+// documented CommandLineToArgvW rules (backslash-run special only right before a quote,
+// or at the very end of the argument) rather than changing any behavior.
+describe('quoteWinArg', () => {
+  it('wraps a plain path with backslashes untouched (no quote follows them)', () => {
+    expect(quoteWinArg('C:\\Users\\test\\file.txt')).toBe('"C:\\Users\\test\\file.txt"');
+  });
+
+  it('doubles a trailing run of backslashes so it does not escape the closing quote', () => {
+    expect(quoteWinArg('C:\\path\\')).toBe('"C:\\path\\\\"');
+  });
+
+  it('escapes an embedded double quote', () => {
+    expect(quoteWinArg('embedded"quote')).toBe('"embedded\\"quote"');
+  });
+
+  it('escapes a quote sitting at the very end of the argument', () => {
+    expect(quoteWinArg('quote-at-end"')).toBe('"quote-at-end\\""');
+  });
+
+  it('wraps an argument containing spaces so it stays one token', () => {
+    expect(quoteWinArg('hello world')).toBe('"hello world"');
+  });
+
+  it('leaves shell metacharacters & ^ | > < untouched inside the quotes', () => {
+    expect(quoteWinArg('a&b^c|d>e<f')).toBe('"a&b^c|d>e<f"');
+  });
+});
+
 describe.skipIf(process.platform === 'win32')('deploy releases on a signal', () => {
   it('SIGINT during the command still clears the pause and run/DEPLOY', async () => {
     writeJobs(TWO_JOBS);

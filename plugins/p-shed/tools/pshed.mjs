@@ -314,15 +314,35 @@ async function main() {
         }
       }
 
-      const res = await runDeploy({
-        root, jobs, defaults, group: target ? target.group : null,
-        reason: args.reason, timeoutMs: timeoutMsFrom(args), pollMs: pollMsFrom(args),
-        cmd: cmdv[0], args: cmdv.slice(1),
-        deps: { spawn: spawnInherit, isAborted: () => cancelled },
-      });
+      const timeoutMs = timeoutMsFrom(args);
+      const pollMs = pollMsFrom(args);
+
+      // runDeploy's own outcomes (ok/timeout/aborted) are reported below, but spawnInherit
+      // can also REJECT — any spawn error other than ENOENT (EACCES on a file without the
+      // execute bit, ENOEXEC on a bad shebang, ...) — and runDeploy re-throws that after its
+      // finally block has already released the pause. Left uncaught here, it would escape
+      // to main()'s generic catch, which reports via emitJson — straight onto STDOUT. That
+      // is exactly the channel this command exists to keep clean for the deployed command,
+      // so this failure gets its own report, on stderr, honouring --json like every other
+      // outcome, instead of falling through to the generic handler.
+      let res;
+      try {
+        res = await runDeploy({
+          root, jobs, defaults, group: target ? target.group : null,
+          reason: args.reason, timeoutMs, pollMs,
+          cmd: cmdv[0], args: cmdv.slice(1),
+          deps: { spawn: spawnInherit, isAborted: () => cancelled },
+        });
+      } catch (e) {
+        // The pause was already released by runDeploy's finally — this is a reporting
+        // failure only, so say plainly what broke and move on with exit 1 (not any of the
+        // command's own codes, not 127/130/2 — none of those fit an unspawnable-but-not-
+        // missing target, so it gets the internal-failure code).
+        res = { outcome: 'error', exit: 1, message: e?.message ?? String(e) };
+      }
       const report = { action: 'deploy', ...res };
       process.stderr.write(args.json ? JSON.stringify(report) + '\n' : formatDeploy(report) + '\n');
-      process.exit(res.outcome === 'ok' ? res.exit : (res.outcome === 'aborted' ? 130 : 1));
+      process.exit(deployExitCode(res));
     }
 
     if (command === 'install-cron' || command === 'remove-cron') {
@@ -410,7 +430,7 @@ function scanSchtasksTaskIds() {
 // an argument containing `%SOMETHING%` can still be substituted on Windows. That is
 // inherent to going through a shell at all (required for .cmd/.bat, see below) — quoting
 // closes the backslash/quote holes, not that one.
-function quoteWinArg(arg) {
+export function quoteWinArg(arg) {
   const escaped = String(arg)
     .replace(/(\\*)"/g, '$1$1\\"')
     .replace(/(\\+)$/, '$1$1');
@@ -455,10 +475,15 @@ function osSignalNumber(signal) {
   return table[signal];
 }
 
+// Shared by the timeout and aborted branches below: both name whoever deploy is still
+// waiting on, in the same "id (pid N)" shape.
+function formatHolders(holders) {
+  return holders.map((h) => `${h.id} (pid ${h.pid})`).join(', ') || 'unknown';
+}
+
 export function formatDeploy(r) {
   if (r.outcome === 'timeout') {
-    const who = r.holders.map((h) => `${h.id} (pid ${h.pid})`).join(', ') || 'unknown';
-    return `deploy: timed out after ${Math.round(r.waitedMs / 1000)}s waiting for ${who}; nothing paused, nothing run`;
+    return `deploy: timed out after ${Math.round(r.waitedMs / 1000)}s waiting for ${formatHolders(r.holders)}; nothing paused, nothing run`;
   }
   // Ctrl+C during the wait, before anything was paused and before any command ran (see
   // lib/deploy.mjs: waited.aborted returns pausedIds: [], ownedGlobal: false). Falling
@@ -466,12 +491,34 @@ export function formatDeploy(r) {
   // exited 130, released" — every clause false, since the operator interrupted the
   // WAITING phase, not a running deploy. Same voice as the timeout branch above.
   if (r.outcome === 'aborted') {
-    const who = r.holders.map((h) => `${h.id} (pid ${h.pid})`).join(', ') || 'unknown';
-    return `deploy: interrupted after ${Math.round(r.waitedMs / 1000)}s waiting for ${who}; nothing paused, nothing run`;
+    return `deploy: interrupted after ${Math.round(r.waitedMs / 1000)}s waiting for ${formatHolders(r.holders)}; nothing paused, nothing run`;
   }
-  const scope = r.scope === 'group' ? `group ${r.group}` : 'the scheduler';
-  const kept = r.preserved.length ? `; kept ${r.preserved.length} pre-existing pause(s)` : '';
-  return `deploy: waited ${Math.round(r.waitedMs / 1000)}s, paused ${scope}, command exited ${r.exit}, released${kept}`;
+  // An unexpected spawn failure (see the deploy command's try/catch in main()): the pause
+  // was already released by runDeploy's finally by the time this renders, so say so rather
+  // than leaving the operator to wonder whether the loop is still halted.
+  if (r.outcome === 'error') {
+    return `deploy: internal error — ${r.message}; scheduler released, command did not run`;
+  }
+  // r.outcome === 'ok' is the only remaining case, but it is checked explicitly rather than
+  // being the implicit fallthrough: an implicit "everything else is ok" here would silently
+  // reproduce the exact false-report bug the 'aborted' branch above was added to fix, the
+  // next time a fourth outcome is introduced.
+  if (r.outcome === 'ok') {
+    const scope = r.scope === 'group' ? `group ${r.group}` : 'the scheduler';
+    const kept = r.preserved.length ? `; kept ${r.preserved.length} pre-existing pause(s)` : '';
+    return `deploy: waited ${Math.round(r.waitedMs / 1000)}s, paused ${scope}, command exited ${r.exit}, released${kept}`;
+  }
+  return `deploy: unrecognized outcome '${r.outcome}'`;
+}
+
+// Mirrors formatDeploy's explicitness: 'ok' returns the command's own exit code, 'aborted'
+// is the conventional 130, and everything else (timeout, error, or any future outcome) is
+// an internal/administrative failure, not the command's own result — exit 1, never a
+// silent fallthrough to "must have been fine".
+function deployExitCode(res) {
+  if (res.outcome === 'ok') return res.exit;
+  if (res.outcome === 'aborted') return 130;
+  return 1;
 }
 
 // Whether this folder's every-minute tick is registered in the OS scheduler. Read-only
