@@ -17,7 +17,7 @@ no rules — what to do lives entirely in each job's prompt and in the target fo
 
 ## Commands
 
-Tool: `node tools/pshed.mjs <command>` (all support `--json`; exit `0` ok / `1` env / `2` validation):
+Tool: `node tools/pshed.mjs <command>` (all support `--json`; exit `0` ok / `1` env / `2` validation)† :
 
 | Command | Purpose |
 |---|---|
@@ -28,10 +28,12 @@ Tool: `node tools/pshed.mjs <command>` (all support `--json`; exit `0` ok / `1` 
 | `reset-breaker <id>` | Clear a job's tripped circuit breaker and its **self**-pause marker so it schedules again. An operator pause (`pause --id`) survives — lift that with `resume --id`. |
 | `pause` / `resume` | Reversibly halt / resume the **whole** scheduler (`run/PAUSED`; cron stays installed), or with `--id <job>` / `--group <name>` just that job or every member of that concurrency group (`run/<id>.pause`). `pause` accepts `--reason`; both idempotent. An unknown id, an unmatched group, or both flags at once is an error (exit 2) — never a global pause. |
 | `wait-idle` | Block until no job (or no member of `--group`) holds a live pidfile. Changes no state. `--timeout-sec` (default 1800), `--poll-ms` (default 1000). Exit `0` idle / `1` timed out (holder named) / `2` validation. |
-| `deploy` | Open a maintenance window and run a command in it: wait for idle → pause → re-check → run → always release. `--reason` required, `--group` optional, then `-- <cmd> [args...]`. The command's stdout/stderr pass through untouched and its exit code becomes `deploy`'s; p-shed's own report goes to stderr. |
+| `deploy` | Open a maintenance window and run a command in it: wait for idle → pause → re-check → run → always release. `--reason` required, `--group` optional, then `-- <cmd> [args...]`. The command's stdout/stderr pass through untouched and its exit code becomes `deploy`'s; p-shed's own report goes to stderr. Exit `0` command succeeded / command's code it ran and exited / `1` wait timed out or deploy failed / `127` command not found / `128+signum` killed by signal / `130` operator interrupted. |
 | `status` | Report, from disk + the OS scheduler: installed?, globally paused?, and per job running/paused/breaker/last-run. JSON by default, `--human` for a text table. |
 | `stop` `[--kill]` | Honest teardown of the OS scheduler entry — reports `removed: true|false` (see below). `--kill` also SIGTERM→SIGKILLs any in-flight jobs (`--grace-ms` tunes the escalation delay). |
 | `install-cron` / `remove-cron` | Register/unregister the every-minute `tick` in the OS scheduler for this folder. `remove-cron` reports `removed` and warns on a cwd mismatch (see below). |
+
+† Most commands exit as stated in the header; `deploy` is an exception — see its row for the full code set.
 
 ## Formats
 
@@ -46,7 +48,7 @@ Tool: `node tools/pshed.mjs <command>` (all support `--json`; exit `0` ok / `1` 
 | `run/<id>.pid` | gitignore | duplicate-guard pidfile |
 | `run/<id>.pause` | gitignore | per-job pause marker (contents = a human-readable reason). A job's own run writes it to stop being scheduled; `pause --id/--group` writes the same file with a leading `#pshed origin=operator` line. Presence pauses, so a bare `touch` works and an empty marker is a valid self-pause |
 | `run/PAUSED` | gitignore | global pause marker (`{ createdAt, reason? }`); halts every job while cron stays installed. Written by `pause`, removed by `resume` |
-| `run/DEPLOY` | no | `{pid, scope, group, reason, createdAt}` — the process holding a deploy pause. Written before the pause; the tick reclaims any deploy-origin pause whose owner is gone. |
+| `run/DEPLOY` | gitignore | `{pid, scope, group, reason, createdAt}` — the process holding a deploy pause. Written before the pause; the tick reclaims any deploy-origin pause whose owner is gone. |
 
 ### Run log records (`logs/<date>.jsonl`)
 
@@ -330,3 +332,4 @@ run never mutates it.
   prompt containing raw shell metacharacters — especially `%NAME%` (environment-
   variable expansion), and `&`/`|`/`<`/`>` in a prompt with no surrounding spaces — can
   be mangled before it reaches `claude`. Ordinary sentence prompts are unaffected.
+- **Windows: `deploy` command arguments containing `%VAR%`.** On Windows, commands run through `cmd.exe`, which expands `%VAR%` even inside double quotes. A deployed command with arguments like `set KEY=%SOMETHING%` will have `%SOMETHING%` expanded by the shell before the command sees it. This is inherent to needing a shell for `.cmd` shims and cannot be fixed in the quoting.
