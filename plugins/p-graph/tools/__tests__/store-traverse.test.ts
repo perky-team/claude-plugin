@@ -29,7 +29,7 @@ describe('store traverse', () => {
   it('resolvePending links edges once target appears', () => {
     const s = openStore(':memory:');
     s.replaceFileSymbols('a.ts', [node('a')], [
-      { src_id: 'a', dst_id: null, dst_name: 'b', kind: 'call', file: 'a.ts', line: 1 },
+      { src_id: 'a', dst_id: null, dst_name: 'b', kind: 'call', file: 'a.ts', line: 1, lang: 'ts' },
     ]);
     s.replaceFileSymbols('b.ts', [node('b')], []);
     s.resolvePending();
@@ -40,7 +40,7 @@ describe('store traverse', () => {
     const s = openStore(':memory:');
     // a -> b, with b defined in b.ts
     s.replaceFileSymbols('a.ts', [node('a')], [
-      { src_id: 'a', dst_id: null, dst_name: 'b', kind: 'call', file: 'a.ts', line: 1 },
+      { src_id: 'a', dst_id: null, dst_name: 'b', kind: 'call', file: 'a.ts', line: 1, lang: 'ts' },
     ]);
     s.replaceFileSymbols('b.ts', [{ ...node('b'), id: 'b_old', file: 'b.ts' }], []);
     s.resolvePending();

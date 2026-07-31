@@ -61,6 +61,35 @@ func (w *Wrap) Do() { w.Shared() }
     store.close();
   }, 30000);
 
+  it('binds self.m() to a method inherited from a separate base class (non-Go plain fallback)', async () => {
+    write('base.py', `class Base:
+    def find_handler(self):
+        return 1
+
+class App(Base):
+    def dispatch(self):
+        return self.find_handler()
+`);
+    // A same-named method on an unrelated class, in a DIFFERENT language. Go's
+    // own-receiver fallback is gated on an "#embed" row; Python has none, so it
+    // keeps a plain "unique bare name, same language" fallback. Without the
+    // language scoping, "find_handler" would match this decoy too and be
+    // ambiguous; the fallback must stay scoped to lang: 'py' to fire at all.
+    write('router.js', `class Router {
+  find_handler() {}
+}
+`);
+    const store = await indexed();
+
+    // App does not define find_handler itself — Pass A's exact qname match
+    // ("App.find_handler") misses, so this can only resolve through Pass C's
+    // plain fallback, the path every other case in this file skips because it
+    // calls a method the class defines on itself.
+    expect(store.callers('Base.find_handler').map((n) => n.qname)).toEqual(['App.dispatch']);
+
+    store.close();
+  }, 30000);
+
   it('leaves a Go call on a non-receiver variable alone', async () => {
     write('api/api.go', `package api
 type Server struct{}

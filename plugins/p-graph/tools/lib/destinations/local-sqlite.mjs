@@ -203,17 +203,11 @@ export function openStore(dbPath, opts = {}) {
 
   store.resolvePending = () => {
     // Only these kinds can be the target of a call. A Go conversion
-    // (`Duration(v)`) and a composite literal parse as calls but name a type, and
-    // a call edge into a type node makes callers/impact report a caller that does
-    // not exist. `class` stays in: `new Service()` in TS and a C++ constructor
-    // call really do target one.
+    // (`Duration(v)`) parses as a call but names a type, and a call edge into a
+    // type node makes callers/impact report a caller that does not exist.
+    // `class` stays in: `new Service()` in TS and a C++ constructor call really
+    // do target one.
     const CALLABLE = `('function','method','class')`;
-    // An edge with no recorded language never comes from the real driver (it
-    // always tags one) — only from a caller that builds rows by hand, bypassing
-    // the indexer. Treat that case as "unknown, don't gate on it" rather than as
-    // a mismatch, so the language guards below cannot disable resolution for a
-    // caller that predates lang tagging.
-    const SAME_LANG = `(edges.lang IS NULL OR n.lang = edges.lang)`;
     // Invalidate every call edge and resolve from scratch. A resolved edge can
     // become ambiguous when a new same-named symbol appears, so keeping it would
     // make an incremental index answer differently from a full rebuild —
@@ -225,12 +219,12 @@ export function openStore(dbPath, opts = {}) {
     db.prepare(`
       UPDATE edges SET dst_id = (
         SELECT n.id FROM nodes n
-        WHERE n.qname = edges.dst_name AND ${SAME_LANG} AND n.kind IN ${CALLABLE}
+        WHERE n.qname = edges.dst_name AND n.lang = edges.lang AND n.kind IN ${CALLABLE}
         LIMIT 1
       )
       WHERE kind = 'call' AND dst_id IS NULL AND dst_name IS NOT NULL AND external = 0
         AND (SELECT count(*) FROM nodes n
-             WHERE n.qname = edges.dst_name AND ${SAME_LANG} AND n.kind IN ${CALLABLE}) = 1`).run();
+             WHERE n.qname = edges.dst_name AND n.lang = edges.lang AND n.kind IN ${CALLABLE}) = 1`).run();
 
     // Pass F — Go recv.field.Method() through the field-type table. Runs before
     // the bare-name fallback so an ambiguous method name links to the RIGHT type.
@@ -240,34 +234,45 @@ export function openStore(dbPath, opts = {}) {
       UPDATE edges SET dst_id = (
         SELECT n.id FROM nodes n
         WHERE n.qname = (SELECT ft.type FROM field_types ft WHERE ft.key = edges.field_key LIMIT 1) || '.' || edges.method
-          AND ${SAME_LANG} AND n.kind IN ${CALLABLE}
+          AND n.lang = edges.lang AND n.kind IN ${CALLABLE}
         LIMIT 1
       )
       WHERE kind = 'call' AND dst_id IS NULL AND field_key IS NOT NULL AND method IS NOT NULL
         AND (SELECT count(DISTINCT ft.type) FROM field_types ft WHERE ft.key = edges.field_key) = 1
         AND (SELECT count(*) FROM nodes n
              WHERE n.qname = (SELECT ft.type FROM field_types ft WHERE ft.key = edges.field_key LIMIT 1) || '.' || edges.method
-               AND ${SAME_LANG} AND n.kind IN ${CALLABLE}) = 1`).run();
+               AND n.lang = edges.lang AND n.kind IN ${CALLABLE}) = 1`).run();
 
     // Pass B — a unique bare-name match, only when no qualified candidate exists.
-    // The extra guard is the one the evaluation showed missing: when the call goes
-    // through a field whose type IS known and is NOT a repo type, the call leaves
-    // the repo. Linking the bare name to the one repo method that shares it
-    // produced 13 false callers for a single symbol in hugo.
+    // The extra guard is the one the evaluation showed missing: a call through a
+    // field must not fall back to an unrelated same-named method just because
+    // Pass F's exact `<type>.<method>` lookup failed. The only other legitimate
+    // target is a method PROMOTED into the field's type from an embedded repo
+    // type — the same rule Pass C applies to a call on the method's own
+    // receiver. So when the field's type is known, require it to embed a repo
+    // type (a `"<type>#embed"` row pointing at a node that exists); otherwise
+    // refuse. This also covers a field typed as a repo-defined interface: the
+    // interface node exists, so the old "is it a repo type" check let it through,
+    // but an interface embeds nothing and has no method_declaration nodes of its
+    // own, so it can never supply a legitimate target. Linking the bare name to
+    // the one repo method that shares it produced 13 false callers for a single
+    // symbol in hugo.
     db.prepare(`
       UPDATE edges SET dst_id = (
         SELECT n.id FROM nodes n
-        WHERE n.name = edges.dst_name AND ${SAME_LANG} AND n.kind IN ${CALLABLE}
+        WHERE n.name = edges.dst_name AND n.lang = edges.lang AND n.kind IN ${CALLABLE}
         LIMIT 1
       )
       WHERE kind = 'call' AND dst_id IS NULL AND dst_name IS NOT NULL AND external = 0
-        AND (SELECT count(*) FROM nodes n WHERE n.qname = edges.dst_name AND ${SAME_LANG}) = 0
+        AND (SELECT count(*) FROM nodes n WHERE n.qname = edges.dst_name AND n.lang = edges.lang) = 0
         AND (SELECT count(*) FROM nodes n
-             WHERE n.name = edges.dst_name AND ${SAME_LANG} AND n.kind IN ${CALLABLE}) = 1
+             WHERE n.name = edges.dst_name AND n.lang = edges.lang AND n.kind IN ${CALLABLE}) = 1
         AND NOT EXISTS (
           SELECT 1 FROM field_types ft
           WHERE ft.key = edges.field_key
-            AND NOT EXISTS (SELECT 1 FROM nodes n2 WHERE n2.qname = ft.type))`).run();
+            AND NOT EXISTS (
+              SELECT 1 FROM field_types emb JOIN nodes en ON en.qname = emb.type
+              WHERE emb.key = ft.type || '#embed'))`).run();
 
     resolveOwnReceiverFallback();
   };

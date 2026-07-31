@@ -118,6 +118,67 @@ func (w *Wrap) Do() { w.Shared() }
     store.close();
   }, 30000);
 
+  it('never falls back to a bare name when the receiver field has a repo-defined interface type', async () => {
+    write('store/store.go', `package store
+type Store interface {
+	ListGroups()
+}
+`);
+    write('api/server.go', `package api
+import "x/store"
+type Server struct {
+	s store.Store
+}
+func (srv *Server) HandleList() { srv.s.ListGroups() }
+`);
+    write('pg/pg.go', `package pg
+type Postgres struct{}
+func (p *Postgres) ListGroups() {}
+`);
+    const store = await indexed();
+    // store.Store is a repo type, so the interface node exists and the OLD guard
+    // ("type is known and is not a repo type") let this through. But an
+    // interface's methods are signatures, not method_declaration nodes, and
+    // store.Store embeds nothing — there is no legitimate target for this call,
+    // so it must stay unresolved rather than land on the one unrelated method
+    // that happens to share the bare name "ListGroups".
+    expect(store.callers('pg.Postgres.ListGroups')).toEqual([]);
+    store.close();
+  }, 30000);
+
+  it('still links a method promoted from an embedded repo type, reached through a field', async () => {
+    write('core/core.go', `package core
+type Base struct{}
+func (b *Base) Shared() {}
+type Wrap struct{ Base }
+`);
+    write('app/app.go', `package app
+import "x/core"
+type App struct {
+	dep *core.Wrap
+}
+func (a *App) Do() { a.dep.Shared() }
+`);
+    const store = await indexed();
+    // dep's type (core.Wrap) has no method "Shared" of its own, but it embeds
+    // core.Base, which does. Losing this edge would be a gap, not a fix — the
+    // rule must allow the bare-name fallback here even though it now blocks the
+    // interface case above.
+    expect(store.callers('core.Base.Shared').map((n) => n.qname)).toEqual(['app.App.Do']);
+    store.close();
+  }, 30000);
+
+  it('resolves a TypeScript "new Service()" call to the class through resolvePending', async () => {
+    write('svc.ts', `export class Service {
+  run() { return 1; }
+}
+function boot() { new Service(); }
+`);
+    const store = await indexed();
+    expect(store.callers('Service').map((n) => n.qname)).toEqual(['boot']);
+    store.close();
+  }, 30000);
+
   it('never resolves an import edge to a symbol', async () => {
     write('a/a.go', `package a
 import "x/b"
