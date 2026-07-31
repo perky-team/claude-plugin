@@ -169,6 +169,7 @@ export async function extract({ file, lang, langId, scm, source }) {
       startLine: d.startLine, endLine: d.endLine,
       startCol: d.startCol, endCol: d.endCol,
       signature: source.split('\n')[d.startLine - 1]?.trim() ?? '',
+      node: d.node, // kept for containment checks below; never copied into `nodes`
     });
   }
 
@@ -245,6 +246,22 @@ export async function extract({ file, lang, langId, scm, source }) {
         .filter((d) => d.kind === 'struct' && within(fd, d))
         .sort((a, b) => b.startLine - a.startLine)[0];
       if (!structDef) continue;
+      // `within()` only compares line/col spans, so a field nested inside an
+      // ANONYMOUS struct type (`inner struct { base.Base }`) still looks like
+      // it sits "within" the named outer struct — there is no separate def for
+      // the anonymous one. Confirm the field's immediate struct_type ancestor
+      // really is the outer struct's own, or a field of the inner anonymous
+      // struct gets attributed to the outer struct — inventing an embed (or a
+      // field type) that struct never has.
+      let structTypeAncestor = fd.node?.parent;
+      while (structTypeAncestor && structTypeAncestor.type !== 'struct_type') {
+        structTypeAncestor = structTypeAncestor.parent;
+      }
+      // Two node objects can point at the same tree position without being
+      // the same JS reference (each query match rewraps nodes), so compare
+      // with the tree-sitter Node.equals identity check, not `!==`.
+      const ownStructType = structDef.node?.childForFieldName?.('type');
+      if (!structTypeAncestor?.equals(ownStructType)) continue;
       const node = fd.node;
       const typeName = goFieldTypeName(node?.childForFieldName?.('type'), goCtx.pkg);
       if (!typeName) continue; // embedded field or a type shape we don't resolve through

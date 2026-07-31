@@ -40,6 +40,35 @@ describe('go struct field-type extraction', () => {
     expect(call.dst_name).toBe('Action');
   }, 20000);
 
+  it('does not attribute an embedded type inside an anonymous nested struct to the outer struct', async () => {
+    // "inner" is an anonymous struct field of S; base.Base is embedded in THAT
+    // anonymous struct, not in S. S itself embeds nothing.
+    const src = `package outer
+import "x/base"
+type S struct {
+	inner struct {
+		base.Base
+	}
+}
+`;
+    const { fieldTypes } = await run(src, 'outer/outer.go');
+    expect(fieldTypes.some((f) => f.key === 'outer.S#embed')).toBe(false);
+  }, 20000);
+
+  it('does not attribute a named field inside an anonymous nested struct to the outer struct', async () => {
+    // Same containment problem, named-field shape: "Name" belongs to the
+    // anonymous struct nested in "inner", not to S.
+    const src = `package outer
+type S struct {
+	inner struct {
+		Name string
+	}
+}
+`;
+    const { fieldTypes } = await run(src, 'outer/outer.go');
+    expect(fieldTypes.some((f) => f.key === 'outer.S.Name')).toBe(false);
+  }, 20000);
+
   it('does NOT tag field-selector info when the receiver var is not the method receiver', async () => {
     const { edges, nodes } = await run(SRC);
     // Loose is a plain function; `s` is a parameter, not a method receiver.

@@ -103,6 +103,76 @@ func (g *Gate) Lock() {}
     store.close();
   }, 30000);
 
+  it('never treats an embedded repo interface as proof of a promoted method (decorator pattern)', async () => {
+    // The Go decorator pattern: Cached embeds the INTERFACE, not a concrete
+    // type. Which Get() runs is decided at runtime by whatever fills the
+    // interface — the graph cannot know, so this must stay a gap.
+    write('store/store.go', `package store
+type Store interface {
+	Get(id string) string
+}
+`);
+    write('pg/pg.go', `package pg
+type Postgres struct{}
+func (p *Postgres) Get(id string) string { return "" }
+`);
+    write('cache/cache.go', `package cache
+import "x/store"
+type Cached struct{ store.Store }
+func (c *Cached) Warm() { c.Get("x") }
+`);
+    const store = await indexed();
+    expect(store.callers('pg.Postgres.Get')).toEqual([]);
+    store.close();
+  }, 30000);
+
+  it('never treats an embedded repo interface as proof of promotion when reached through a field', async () => {
+    // Same decorator shape as above, but the call goes through a FIELD typed
+    // as *cache.Cached (Pass B's guard), not the receiver itself (Pass C's).
+    write('store/store.go', `package store
+type Store interface {
+	Get(id string) string
+}
+`);
+    write('pg/pg.go', `package pg
+type Postgres struct{}
+func (p *Postgres) Get(id string) string { return "" }
+`);
+    write('cache/cache.go', `package cache
+import "x/store"
+type Cached struct{ store.Store }
+`);
+    write('app/app.go', `package app
+import "x/cache"
+type App struct { c *cache.Cached }
+func (a *App) Warm() { a.c.Get("x") }
+`);
+    const store = await indexed();
+    expect(store.callers('pg.Postgres.Get')).toEqual([]);
+    store.close();
+  }, 30000);
+
+  it('never treats an embed inside an anonymous nested struct field as the outer struct\'s own embed', async () => {
+    // S itself embeds nothing. base.Base is embedded in the ANONYMOUS struct
+    // that fills the "inner" field, not in S — s.Shared() must stay a gap.
+    write('base/base.go', `package base
+type Base struct{}
+func (b *Base) Shared() {}
+`);
+    write('outer/outer.go', `package outer
+import "x/base"
+type S struct {
+	inner struct {
+		base.Base
+	}
+}
+func (s *S) Do() { s.Shared() }
+`);
+    const store = await indexed();
+    expect(store.callers('base.Base.Shared')).toEqual([]);
+    store.close();
+  }, 30000);
+
   it('still links a method promoted from an embedded repo type', async () => {
     write('base/base.go', `package base
 type Base struct{}

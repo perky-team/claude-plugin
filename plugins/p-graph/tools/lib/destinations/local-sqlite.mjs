@@ -186,9 +186,12 @@ export function openStore(dbPath, opts = {}) {
       WHERE kind = 'call' AND dst_id IS NULL AND external = 0
         AND method IS NOT NULL AND field_key IS NULL AND dst_bare IS NOT NULL`).all();
     if (!candidates.length) return;
+    // An embedded interface is not proof of promotion: which implementation
+    // runs is decided at runtime (the Go decorator pattern), so only a
+    // concrete embedded type counts.
     const embedsRepoType = db.prepare(`
       SELECT 1 FROM field_types ft JOIN nodes n ON n.qname = ft.type
-      WHERE ft.key = ? LIMIT 1`);
+      WHERE ft.key = ? AND n.kind <> 'interface' LIMIT 1`);
     const byBareName = db.prepare(`
       SELECT n.id FROM nodes n
       WHERE n.name = ? AND n.lang = ? AND n.kind IN ('function','method','class') LIMIT 2`);
@@ -271,8 +274,11 @@ export function openStore(dbPath, opts = {}) {
           SELECT 1 FROM field_types ft
           WHERE ft.key = edges.field_key
             AND NOT EXISTS (
+              -- An embedded interface is not proof of promotion either: the Go
+              -- decorator pattern embeds the interface, and which
+              -- implementation answers the call is a runtime decision.
               SELECT 1 FROM field_types emb JOIN nodes en ON en.qname = emb.type
-              WHERE emb.key = ft.type || '#embed'))`).run();
+              WHERE emb.key = ft.type || '#embed' AND en.kind <> 'interface'))`).run();
 
     resolveOwnReceiverFallback();
   };
