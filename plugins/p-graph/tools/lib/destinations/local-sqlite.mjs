@@ -363,7 +363,13 @@ function attachReadHelpers(store, db, hasFts) {
            SELECT 1 FROM nodes ${nodesAlias} WHERE ${nodesAlias}.lang = ${lang}
              AND ${nodesAlias}.qname LIKE substr(${dstName}, 1, instr(${dstName}, '.') - 1) || '.%'
          ) THEN 1 ELSE 0 END`;
-  const gapRows = db.prepare(`
+  // These four are prepared lazily, inside the helpers that use them, like
+  // every other statement in this function. gapRows names e.dst_bare/e.lang/
+  // e.external, which do not exist before schema 6 — preparing it eagerly here
+  // would throw as soon as attachReadHelpers runs, before any query is even
+  // asked for, which breaks the read-only fallback on any pre-6 database (the
+  // fallback exists precisely for a filesystem that can never be migrated).
+  const gapRowsSql = `
     SELECT e.dst_name, e.dst_bare, e.file, e.line, e.external, e.lang,
            s.qname AS src_qname,
            CASE WHEN e.external = 1 THEN 0 ELSE (
@@ -373,21 +379,20 @@ function attachReadHelpers(store, db, hasFts) {
            ${QUALIFIER_KNOWN_SQL('e.dst_name', 'nq', 'e.lang')} AS qualifier_known
     FROM edges e LEFT JOIN nodes s ON s.id = e.src_id
     WHERE e.kind = 'call' AND e.dst_id IS NULL
-      AND (e.dst_name = ? OR e.dst_bare = ?)`);
-  const noCallerRows = db.prepare(`
+      AND (e.dst_name = ? OR e.dst_bare = ?)`;
+  const noCallerRowsSql = `
     SELECT e.dst_name, e.file, e.line FROM edges e
-    WHERE e.kind = 'call' AND e.dst_id = ? AND e.src_id IS NULL`);
-  const fileInPackage = db.prepare(
-    `SELECT 1 FROM nodes WHERE file = ? AND qname LIKE ? LIMIT 1`);
+    WHERE e.kind = 'call' AND e.dst_id = ? AND e.src_id IS NULL`;
+  const fileInPackageSql = `SELECT 1 FROM nodes WHERE file = ? AND qname LIKE ? LIMIT 1`;
   // Import paths are stored quoted: "x/internal/bufferpool" or "bufferpool".
   // SQL LIKE treats `_` as a one-character wildcard, so a package name that
   // contains an underscore can over-match a different import path that has some
   // other character in that spot. Accepted on purpose: `reachable` is a
   // relevance hint, not a resolution decision, so the worst case is a rare
   // false "yes", never a wrong link between symbols.
-  const fileImportsPackage = db.prepare(`
+  const fileImportsPackageSql = `
     SELECT 1 FROM edges WHERE kind = 'import' AND file = ?
-      AND (dst_name LIKE ? OR dst_name LIKE ?) LIMIT 1`);
+      AND (dst_name LIKE ? OR dst_name LIKE ?) LIMIT 1`;
 
   // The Go package a symbol lives in is the first segment of its qname.
   const goPackageOf = (node) =>
@@ -395,50 +400,70 @@ function attachReadHelpers(store, db, hasFts) {
 
   const reachableIn = (file, pkg) => {
     if (!pkg) return 1;
-    if (fileInPackage.get(file, `${pkg}.%`)) return 1;
-    if (fileImportsPackage.get(file, `%/${pkg}"`, `"${pkg}"`)) return 1;
+    if (db.prepare(fileInPackageSql).get(file, `${pkg}.%`)) return 1;
+    if (db.prepare(fileImportsPackageSql).get(file, `%/${pkg}"`, `"${pkg}"`)) return 1;
     return 0;
   };
 
+  // `symbols`: one entry per symbol whose name can legitimately appear as a
+  // call target — {names, pkg}. gapsFor has exactly one (the target); gapsAround
+  // adds one per node the impact walk reached. A gap row is scored against the
+  // package of the symbol whose name variant actually matched it, not against
+  // whichever symbol happens to be first in the list — the target and an
+  // impact-reached node can live in different packages, and `callers` vs
+  // `impact` must agree on the same row (see gapsAround).
+  //
   // `callerCheckIds` are the node ids checked for a resolved-but-caller-less
   // call (the 'no-caller' reason). Both name-matched gaps and no-caller gaps
   // share one `seen` set, so a caller that wants no-caller rows for several
   // node ids at once (gapsAround, across a whole impact set) never needs a
   // second dedupe pass on top of this one.
-  const collectGaps = (names, target, callerCheckIds = target ? [target.id] : []) => {
-    const pkg = goPackageOf(target);
+  const collectGaps = (symbols, callerCheckIds = []) => {
+    const gapRowsStmt = db.prepare(gapRowsSql);
     const seen = new Set(), out = [];
-    for (const name of new Set(names.filter(Boolean).map(String))) {
-      for (const r of gapRows.all(name, name)) {
-        const key = `${r.file}|${r.line}|${r.dst_name}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        const reason = r.candidates > 0 && r.qualifier_known ? 'ambiguous' : 'external';
-        out.push({
-          file: r.file, line: r.line, dst_name: r.dst_name, src_qname: r.src_qname,
-          reason,
-          reachable: reason === 'ambiguous' && r.lang === 'go' ? reachableIn(r.file, pkg) : 1,
-        });
+    for (const { names, pkg } of symbols) {
+      for (const name of new Set(names.filter(Boolean).map(String))) {
+        for (const r of gapRowsStmt.all(name, name)) {
+          const key = `${r.file}|${r.line}|${r.dst_name}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          const reason = r.candidates > 0 && r.qualifier_known ? 'ambiguous' : 'external';
+          out.push({
+            file: r.file, line: r.line, dst_name: r.dst_name, src_qname: r.src_qname,
+            reason,
+            reachable: reason === 'ambiguous' && r.lang === 'go' ? reachableIn(r.file, pkg) : 1,
+          });
+        }
       }
     }
-    for (const id of callerCheckIds) {
-      for (const r of noCallerRows.all(id)) {
-        const key = `${r.file}|${r.line}|${r.dst_name}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        out.push({ file: r.file, line: r.line, dst_name: r.dst_name,
-          src_qname: null, reason: 'no-caller', reachable: 1 });
+    if (callerCheckIds.length) {
+      const noCallerStmt = db.prepare(noCallerRowsSql);
+      for (const id of callerCheckIds) {
+        for (const r of noCallerStmt.all(id)) {
+          const key = `${r.file}|${r.line}|${r.dst_name}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          out.push({ file: r.file, line: r.line, dst_name: r.dst_name,
+            src_qname: null, reason: 'no-caller', reachable: 1 });
+        }
       }
     }
     return out.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
   };
+
+  // The name variants and package for one symbol, as collectGaps needs them.
+  // A missing target (no node found) still has to run one gapRows pass under
+  // the raw string the caller asked for — no package to score against.
+  const symbolOf = (name, node) =>
+    node ? { names: [String(name), node.name, node.qname], pkg: goPackageOf(node) }
+         : { names: [String(name)], pkg: null };
 
   // A call site records whatever the source wrote, so match the target's bare
   // name as well as its qname — that is what finds a call made through an import
   // alias, a shadowed package name, or a receiver-qualified guess that missed.
   store.gapsFor = (name) => {
     const target = store.node(name);
-    return collectGaps(target ? [String(name), target.name, target.qname] : [String(name)], target);
+    return collectGaps([symbolOf(name, target)], target ? [target.id] : []);
   };
   store.gapsFrom = (name) => {
     const n = store.node(name);
@@ -464,11 +489,10 @@ function attachReadHelpers(store, db, hasFts) {
   // once here and its result feeds both the name list and the no-caller check.
   store.gapsAround = (name) => {
     const target = store.node(name);
-    const names = target ? [String(name), target.name, target.qname] : [String(name)];
     const reached = store.impact(name);
-    for (const n of reached) { names.push(n.name, n.qname); }
+    const symbols = [symbolOf(name, target), ...reached.map((n) => symbolOf(n.qname, n))];
     const callerCheckIds = [...(target ? [target.id] : []), ...reached.map((n) => n.id)];
-    return collectGaps(names, target, callerCheckIds);
+    return collectGaps(symbols, callerCheckIds);
   };
   const MAX_DEPTH = 50;
   store.impact = (name) => {

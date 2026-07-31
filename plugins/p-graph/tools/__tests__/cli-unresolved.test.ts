@@ -158,4 +158,46 @@ func Do() { fmt.Errorf("x") }
     expect(text).toContain('web/boot.ts:2');
     expect(text).toContain('outside any indexed symbol');
   }, 30000);
+
+  it('scores a frontier gap against the package that actually matched it, not the impact target', () => {
+    // a.Root <- b.CallsRoot <- b.X.Mid: a chain of RESOLVED calls, so
+    // impact('a.Root') reaches both CallsRoot and Mid.
+    write('a/a.go', `package a
+func Root() {}
+`);
+    write('b/mid.go', `package b
+import "x/a"
+type X struct{}
+func (x *X) Mid() { CallsRoot() }
+func CallsRoot() { a.Root() }
+`);
+    // A same-name (ambiguous) call to "Mid" in package b itself — through an
+    // interface field, so it stays unresolved. Package c gives "Mid" a second
+    // repo candidate so the bare name is not unique and Pass B cannot resolve it.
+    write('b/caller.go', `package b
+type Iface interface { Mid() }
+type Caller struct { v Iface }
+func (c *Caller) DoMid() { c.v.Mid() }
+`);
+    write('c/c.go', `package c
+type Z struct{}
+func (z *Z) Mid() {}
+`);
+    run(['index', '--full']);
+
+    // Asked directly (callers b.X.Mid), the gap is scored against Mid's own
+    // package, "b" — caller.go is in package b, so reachable is 1.
+    const callersGaps = JSON.parse(run(['callers', 'b.X.Mid', '--json'])).gaps;
+    const callersRow = callersGaps.find((g) => g.file === 'b/caller.go');
+    expect(callersRow).toBeTruthy();
+    expect(callersRow.reachable).toBe(1);
+
+    // Asked as the frontier of an impact walk from a.Root, the SAME call site
+    // must be scored the same way — against "b" (Mid's package), not "a"
+    // (Root's package, which caller.go neither belongs to nor imports).
+    const impactGaps = JSON.parse(run(['impact', 'a.Root', '--json'])).gaps;
+    const impactRow = impactGaps.find((g) => g.file === 'b/caller.go');
+    expect(impactRow).toBeTruthy();
+    expect(impactRow.reachable).toBe(1);
+  }, 30000);
 });
