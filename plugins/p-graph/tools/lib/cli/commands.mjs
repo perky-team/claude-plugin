@@ -58,11 +58,14 @@ export async function runCommand(ctx) {
       }
       if (listed.length > GAP_LIMIT) out(`    … and ${listed.length - GAP_LIMIT} more`);
     }
+    // "+" reads as "on top of the list above", so only use it when there is a
+    // list above. A count line has to stand on its own too.
+    const lead = listed.length ? '  + ' : '  ';
     if (unrelated) {
-      out(`  + ${unrelated} same-name call site${unrelated === 1 ? '' : 's'} in files that do not import the target's package — likely unrelated.`);
+      out(`${lead}${unrelated} same-name call site${unrelated === 1 ? '' : 's'} in files that do not import the target's package — likely unrelated, not listed.`);
     }
     if (external) {
-      out(`  + ${external} call${external === 1 ? '' : 's'} that leave${external === 1 ? 's' : ''} the repo (stdlib, third party, builtins) — nothing to link.`);
+      out(`${lead}${external} call${external === 1 ? '' : 's'} that leave${external === 1 ? 's' : ''} the repo (stdlib, third party, builtins) — nothing to link.`);
     }
     out('  Confirm with a text search before treating this answer as complete.');
   };

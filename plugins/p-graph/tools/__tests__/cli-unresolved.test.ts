@@ -111,7 +111,8 @@ func TestB(t *testing.T) { t.Errorf("b") }
     run(['index', '--full']);
     const text = run(['callers', 'logs.Adapter.Errorf']);
     expect(text).toContain('2 same-name call sites in files that do not import');
-    expect(text).not.toContain('far/far_test.go:2');   // counted, not listed
+    expect(text).not.toContain('far/far_test.go:3');   // counted, not listed
+    expect(text).not.toContain('far/far_test.go:4');
   }, 30000);
 
   it('counts calls that leave the repo without listing them', () => {
