@@ -126,6 +126,30 @@ func Do() { fmt.Println("x") }
     expect(text).not.toContain('svc/svc.go:3');
   }, 30000);
 
+  it('moves a stdlib call out of the listed gaps even when a repo method shares its bare name', () => {
+    // fmt.Errorf and a repo method logs.Adapter.Errorf share the bare name
+    // "Errorf". Before the qualifier fix, this made fmt.Errorf show up as a
+    // "may be a real miss" gap, which it never can be — the call site wrote
+    // "fmt", and no repo package is named "fmt".
+    write('logs/logs.go', `package logs
+type Adapter struct{}
+func (a *Adapter) Errorf(f string, v ...any) {}
+`);
+    write('other/other.go', `package other
+type Thing struct{}
+func (t *Thing) Errorf(f string, v ...any) {}
+`);
+    write('caller/caller.go', `package caller
+import "fmt"
+func Do() { fmt.Errorf("x") }
+`);
+    run(['index', '--full']);
+    const text = run(['callers', 'logs.Adapter.Errorf']);
+    expect(text).not.toContain('caller/caller.go');
+    expect(text).not.toContain('missing from this answer');
+    expect(text).toContain('1 call that leaves the repo');
+  }, 30000);
+
   it('names a resolved call site that has no caller row', () => {
     write('web/engine.ts', 'export class Engine { start() {} }');
     write('web/boot.ts', "import { Engine } from './engine';\nnew Engine().start();");

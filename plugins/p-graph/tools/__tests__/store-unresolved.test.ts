@@ -269,6 +269,49 @@ func TestX(t *testing.T) { t.Errorf("boom") }
     const row = rows.find((r) => r.file === 'far/far_test.go');
     expect(row).toBeTruthy();
     expect(row.reachable).toBe(0); // far/ never imports logs/
+    // A bare dst_name ("Errorf", from t.Errorf()) carries no qualifier, so the
+    // qualifier rule below does not touch it — it stays classified on bare-name
+    // candidates alone, same as before that rule existed.
+    expect(row.reason).toBe('ambiguous');
+    store.close();
+  }, 30000);
+
+  // The bug: a gap was matched and classified by bare name only. "fmt.Errorf"
+  // and a repo method "logs.Adapter.Errorf" share the bare name "Errorf", so the
+  // old code called fmt.Errorf "ambiguous" — as if the repo method might be the
+  // real target. It cannot be: the call site wrote the qualifier "fmt", and no
+  // repo package is named "fmt". A qualified name can only ever name a symbol in
+  // the package its qualifier points to.
+  it('classifies a qualified call as external when its qualifier is not a repo package', async () => {
+    write('logs/logs.go', `package logs
+type Adapter struct{}
+func (a *Adapter) Errorf(f string, v ...any) {}
+`);
+    // A second repo method named Errorf: proof that "external" comes from the
+    // qualifier check, not merely from the bare name being repo-unique.
+    write('other/other.go', `package other
+type Thing struct{}
+func (t *Thing) Errorf(f string, v ...any) {}
+`);
+    write('caller/caller.go', `package caller
+import "fmt"
+func Do() { fmt.Errorf("x") }
+`);
+    const store = openStore(':memory:');
+    await indexFull({ root: dir, store, ignorePatterns: [] });
+
+    const rows = store.gapsFor('logs.Adapter.Errorf');
+    const row = rows.find((r) => r.file === 'caller/caller.go');
+    expect(row).toBeTruthy();
+    expect(row.dst_name).toBe('fmt.Errorf');
+    expect(row.reason).toBe('external');
+
+    // gapsFrom classifies with its own SQL — it must agree with gapsFor.
+    const fromRows = store.gapsFrom('caller.Do');
+    expect(fromRows).toHaveLength(1);
+    expect(fromRows[0].dst_name).toBe('fmt.Errorf');
+    expect(fromRows[0].reason).toBe('external');
+
     store.close();
   }, 30000);
 });

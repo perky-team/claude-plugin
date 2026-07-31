@@ -335,22 +335,42 @@ function attachReadHelpers(store, db, hasFts) {
   // Where an answer is incomplete. Queries walk resolved edges only, so without
   // this a dropped call site and "nothing calls this" print the same thing.
   // `reason`:
-  //   'ambiguous' — an unresolved call whose bare name matches a repo symbol, so
-  //                 a real target may exist and be missing from the answer
+  //   'ambiguous' — an unresolved call whose bare name matches a repo symbol,
+  //                 AND (when the call site wrote a qualifier, e.g. "fmt" in
+  //                 "fmt.Errorf") that qualifier names a repo package — so a
+  //                 real target may exist and be missing from the answer
   //   'external'  — an unresolved call with no repo candidate at all (stdlib,
-  //                 third party, Go builtin): expected, counted, not worth listing
+  //                 third party, Go builtin), OR a qualified call whose
+  //                 qualifier is not a repo package at all: "fmt.Errorf" can
+  //                 never be a repo method called Errorf, no matter how many
+  //                 repo methods share that bare name. Expected, counted, not
+  //                 worth listing.
   //   'no-caller' — a RESOLVED call to the target made outside any indexed symbol
   //                 (module scope, a callback body), which `callers` cannot show
   // `reachable` is 0 only for a Go 'ambiguous' row in a file that neither belongs
   // to nor imports the target's package: a same-name coincidence is then far more
   // likely than a real call. Everything else is 1, including all non-Go rows.
+  //
+  // `qualifier_known`: a call site records the qualifier the source actually
+  // wrote (dst_name up to the first dot). That qualifier can only ever name a
+  // symbol in the package/type it points to, so if no node's qname starts with
+  // "<qualifier>.", the call cannot reach a repo symbol — full stop, regardless
+  // of how many repo symbols share the bare name. A bare dst_name (no dot) has
+  // no qualifier to check, so it is always 1 (the old bare-name-only behavior).
+  const QUALIFIER_KNOWN_SQL = (dstName, nodesAlias, lang) => `
+    CASE WHEN instr(${dstName}, '.') = 0 THEN 1
+         WHEN EXISTS (
+           SELECT 1 FROM nodes ${nodesAlias} WHERE ${nodesAlias}.lang = ${lang}
+             AND ${nodesAlias}.qname LIKE substr(${dstName}, 1, instr(${dstName}, '.') - 1) || '.%'
+         ) THEN 1 ELSE 0 END`;
   const gapRows = db.prepare(`
     SELECT e.dst_name, e.dst_bare, e.file, e.line, e.external, e.lang,
            s.qname AS src_qname,
            CASE WHEN e.external = 1 THEN 0 ELSE (
              SELECT count(*) FROM nodes n
              WHERE n.name = e.dst_bare AND n.lang = e.lang
-               AND n.kind IN ('function','method','class')) END AS candidates
+               AND n.kind IN ('function','method','class')) END AS candidates,
+           ${QUALIFIER_KNOWN_SQL('e.dst_name', 'nq', 'e.lang')} AS qualifier_known
     FROM edges e LEFT JOIN nodes s ON s.id = e.src_id
     WHERE e.kind = 'call' AND e.dst_id IS NULL
       AND (e.dst_name = ? OR e.dst_bare = ?)`);
@@ -393,7 +413,7 @@ function attachReadHelpers(store, db, hasFts) {
         const key = `${r.file}|${r.line}|${r.dst_name}`;
         if (seen.has(key)) continue;
         seen.add(key);
-        const reason = r.candidates > 0 ? 'ambiguous' : 'external';
+        const reason = r.candidates > 0 && r.qualifier_known ? 'ambiguous' : 'external';
         out.push({
           file: r.file, line: r.line, dst_name: r.dst_name, src_qname: r.src_qname,
           reason,
@@ -427,11 +447,15 @@ function attachReadHelpers(store, db, hasFts) {
       SELECT e.dst_name, e.dst_bare, e.file, e.line, e.external, e.lang,
              (SELECT count(*) FROM nodes n2
               WHERE n2.name = e.dst_bare AND n2.lang = e.lang
-                AND n2.kind IN ('function','method','class')) AS candidates
+                AND n2.kind IN ('function','method','class')) AS candidates,
+             ${QUALIFIER_KNOWN_SQL('e.dst_name', 'n3', 'e.lang')} AS qualifier_known
       FROM edges e WHERE e.kind = 'call' AND e.dst_id IS NULL AND e.src_id = ?
       ORDER BY e.file, e.line`).all(n.id).map((r) => ({
         file: r.file, line: r.line, dst_name: r.dst_name, src_qname: n.qname,
-        reason: r.external === 1 || r.candidates === 0 ? 'external' : 'ambiguous',
+        // Must agree with collectGaps' reason above: external when there is no
+        // repo candidate at all, OR when a qualifier was written and it does
+        // not name a repo package.
+        reason: r.external === 1 || r.candidates === 0 || !r.qualifier_known ? 'external' : 'ambiguous',
         reachable: 1,
       }));
   };
