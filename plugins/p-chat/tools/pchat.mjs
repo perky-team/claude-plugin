@@ -51,14 +51,23 @@ export function parseArgs(argv) {
   return out;
 }
 
+// Set process.exitCode and return — never call process.exit() here. On Windows a hard
+// exit while undici still holds a keep-alive socket from an earlier request kills the
+// process with a libuv assert (`!(handle->flags & UV_HANDLE_CLOSING)`, src\win\async.c)
+// and exit code 0xC0000409 / 3221226505. Every command that touches the Bot API twice
+// hits it — `guard` alone does getUpdates + sendMessage — and p-shed would read that
+// crash code as a broken job instead of the guard's 0 / 75 contract. Returning lets the
+// event loop drain the sockets first; the exit code survives.
+// Callers MUST `return emitJson(...)` / `return die(...)` — these no longer stop
+// execution on their own.
 export function emitJson(obj, exitCode = 0) {
   process.stdout.write(JSON.stringify(obj) + '\n');
-  process.exit(exitCode);
+  process.exitCode = exitCode;
 }
 
 export function die(message, exitCode = 1) {
   process.stderr.write(message + '\n');
-  process.exit(exitCode);
+  process.exitCode = exitCode;
 }
 
 const KNOWN = ['init', 'guard', 'pending', 'ack', 'send', 'reset', 'status'];
@@ -66,11 +75,11 @@ const KNOWN = ['init', 'guard', 'pending', 'ack', 'send', 'reset', 'status'];
 async function main() {
   if (process.argv[2] === '--version') {
     process.stdout.write(`${readVersion()}\n`);
-    process.exit(0);
+    return;
   }
   const command = process.argv[2];
   const args = parseArgs(process.argv.slice(3));
-  if (!KNOWN.includes(command)) die(`unknown command: ${command}`, 1);
+  if (!KNOWN.includes(command)) return die(`unknown command: ${command}`, 1);
   const root = findRoot(process.cwd());
 
   try {

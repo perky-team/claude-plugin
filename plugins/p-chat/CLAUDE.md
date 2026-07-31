@@ -27,6 +27,14 @@ for the full design + review resolutions):
   peek/confirm. No real network in tests. The e2e harness spawns the CLI
   ASYNCHRONOUSLY (`execFile`, not `execFileSync`): the mock server lives in the
   test process, and a sync spawn would block the event loop it answers from.
+- **Never `process.exit()` in the CLI — set `process.exitCode` and return.** On Windows
+  a hard exit while undici still holds a keep-alive socket from an earlier Bot API call
+  aborts the process with a libuv assert (`!(handle->flags & UV_HANDLE_CLOSING)`,
+  `src\win\async.c`) and exit code 3221226505. Two API calls in one run are enough, so
+  `guard` (getUpdates + sendMessage), `send`, and `init` all hit it — and p-shed reads
+  that crash code as a broken job instead of the 0 / 75 guard contract. `emitJson` and
+  `die` therefore only set the code; every call site must `return` them.
+  `__tests__/no-hard-exit.test.ts` pins this.
 - **Markdown fallback**: sendMessage retries a chunk without `parse_mode` on a 400
   parse error — delivery beats formatting.
 - Zero deps; Node ≥ 18 global `fetch`.
