@@ -15,6 +15,7 @@ import { listRunningJobs, terminateJobs, readPid, writePid, removePid, isPidAliv
 import { findGroupHolder } from './lib/concurrency.mjs';
 import { resolveTarget } from './lib/target.mjs';
 import { collectStatus, formatHuman } from './lib/status.mjs';
+import { waitForIdle } from './lib/idle.mjs';
 import { execFileSync } from 'node:child_process';
 
 // The version is read from the plugin manifest, never hardcoded: a release bumps
@@ -74,6 +75,25 @@ export function findRoot(startDir) {
   }
 }
 
+// --timeout-sec / --poll-ms, shared by wait-idle and deploy. Defaults: 1800 s (the
+// longest observed worker run) and a 1 s poll. A non-numeric or negative value is a
+// validation error rather than a silently-infinite wait.
+export function timeoutMsFrom(args) {
+  const raw = args['timeout-sec'];
+  if (raw === undefined) return 1_800_000;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) throw new ValidationError('--timeout-sec must be a non-negative number of seconds');
+  return Math.round(n * 1000);
+}
+
+export function pollMsFrom(args) {
+  const raw = args['poll-ms'];
+  if (raw === undefined) return 1000;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 1) throw new ValidationError('--poll-ms must be at least 1');
+  return Math.round(n);
+}
+
 export function emitJson(obj, exitCode = 0) {
   process.stdout.write(JSON.stringify(obj) + '\n');
   process.exit(exitCode);
@@ -84,7 +104,7 @@ export function die(message, exitCode = 1) {
   process.exit(exitCode);
 }
 
-const KNOWN = ['tick', 'run', 'install-cron', 'remove-cron', 'set-job', 'rm-job', 'reset-breaker', 'pause', 'resume', 'status', 'stop'];
+const KNOWN = ['tick', 'run', 'install-cron', 'remove-cron', 'set-job', 'rm-job', 'reset-breaker', 'pause', 'resume', 'status', 'stop', 'wait-idle', 'deploy'];
 
 async function main() {
   if (process.argv[2] === '--version') {
@@ -224,6 +244,27 @@ async function main() {
         out.killed = await terminateJobs(listRunningJobs(root), { graceMs });
       }
       return emitJson(out, 0);
+    }
+
+    // wait-idle: block until nothing in scope is running. Changes NO state — it is the
+    // primitive `deploy` is built from, and what a human wants when the next step is
+    // manual. resolveTarget is reused so an unknown group is a loud exit 2, never a
+    // silent widening to "the whole scheduler".
+    if (command === 'wait-idle') {
+      const { defaults, jobs } = readJobs(root);
+      if (args.id !== undefined) {
+        return emitJson({ error: { code: 'validation', message: 'wait-idle has no --id: use --group, or no flag for the whole scheduler' } }, 2);
+      }
+      const target = resolveTarget({ jobs, defaults, group: args.group });
+      const group = target ? target.group : null;
+      const res = await waitForIdle({
+        root, jobs, defaults, group,
+        timeoutMs: timeoutMsFrom(args), pollMs: pollMsFrom(args),
+      });
+      return emitJson({
+        action: 'wait-idle', idle: res.idle, scope: group ? 'group' : 'global', group,
+        waitedMs: res.waitedMs, holders: res.holders,
+      }, res.idle ? 0 : 1);
     }
 
     if (command === 'install-cron' || command === 'remove-cron') {
