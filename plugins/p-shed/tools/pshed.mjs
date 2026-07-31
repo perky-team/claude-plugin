@@ -16,6 +16,8 @@ import { findGroupHolder } from './lib/concurrency.mjs';
 import { resolveTarget } from './lib/target.mjs';
 import { collectStatus, formatHuman } from './lib/status.mjs';
 import { waitForIdle } from './lib/idle.mjs';
+import { runDeploy } from './lib/deploy.mjs';
+import { spawn } from 'node:child_process';
 import { execFileSync } from 'node:child_process';
 
 // The version is read from the plugin manifest, never hardcoded: a release bumps
@@ -107,6 +109,11 @@ export function die(message, exitCode = 1) {
 }
 
 const KNOWN = ['tick', 'run', 'install-cron', 'remove-cron', 'set-job', 'rm-job', 'reset-breaker', 'pause', 'resume', 'status', 'stop', 'wait-idle', 'deploy'];
+
+// The in-flight deployed command, so a POSIX signal handler can forward the interrupt to
+// it. Null while `deploy` is still waiting for idle — that phase is cancelled by the flag
+// instead, since there is no child to signal yet.
+let deployChild = null;
 
 async function main() {
   if (process.argv[2] === '--version') {
@@ -269,6 +276,55 @@ async function main() {
       }, res.idle ? 0 : 1);
     }
 
+    // deploy: the indivisible dance. Its report goes to STDERR on purpose — stdout and
+    // stderr belong to the deployed command, and mixing a scheduler JSON blob into
+    // `git push` output would make both unparseable.
+    if (command === 'deploy') {
+      const { defaults, jobs } = readJobs(root);
+      const cmdv = args['--'];
+      // --id is REJECTED, not ignored: parseArgs swallows unknown flags, so accepting it
+      // silently would pause the ENTIRE scheduler while the operator believes one job was
+      // targeted — the regression lib/target.mjs exists to prevent.
+      if (args.id !== undefined) {
+        return emitJson({ error: { code: 'validation', message: 'deploy has no --id: a groupmate would keep writing the same checkout. Use --group, or no flag for the whole scheduler' } }, 2);
+      }
+      if (typeof args.reason !== 'string' || args.reason.trim() === '') {
+        return emitJson({ error: { code: 'validation', message: 'deploy requires --reason "<text>": it lands in the pause marker, and a halted loop with no stated reason is what status exists to prevent' } }, 2);
+      }
+      if (cmdv === undefined) {
+        return emitJson({ error: { code: 'validation', message: 'deploy requires a command after --, e.g. pshed deploy --reason "x" -- git pull' } }, 2);
+      }
+      if (cmdv.length === 0) {
+        return emitJson({ error: { code: 'validation', message: 'no command after --' } }, 2);
+      }
+      const target = resolveTarget({ jobs, defaults, group: args.group });
+
+      // POSIX signal handling. Two distinct moments need covering and a naive trap only
+      // covers one: an interrupt DURING the wait (no child exists yet) and one during the
+      // command. A cancel flag handles the first — waitForIdle polls it and unwinds — and
+      // killing the child handles the second. Both then fall through runDeploy's finally,
+      // which is what actually releases. Calling process.exit() from the handler would
+      // SKIP that finally and leave the loop paused, so it must not appear here.
+      // Measured: on Windows neither SIGINT nor SIGTERM ever reaches a handler, so this
+      // is POSIX-only and the tick's reclaim is what covers that platform.
+      let cancelled = false;
+      if (process.platform !== 'win32') {
+        for (const sig of ['SIGINT', 'SIGTERM']) {
+          process.on(sig, () => { cancelled = true; deployChild?.kill(sig); });
+        }
+      }
+
+      const res = await runDeploy({
+        root, jobs, defaults, group: target ? target.group : null,
+        reason: args.reason, timeoutMs: timeoutMsFrom(args), pollMs: pollMsFrom(args),
+        cmd: cmdv[0], args: cmdv.slice(1),
+        deps: { spawn: spawnInherit, isAborted: () => cancelled },
+      });
+      const report = { action: 'deploy', ...res };
+      process.stderr.write(args.json ? JSON.stringify(report) + '\n' : formatDeploy(report) + '\n');
+      process.exit(res.outcome === 'ok' ? res.exit : (res.outcome === 'aborted' ? 130 : 1));
+    }
+
     if (command === 'install-cron' || command === 'remove-cron') {
       return emitJson(manageCron(command, root), 0);
     }
@@ -344,6 +400,58 @@ function scanSchtasksTaskIds() {
       execFileSync('schtasks', ['/Query', '/FO', 'CSV', '/NH'], { encoding: 'utf-8', timeout: 3000, windowsHide: true }),
     );
   } catch { return []; }
+}
+
+// Run the deployed command with stdio inherited, so its output reaches the operator
+// unchanged and p-shed adds nothing to it. `shell` on win32 only: measured,
+// spawn('npm', …) is ENOENT there because npm is a .cmd shim, while POSIX must stay
+// shell-less so the arguments are not re-interpreted. On win32, spawn does not properly
+// quote arguments, so we construct the full command line manually and pass an empty args
+// array to avoid quote interpretation issues.
+// Exit conventions: 128+signum for a signalled command, 127 for one that could not be
+// spawned — the same numbers a shell would report.
+function spawnInherit({ cmd, args }) {
+  return new Promise((resolve, reject) => {
+    const useShell = process.platform === 'win32';
+    // On Windows, pass the full command as a single string to avoid quote interpretation.
+    // cmd.exe will parse it correctly. On POSIX, use the normal cmd + args approach.
+    let spawnCmd, spawnArgs;
+    if (useShell) {
+      // Escape each argument for the shell: wrap in double quotes and escape inner quotes
+      const escapedArgs = args.map(arg => {
+        // Escape backslashes and double quotes for cmd.exe
+        const escaped = String(arg).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+        return `"${escaped}"`;
+      });
+      spawnCmd = `"${cmd}" ${escapedArgs.join(' ')}`;
+      spawnArgs = [];
+    } else {
+      spawnCmd = cmd;
+      spawnArgs = args;
+    }
+    const child = spawn(spawnCmd, spawnArgs, { stdio: 'inherit', shell: useShell });
+    deployChild = child; // so a POSIX signal handler can forward the interrupt
+    child.on('error', (e) => (e.code === 'ENOENT' ? resolve({ exit: 127, signal: null }) : reject(e)));
+    child.on('exit', (code, signal) => {
+      if (signal) return resolve({ exit: 128 + (osSignalNumber(signal) ?? 0), signal });
+      resolve({ exit: code ?? 0, signal: null });
+    });
+  });
+}
+
+function osSignalNumber(signal) {
+  const table = { SIGHUP: 1, SIGINT: 2, SIGQUIT: 3, SIGKILL: 9, SIGTERM: 15 };
+  return table[signal];
+}
+
+function formatDeploy(r) {
+  if (r.outcome === 'timeout') {
+    const who = r.holders.map((h) => `${h.id} (pid ${h.pid})`).join(', ') || 'unknown';
+    return `deploy: timed out after ${Math.round(r.waitedMs / 1000)}s waiting for ${who}; nothing paused, nothing run`;
+  }
+  const scope = r.scope === 'group' ? `group ${r.group}` : 'the scheduler';
+  const kept = r.preserved.length ? `; kept ${r.preserved.length} pre-existing pause(s)` : '';
+  return `deploy: waited ${Math.round(r.waitedMs / 1000)}s, paused ${scope}, command exited ${r.exit}, released${kept}`;
 }
 
 // Whether this folder's every-minute tick is registered in the OS scheduler. Read-only
