@@ -35,6 +35,13 @@ export function parseArgs(argv) {
   const out = { _: [] };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
+    // A bare `--` ends option parsing: everything after it belongs to a command this
+    // CLI merely forwards (`deploy -- git commit -m "..."`). Without this, `--` parses
+    // as a flag with an empty name and eats the command's first word as its value.
+    if (a === '--') {
+      out['--'] = argv.slice(i + 1);
+      break;
+    }
     if (a.startsWith('--')) {
       const eq = a.indexOf('=');
       if (eq !== -1) {

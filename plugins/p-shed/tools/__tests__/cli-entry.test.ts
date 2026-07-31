@@ -13,6 +13,22 @@ describe('parseArgs', () => {
   it('parses --key=value', () => {
     expect(parseArgs(['--id=task-runner'])).toEqual({ _: [], id: 'task-runner' });
   });
+  it('stops at a bare -- and returns the remainder verbatim', () => {
+    expect(parseArgs(['--reason', 'fix', '--', 'git', 'commit', '-m', 'x'])).toEqual({
+      _: [], reason: 'fix', '--': ['git', 'commit', '-m', 'x'],
+    });
+  });
+  it('keeps flags after -- out of the parse (they belong to the command)', () => {
+    expect(parseArgs(['--', 'npm', 'run', '--silent', 'build'])).toEqual({
+      _: [], '--': ['npm', 'run', '--silent', 'build'],
+    });
+  });
+  it('omits the -- key entirely when no terminator is present', () => {
+    expect(parseArgs(['status', '--human'])).toEqual({ _: ['status'], human: true });
+  });
+  it('treats a trailing -- as an empty command list', () => {
+    expect(parseArgs(['--reason', 'fix', '--'])).toEqual({ _: [], reason: 'fix', '--': [] });
+  });
 });
 
 describe('cli entry', () => {
