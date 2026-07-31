@@ -37,28 +37,33 @@ function within(inner, outer) {
 }
 
 // Per-file Go context used to qualify symbol names. `pkg` is the declared
-// package; `importNames` is the set of identifiers that name an imported
-// package (alias when present, else the path's last segment); `hasDotImport`
-// flags a `import . "x"` which makes a bare identifier potentially refer to
-// another package — so same-package qualification must be skipped for the file.
+// package. `importPkgs` maps the identifier a call site writes to the imported
+// package's real name — they differ under an alias (`bp "x/util/bufferpool"`
+// writes `bp` but every symbol's qname says `bufferpool`), so the alias has to be
+// translated or the call can never match a qname. `hasDotImport` flags a
+// `import . "x"`, which makes a bare identifier possibly belong to another
+// package, so same-package qualification must be skipped for the whole file.
 function goContext(caps) {
   let pkg = null;
   for (const c of caps) if (c.name === 'package') { pkg = c.text; break; }
-  const importNames = new Set();
+  const importPkgs = new Map();
   let hasDotImport = false;
   for (const c of caps) {
     if (c.name !== 'reference.import') continue;
+    const path = c.text.replace(/^["'`]|["'`]$/g, '');
+    const seg = path.split('/').pop();
     const nameChild = c.node?.parent?.childForFieldName?.('name');
     if (nameChild) {
       if (nameChild.type === 'dot') { hasDotImport = true; continue; }
       if (nameChild.type === 'blank_identifier') continue;
-      if (nameChild.type === 'package_identifier') { importNames.add(nameChild.text); continue; }
+      if (nameChild.type === 'package_identifier') {
+        importPkgs.set(nameChild.text, seg || nameChild.text);
+        continue;
+      }
     }
-    const path = c.text.replace(/^["'`]|["'`]$/g, '');
-    const seg = path.split('/').pop();
-    if (seg) importNames.add(seg);
+    if (seg) importPkgs.set(seg, seg);
   }
-  return { pkg, importNames, hasDotImport };
+  return { pkg, importPkgs, hasDotImport };
 }
 
 // Render a Go field type node to a package-qualified type name, stripping any
@@ -92,12 +97,16 @@ function goFieldTypeName(typeNode, pkg) {
 //   `recvVar.Method()`       -> {bare, recvVar, method} — no field, so the
 //      receiver's own type names the target directly.
 // `bare` stays as the fallback dst_name when neither can be bound.
-function goCallTarget(c, { pkg, importNames, hasDotImport }) {
+function goCallTarget(c, { pkg, importPkgs, hasDotImport }) {
   const node = c.node;
   if (node?.type === 'field_identifier') {
     const operand = node.parent?.childForFieldName?.('operand');
-    if (operand?.type === 'identifier' && (importNames.has(operand.text) || operand.text === pkg)) {
-      return `${operand.text}.${c.text}`;
+    if (operand?.type === 'identifier') {
+      // An imported package, under whatever name this file calls it.
+      const importedAs = importPkgs.get(operand.text);
+      if (importedAs) return `${importedAs}.${c.text}`;
+      if (operand.text === pkg) return `${pkg}.${c.text}`;
+      return { bare: c.text, recvVar: operand.text, method: c.text };
     }
     if (operand?.type === 'selector_expression') {
       const innerRecv = operand.childForFieldName?.('operand');
@@ -105,9 +114,6 @@ function goCallTarget(c, { pkg, importNames, hasDotImport }) {
       if (innerRecv?.type === 'identifier' && innerField?.type === 'field_identifier') {
         return { bare: c.text, recvVar: innerRecv.text, field: innerField.text, method: c.text };
       }
-    }
-    if (operand?.type === 'identifier') {
-      return { bare: c.text, recvVar: operand.text, method: c.text };
     }
     return c.text; // receiver is an expression, not a name — keep bare name
   }
