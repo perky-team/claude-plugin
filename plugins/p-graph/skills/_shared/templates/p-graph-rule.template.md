@@ -21,16 +21,16 @@ below — a text search costs about the same and cannot silently miss a hit.
 | Several symbols at once | `pgraph explore A B C` |
 | What files are under path/ | `pgraph files path/` |
 
-**Completeness:** the graph links a call by matching names, not by checking types.
-A genuinely ambiguous bare name — shared by two or more repo symbols, with nothing
-to tell them apart — is left unresolved, and `callers` / `impact` / `trace` walk
-resolved calls only. A call through an interface, a parameter, or a local variable
-has no type the graph can check: when its bare name is unique it still links,
-silently, with no guarantee the receiver is the type it names. `callers`,
-`callees`, `impact` and `context` print
+**Completeness:** the graph links a call by matching names, not by checking types. An
+unresolved call shows up in the gap report below as soon as its bare name matches **one**
+repo symbol — it does not need to be shared by two or more — and, when the call site wrote a
+package qualifier, that qualifier could name a real repo package. Separately, a call through an
+interface, a parameter, or a local variable has no type the graph can check: when its bare name
+is unique it can still link silently instead of showing up as a gap, with no guarantee the
+receiver is the type it names. `callers`, `callees`, `impact` and `context` print
 `⚠ N call sites missing from this answer` with each `file:line`, plus a count of
-same-name call sites in files that cannot see the target and a count of calls
-that leave the repo; `status` shows the repo-wide share. Gaps are grouped —
+same-name call sites in files that cannot see the target and a count of calls the graph found
+nothing to link to; `status` shows the repo-wide share. Gaps are grouped —
 listed rows are worth checking, the two counted groups are scale. **Relay that
 banner to the user and grep to close the gap — never present a list as complete
 while it is there.** Ask by `qname`, not by bare name: `callers Get` merges every

@@ -20,7 +20,7 @@ All three commits are different from the ones used for the original (before-this
 | nest | 1,727 | 5,775 | 38,153 | 29,076 (76.2%) | 28,561 (74.9%) | 58.1 s | 38.4 s | 13.4 MB | 14.3 MB |
 | flask | 83 | 1,619 | 3,905 | 2,392 (61.3%) | 2,392 (61.3%) | 1.5 s | 1.3 s | 1.7 MB | 1.7 MB |
 
-Files, nodes, and call edges match the before-this-plan reference numbers exactly for all three corpora — a good sign the corpora are the same shape as the original evaluation.
+Files, nodes, and call edges match the before-this-plan reference numbers for all three corpora — a good sign the corpora are the same shape as the original evaluation. This does not mean the two clones are byte-identical (the note above already says the commits differ): it means neither project merged anything between the two clone dates that changed its file count, symbol count, or call-edge count. Read "match" as "same shape," not as proof the graphs are otherwise identical.
 
 Read the "unattributed" change carefully: it is **not** a plain win-or-lose number.
 
@@ -101,6 +101,22 @@ This is also a **partial** fix. The printed noise did shrink a lot in raw line c
 - Why they landed in "listed" instead of the "same-name, cannot see the package" count: the reachability check only asks "does this file import a package named `loggers`, anywhere, for any reason?" — a file-wide check, not a call-site check. `common/loggers` is a widely-imported utility package in hugo (most files that do any logging import it), so a file can import `loggers` for an unrelated reason and also call `fmt.Errorf` on an unrelated line, and the gap-matching (which matches by bare name only) puts that `fmt.Errorf` call in the "listed" bucket anyway.
 
 See "What did not improve" below for the numbers behind this.
+
+> **Follow-up, 2026-07-31, at commit `a582235`.** The 241/173/68 counts above were measured
+> before commit `6237075`, which made gap classification look at a call's qualifier, not just
+> its bare name. To check whether that fix changed this number, this query was re-run on the
+> exact same hugo clone (`8a468df065a75c1c7cf9f6850f32148746590ea5`) at `a582235`. Result: still
+> **241** listed rows (173 `fmt.Errorf`, 68 bare `Errorf`) — unchanged.
+>
+> The qualifier fix works as designed — a fixture with no repo package named `fmt` correctly
+> reclassifies `fmt.Errorf` as `external` (see `plugins/p-graph/tools/__tests__/store-unresolved.test.ts`,
+> "classifies a qualified call as external when its qualifier is not a repo package"). It does
+> nothing here because hugo itself ships a package literally declared `package fmt`
+> (`tpl/fmt/fmt.go`, Hugo's own template-function namespace, unrelated to the standard library).
+> The qualifier check can only ask "does some repo package have this name?" — it found one, so
+> `fmt.Errorf` still passes as "could name a real repo package" and stays listed. This is a real
+> coincidence in hugo's own package naming, not a defect in the fix. The number to carry forward
+> for this specific query is **241**, not a smaller estimate.
 
 ## 4. Incremental vs. full rebuild (Step 4)
 
@@ -189,6 +205,15 @@ Being specific, so nothing here is mistaken for a new problem this plan caused �
 
 1. **`callers highlight.byteCountFlexiWriter.WriteRune` still returns 7 false callers**, not zero as the plan's Step 3 predicted. All 7 are the same root cause the plan explicitly calls "known and expected" (a parameter/local variable with no recorded type falling back to a unique bare name) — just showing up on `bytes.Buffer`/`strings.Builder` receivers instead of the field-typed case Task 2 fixed. Confirmed false by reading all 7 call sites.
 2. **`callers loggers.logAdapter.Errorf`'s gap banner still lists 241 call sites as a possible real miss**, not "zero or few" as predicted. Every one of the 241 checked is noise (173 are `fmt.Errorf`, an unrelated standard-library call; 68 are bare `Errorf`, mostly `t.Errorf` in tests). The reachability check that is supposed to filter this out works at file granularity ("does this file import the target's package anywhere"), which is too coarse when the target's package (`common/loggers`) is imported widely across the codebase for unrelated reasons.
+
+   > **Follow-up, 2026-07-31, at commit `a582235`.** Re-measured on the same hugo clone after
+   > all seven fix commits: the total is still **241**, unchanged. The 68 bare `Errorf` rows are
+   > exactly the file-granularity gap this item describes. The 173 `fmt.Errorf` rows now stay
+   > listed for a second, distinct reason: commit `6237075` added a qualifier check that correctly
+   > rules out `fmt.Errorf` almost everywhere — except in hugo, which ships its own package
+   > literally named `fmt` (`tpl/fmt/fmt.go`). See the matching follow-up note in section 3 for the
+   > full explanation. File-granular reachability is still a real, separate gap; it is just not
+   > the reason all 173 `fmt.Errorf` rows remain listed anymore.
 3. **The incremental indexer leaves a stale file/node entry behind** when a file is created and deleted while never committed or staged (see section 4). Confirmed reproducible with the exact commands in the plan's Step 4. Root cause is in `gitChangedFiles`, which Tasks 1-7 did not touch.
 4. **The "unattributed calls" share went up, not down, for hugo** (69.9% → 70.7%). Expected and correct — see section 1 — but worth stating plainly since a bigger "unresolved" number can look like a regression at a glance. It is the direct cost of refusing links the graph cannot justify.
 

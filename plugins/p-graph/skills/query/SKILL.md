@@ -28,6 +28,9 @@ node "${CLAUDE_PLUGIN_ROOT}/tools/pgraph.mjs" status
 - The status line ends with `… drift N`. If drift is large (the graph is far behind the working
   tree), mention that `/p-graph:sync` does a full rebuild — but you can still proceed, since the
   query commands below refresh incrementally on their own.
+- If the status line ends with `- rebuild pending (schema upgrade)`, the stored graph was dropped
+  because the code's schema is newer than the one on disk. The next query (or `/p-graph:sync`)
+  rebuilds it from scratch — say so, and expect that first run to be slower than usual.
 
 ## Step 2 — Map the question to command(s)
 
@@ -49,19 +52,28 @@ Run every command via `node "${CLAUDE_PLUGIN_ROOT}/tools/pgraph.mjs" <cmd>`. ALW
 `qname`, then feed that to `callers` / `callees` / `impact` / `trace`. `context X` is the fastest
 single call for "tell me about X" — one call returns the symbol plus its immediate callers and
 callees. Pass `--json` to any read command if you want to post-process the rows: `callers`,
-`callees` and `impact` return `{ <command>: [rows], gaps: [gap rows] }`.
+`callees` and `impact` return `{ <command>: [rows], gaps: [gap rows] }`. `context --json` returns
+three gap lists: `gaps_in` (calls that name this symbol), `gaps_out` (calls this symbol makes), and
+`gaps` — the two merged with duplicates removed. Read `gaps`: a wrapper-delegation call (a method
+that calls a same-named method on one of its own fields) can show up in both `gaps_in` and
+`gaps_out` for the same call site, and `gaps` has already removed the duplicate.
 
 **Ask by `qname`, never by bare name.** `callers Get` matches *every* symbol named `Get` and merges
 their callers into one list with no marker. `callers store.Postgres.Get` asks about one symbol.
 
 ## Step 3 — Report the gaps, always
 
-The graph resolves a call by matching names, not by checking types. A genuinely ambiguous bare
-name — used by two or more repo symbols, with nothing to tell them apart — is left **unresolved**
-and shows up in the gap report below. A call through an interface, a parameter, or a local
-variable carries no type the graph can check, so when its bare name happens to be unique in the
-repo, the call still links — silently, with no warning, and possibly to the wrong symbol. So a
-short list, even a **clean** one with no banner at all, is not proof that every row is correct.
+The graph resolves a call by matching names, not by checking types. When a call fails to resolve,
+it shows up in the gap report below as long as its bare name matches **at least one** repo symbol
+and, if the call site wrote a package qualifier, that qualifier could name a real repo package.
+Sharing the name with two or more symbols is not required — one match is already enough, because
+the graph still cannot tell if that one candidate is the real target.
+
+Separately: a call through an interface, a parameter, or a local variable carries no type the
+graph can check. When its bare name happens to be unique in the repo, it can still **resolve**
+instead of landing in the gap report — silently, with no warning, and possibly to the wrong
+symbol. So a short list, even a **clean** one with no banner at all, is not proof that every row
+is correct.
 
 `callers`, `callees`, `impact` and `context` therefore print, after the rows:
 
@@ -71,7 +83,7 @@ short list, even a **clean** one with no banner at all, is not proof that every 
     internal/api/server.go:58  api.Serve -> bp.ListGroups
     web/boot.ts:12  outside any indexed symbol -> start
   + 12 same-name call sites in files that do not import the target's package — likely unrelated, not listed.
-  + 365 calls that leave the repo (stdlib, third party, builtins) — nothing to link.
+  + 365 calls the graph found nothing to link to (stdlib, third party, builtins, or a repo call it never indexed).
   Confirm with a text search before treating this answer as complete.
 ```
 

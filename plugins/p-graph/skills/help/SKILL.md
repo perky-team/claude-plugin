@@ -23,8 +23,12 @@ Refresh with `/p-graph:sync`. Use the graph for candidates and for a transitive
 silently miss a hit.
 
 **Read the gap banner.** `callers` / `callees` / `impact` / `context` end with
-`⚠ N call sites missing from this answer` when a call's bare name is genuinely
-ambiguous — shared by two or more repo symbols, with nothing to tell them apart.
+`⚠ N call sites missing from this answer` when a call site's bare name matches at least one
+repo symbol and, if the call site wrote a package qualifier, that qualifier could name a real
+repo package. One matching symbol is enough — the name does not need to be shared by two or
+more symbols. `config.ToKeywords` and hugo's `WriteRune` each match only one repo symbol, and
+both still show up as a gap, because the graph has no type to check and cannot confirm that the
+one candidate is the real target.
 `callers`, `impact` and `context` also list a resolved call that has no caller
 symbol to show (made at module scope, or inside a non-definition callback);
 `callees` does not have that case. A call through an interface, a parameter, or
