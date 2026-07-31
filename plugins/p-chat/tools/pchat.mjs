@@ -12,7 +12,18 @@ import { guardScan, initDiscover, listPending } from './lib/core.mjs';
 import { ackUntil, appendLocalLog, ensureGitignore, readOffset, resetSession, sessionStatus, writeOffset } from './lib/state.mjs';
 import { sendText } from './lib/send.mjs';
 
-export const VERSION = '0.1.0';
+// Version comes from the plugin manifest, never a constant here: a release bumps
+// plugin.json#version only, so a hardcoded copy drifts silently. The manifest ships in
+// the same copied tree, so this resolves in the installed plugin cache too; a missing
+// manifest degrades to 0.0.0 rather than killing an unrelated command.
+export function readVersion() {
+  try {
+    const manifest = new URL('../.claude-plugin/plugin.json', import.meta.url);
+    return JSON.parse(readFileSync(manifest, 'utf-8')).version || '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+}
 const GUARD_QUIET = 75; // p-shed's quiet exit — EX_TEMPFAIL, deliberate by contract
 
 export function parseArgs(argv) {
@@ -54,7 +65,7 @@ const KNOWN = ['init', 'guard', 'pending', 'ack', 'send', 'reset', 'status'];
 
 async function main() {
   if (process.argv[2] === '--version') {
-    process.stdout.write(`${VERSION}\n`);
+    process.stdout.write(`${readVersion()}\n`);
     process.exit(0);
   }
   const command = process.argv[2];

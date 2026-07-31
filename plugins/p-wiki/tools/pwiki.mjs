@@ -15,7 +15,19 @@ import { writeConfig, validateConfig } from './lib/config.mjs';
 import { syncToMirror } from './lib/sync.mjs';
 import { buildBundle } from './lib/bundle.mjs';
 
-const VERSION = '3.3.0';
+// Version comes from the plugin manifest, never a constant here: a release bumps
+// plugin.json#version only, so a hardcoded copy drifts silently (this one sat at 3.3.0
+// while the plugin shipped 4.12.2). The manifest ships in the same copied tree, so this
+// resolves in the installed plugin cache too; a missing manifest degrades to 0.0.0
+// rather than killing an unrelated command.
+export function readVersion() {
+  try {
+    const manifest = new URL('../.claude-plugin/plugin.json', import.meta.url);
+    return JSON.parse(readFileSync(manifest, 'utf-8')).version || '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+}
 
 export function mapErrorToCode(err) {
   if (err?.code === 'bundle-invalid') return 'bundle-invalid';
@@ -286,7 +298,7 @@ const isMain = process.argv[1] && resolve(fileURLToPath(import.meta.url)) === re
 if (isMain) {
 
 if (process.argv.slice(2)[0] === '--version') {
-  process.stdout.write(`${VERSION}\n`);
+  process.stdout.write(`${readVersion()}\n`);
   process.exit(0);
 }
 

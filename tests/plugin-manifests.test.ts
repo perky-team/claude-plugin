@@ -1,10 +1,18 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import semver from 'semver';
 import { findPlugins } from './helpers.js';
 
 const KEBAB_CASE = /^[a-z][a-z0-9-]*[a-z0-9]$/;
 const README_MIN_CHARS = 50;
+
+// A plugin's CLI lives at tools/<name without dashes>.mjs (p-shed → tools/pshed.mjs).
+const cliPath = (plugin: { dir: string; name: string }): string | null => {
+  const p = join(plugin.dir, 'tools', `${plugin.name.replace(/-/g, '')}.mjs`);
+  return existsSync(p) ? p : null;
+};
 
 describe('plugin manifests', () => {
   const plugins = findPlugins();
@@ -45,6 +53,24 @@ describe('plugin manifests', () => {
         const content = readFileSync(plugin.readmePath, 'utf-8');
         expect(content.length).toBeGreaterThan(README_MIN_CHARS);
       });
+
+      // Regression: every CLI used to carry its own hardcoded VERSION constant, and the
+      // release procedure bumps plugin.json#version only — so `pshed --version` printed
+      // 0.1.0 while the plugin shipped 0.8.0 (p-wiki: 3.3.0 vs 4.12.2). The existing
+      // cli-entry tests only matched the semver SHAPE, so the drift was invisible.
+      //
+      // Discovery is by source text rather than a hardcoded list: a new CLI that adds
+      // --version is covered automatically, and a CLI whose --version breaks fails here
+      // instead of silently dropping out of the suite. Plugins with no CLI (p-flow,
+      // p-statusline) and CLIs with no --version (p-observe) have nothing to check.
+      const cli = cliPath(plugin);
+      const declaresVersionFlag = cli !== null && readFileSync(cli, 'utf-8').includes('--version');
+      it.runIf(declaresVersionFlag)('CLI --version prints plugin.json#version', () => {
+        const r = spawnSync(process.execPath, [cli as string, '--version'], { encoding: 'utf-8' });
+        expect(r.stderr).toBe('');
+        expect(r.status).toBe(0);
+        expect(r.stdout.trim()).toBe(plugin.manifest.version);
+      }, 20_000);
     });
   }
 });

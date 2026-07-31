@@ -1,15 +1,28 @@
 #!/usr/bin/env node
 process.removeAllListeners('warning'); // silence node:sqlite ExperimentalWarning
 
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { findRepoRoot } from './lib/paths.mjs';
 import { readConfig, defaultConfig, readIgnorePatterns, PGRAPH_DIR } from './lib/config.mjs';
 import { resolveDestination } from './lib/destination.mjs';
 import { runCommand } from './lib/cli/commands.mjs';
 
-const VERSION = '0.1.0';
-const KNOWN = ['index', 'status', 'search', 'node', 'callers', 'callees', 'impact', 'trace', 'context', 'explore', 'files'];
+// Version comes from the plugin manifest, never a constant here: a release bumps
+// plugin.json#version only, so a hardcoded copy drifts silently (this one sat at 0.1.0
+// while the plugin shipped 0.7.0). The manifest ships in the same copied tree, so this
+// resolves in the installed plugin cache too; a missing manifest degrades to 0.0.0
+// rather than killing an unrelated command.
+function readVersion() {
+  try {
+    const manifest = new URL('../.claude-plugin/plugin.json', import.meta.url);
+    return JSON.parse(readFileSync(manifest, 'utf-8')).version || '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+}
+
+const KNOWN =['index', 'status', 'search', 'node', 'callers', 'callees', 'impact', 'trace', 'context', 'explore', 'files'];
 
 function parseArgs(argv) {
   const opts = { _: [] };
@@ -29,7 +42,7 @@ function warn(s) { process.stderr.write(s + '\n'); }
 function die(msg, code = 1) { process.stderr.write(`pgraph: ${msg}\n`); process.exit(code); }
 
 const argv = process.argv.slice(2);
-if (argv[0] === '--version') { out(VERSION); process.exit(0); }
+if (argv[0] === '--version') { out(readVersion()); process.exit(0); }
 const command = argv[0];
 const opts = parseArgs(argv.slice(1));
 if (!KNOWN.includes(command)) die(`unknown command: ${command ?? '(none)'}`);

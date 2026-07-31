@@ -2,16 +2,21 @@ import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve, join } from 'node:path';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 
 const cli = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'pwiki.mjs');
+const manifestVersion = JSON.parse(
+  readFileSync(resolve(dirname(cli), '..', '.claude-plugin', 'plugin.json'), 'utf-8'),
+).version;
 
 describe('pwiki CLI entry', () => {
+  // Read from the manifest, never a literal: this assertion used to pin '3.3.0' and so
+  // locked in the drift it was supposed to catch (the plugin was already at 4.12.2).
   it('prints version on --version', () => {
     const r = spawnSync('node', [cli, '--version'], { encoding: 'utf-8' });
     expect(r.status).toBe(0);
-    expect(r.stdout.trim()).toBe('3.3.0');
+    expect(r.stdout.trim()).toBe(manifestVersion);
   });
 
   it('exits 1 on unknown command', () => {

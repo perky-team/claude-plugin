@@ -17,7 +17,18 @@ import { summarize } from './lib/summary.mjs';
 import { listAll } from './lib/list.mjs';
 import { syncAll } from './lib/sync.mjs';
 
-export const VERSION = '1.1.1';
+// Version comes from the plugin manifest, never a constant here: a release bumps
+// plugin.json#version only, so a hardcoded copy drifts silently. The manifest ships in
+// the same copied tree, so this resolves in the installed plugin cache too; a missing
+// manifest degrades to 0.0.0 rather than killing an unrelated command.
+export function readVersion() {
+  try {
+    const manifest = new URL('../.claude-plugin/plugin.json', import.meta.url);
+    return JSON.parse(readFileSync(manifest, 'utf-8')).version || '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+}
 
 export function parseArgs(argv) {
   const opts = { _: [] };
@@ -342,7 +353,7 @@ const isMain = process.argv[1] && resolve(fileURLToPath(import.meta.url)) === re
 if (isMain) {
   (async () => {
     if (process.argv[2] === '--version') {
-      process.stdout.write(`${VERSION}\n`);
+      process.stdout.write(`${readVersion()}\n`);
       process.exit(0);
     }
     const command = process.argv[2];
