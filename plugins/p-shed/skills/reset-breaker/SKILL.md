@@ -15,9 +15,9 @@ A job stops being scheduled for one of two reasons:
   internal work went red (`claude -p` exits 0 even then). Ticks log `skipped-paused`.
 
 > Not this: a **usage-limit / API-overload** skip. If ticks log `skipped-usage-limit`
-> (or `status` shows a `lastSkip` of `usage-limit`), the job is only waiting out a quota
-> window and the breaker was never touched — it will retry on its own when the window
-> resets. `reset-breaker` is unnecessary there.
+> (or `status` shows a `lastSkip` of `usage-limit` or `api-overload`), the job is only
+> waiting out a quota window or an API blip — the breaker was never touched and it will
+> retry on its own. `reset-breaker` is unnecessary there.
 
 ## Reset
 Confirm the job id, then run:

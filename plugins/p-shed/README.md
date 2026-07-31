@@ -39,11 +39,38 @@ Tool: `node tools/pshed.mjs <command>` (all support `--json`; exit `0` ok / `1` 
 |---|---|---|
 | `jobs.yml` | git | `version`, `defaults`, `jobs[]{ id, schedule, enabled, cwd?, prompt, timeoutSec?, permissionMode?, allowedTools?, model?, effort?, maxConsecutiveFailures?, guard?, guardTimeoutSec? }` |
 | `config.json` | gitignore | `{ nodeBin, claudeBin }` (resolved at init) |
-| `state/<id>.json` | gitignore | per-job `{ lastRun, lastExit, pid, consecutiveFailures, consecutiveGuardFailures?, lastGuard?, breakerTripped?, breakerReason?, breakerAt?, lastSkipReason?, lastSkipAt?, lastSkipResetAt? }` — one file per job (no shared state file). `lastSkip*` records the most recent usage-limit skip and is cleared once the job runs for real again; `lastGuard` records the most recent guard check (`{ at, outcome, exit }`) |
-| `logs/<date>.jsonl` | gitignore | one record per run; auto-rotated (7-day retention) |
+| `state/<id>.json` | gitignore | per-job `{ lastRun, lastExit, pid, consecutiveFailures, consecutiveGuardFailures?, lastGuard?, breakerTripped?, breakerReason?, breakerAt?, lastSkipReason?, lastSkipAt?, lastSkipResetAt? }` — one file per job (no shared state file). `lastSkip*` records the most recent skip (`lastSkipReason` is `usage-limit` or `api-overload`) and is cleared once the job runs for real again; `lastGuard` records the most recent guard check (`{ at, outcome, exit }`) |
+| `logs/<date>.jsonl` | gitignore | one record per run (see below); auto-rotated (7-day retention) |
 | `run/<id>.pid` | gitignore | duplicate-guard pidfile |
 | `run/<id>.pause` | gitignore | per-job self-pause marker (contents = reason); a job's own run writes it to stop being scheduled |
 | `run/PAUSED` | gitignore | global pause marker (`{ createdAt, reason? }`); halts every job while cron stays installed. Written by `pause`, removed by `resume` |
+
+### Run log records (`logs/<date>.jsonl`)
+
+One JSON object per line, appended per run and rotated after 7 days. Fields are added,
+never renamed or removed — read by name and ignore what you don't know:
+
+| Field | When | Meaning |
+|---|---|---|
+| `ts`, `job`, `durationMs` | always | when, which job, wall-clock of the launch |
+| `exit`, `timedOut` | always | process exit (`null` when killed by the timeout) |
+| `outcome` | always | `success` \| `failure` \| `skipped` \| `guard-error` |
+| `reason` | `skipped` | `usage-limit` (subscription/credits) or `api-overload` (429/529/5xx) |
+| `resetAt` | when parsed | reset time lifted out of a limit message |
+| `guarded` | guarded jobs | the launch passed a guard |
+| `raw` | non-success | truncated tail of the run's output (self-reveal, 2 KB) |
+| `usage` | result JSON parsed | what the run cost — see below |
+
+The `usage` block is captured for **every** run whose `--output-format json` result
+parsed, successful runs included, so "which job is expensive" is answerable without
+guessing from duration. Any field that is missing or non-numeric is simply omitted, and
+a run with no usable numbers (non-JSON output, a timeout-killed run) logs no `usage`
+block at all:
+
+    {"ts":1784154000000,"job":"worker","exit":0,"timedOut":false,"durationMs":120431,
+     "outcome":"success","usage":{"costUsd":0.42,"in":1234,"out":5678,"cacheRead":90123,
+     "cacheCreate":4567,"turns":12,"apiMs":98765,
+     "models":{"claude-opus-4-5-20260101":{"in":1234,"out":5678,"costUsd":0.42}}}}
 
 Example `jobs.yml`:
 
@@ -157,6 +184,12 @@ that **does not move the breaker counter**. The next scheduled tick simply retri
 the window resets; no `reset-breaker` is needed. `status` shows a job's last skip in the
 `lastSkip` column so a stuck-on-limit job is visible.
 
+Both skip the same way, but they are **reported apart** — the log's `reason` and the
+state's `lastSkipReason` are `usage-limit` for a subscription/credits limit and
+`api-overload` for a 429/529/5xx, so logs full of overloads can't be misread as a bot
+burning through its quota. When a message carries both signatures, subscription wins (it
+is the more consequential state, and the one with a reset time).
+
 Claude Code has no distinct exit code or JSON subtype for a usage limit, so detection is
 by **message text** (plus a structured-JSON fallback: `is_error` together with an
 `api_error_status` / HTTP `429`|`529`). The pattern is customizable — set
@@ -165,6 +198,13 @@ by **message text** (plus a structured-JSON fallback: `is_error` together with a
 then the built-in default. Every **failed** run also logs its truncated raw output and
 classification to `logs/<date>.jsonl`, so a limit message the pattern didn't yet cover is
 visible there and can be added after at most one breaker trip.
+
+**A non-retryable API error is a failure, not a skip.** Only retryable statuses
+(`408`, `429`, `500`, `502`, `503`, `504`, `529`) count as an overload. An `is_error`
+result carrying `400` / `401` / `403` — bad request, expired credential, revoked key —
+will fail identically on every retry, so it goes down the normal failure path and trips
+the breaker like any other broken job, instead of skipping silently forever while
+looking healthy.
 
 ## Stopping, pausing, and status
 

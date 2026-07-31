@@ -29,8 +29,9 @@ export function collectStatus(root, { installed = null, deps = {} } = {}) {
       consecutiveFailures: st.consecutiveFailures ?? 0,
       lastRun: st.lastRun ?? null,
       lastExit: st.lastExit ?? null,
-      // Last usage-limit skip (quota/infra, not a failure), so a stuck-on-limit job
-      // is visible without paging through logs. Undefined when the last run was real.
+      // Last quota/infra skip — `usage-limit` (subscription/credits) or `api-overload`
+      // (429/529/5xx), neither a failure — so a stuck job is visible without paging
+      // through logs. Undefined when the last run was real.
       lastSkipReason: st.lastSkipReason,
       lastSkipResetAt: st.lastSkipResetAt,
       // Guard freshness ("checked 40 s ago") + its failure counter. Undefined / 0

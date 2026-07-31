@@ -221,15 +221,44 @@ describe('tick', () => {
     const st = readState(root).jobs.a;
     expect(st.consecutiveFailures).toBe(1);
     expect(st.breakerTripped).toBeUndefined();
-    expect(st.lastSkipReason).toBe('usage-limit');
+    expect(st.lastSkipReason).toBe('api-overload'); // a 429 is infra, not the subscription
   });
 
   it('skips a transient API overload (529 overloaded_error)', async () => {
     usageLimitJob();
     const runJob = vi.fn(async () => ({ pid: 1, exit: 1, timedOut: false, durationMs: 5, out: '', err: 'API Error: 529 overloaded_error' }));
     const res = await tick({ root, now: NOW, deps: fakeDeps({ runJob }) });
-    expect(res).toEqual([{ id: 'a', action: 'skipped-usage-limit', reason: 'usage-limit' }]);
+    expect(res).toEqual([{ id: 'a', action: 'skipped-usage-limit', reason: 'api-overload' }]);
     expect(readState(root).jobs.a.consecutiveFailures).toBe(1);
+  });
+
+  // Reporting only: an overload skip and a subscription skip schedule identically, but
+  // the log/state must not claim quota was burned when the API was merely overloaded.
+  it('logs an overload skip as reason api-overload, a subscription limit as usage-limit', async () => {
+    usageLimitJob();
+    const overload = fakeDeps({ runJob: vi.fn(async () => ({ pid: 1, exit: 1, timedOut: false, durationMs: 5, out: '', err: 'API Error: 529 overloaded_error' })) });
+    await tick({ root, now: NOW, deps: overload });
+    expect(overload.appendLog.mock.calls[0][1]).toMatchObject({ outcome: 'skipped', reason: 'api-overload' });
+
+    const limit = fakeDeps({ runJob: vi.fn(async () => ({ pid: 1, exit: 1, timedOut: false, durationMs: 5, out: 'Claude usage limit reached', err: '' })) });
+    await tick({ root, now: NOW + MIN, deps: limit });
+    expect(limit.appendLog.mock.calls[0][1]).toMatchObject({ outcome: 'skipped', reason: 'usage-limit' });
+    expect(readState(root).jobs.a.lastSkipReason).toBe('usage-limit');
+  });
+
+  // A non-retryable API error will fail identically forever. Treating it as a limit
+  // made the job skip on every tick while the breaker stayed clean — invisible to any
+  // watchdog keyed on breakerTripped.
+  it('counts a non-retryable API error (401) as a failure and lets the breaker trip', async () => {
+    usageLimitJob(); // maxConsecutiveFailures: 2, consecutiveFailures starts at 1
+    const out = JSON.stringify({ type: 'result', is_error: true, api_error_status: 401, result: 'Invalid API key' });
+    const runJob = vi.fn(async () => ({ pid: 1, exit: 1, timedOut: false, durationMs: 5, out, err: '' }));
+    const res = await tick({ root, now: NOW, deps: fakeDeps({ runJob }) });
+    expect(res).toEqual([{ id: 'a', action: 'launched', exit: 1, timedOut: false }]);
+    const st = readState(root).jobs.a;
+    expect(st.consecutiveFailures).toBe(2);
+    expect(st.breakerTripped).toBe(true);
+    expect(st.lastSkipReason).toBeUndefined(); // not a skip at all
   });
 
   it('a usage-limit skip never trips the breaker no matter how many in a row', async () => {
@@ -251,6 +280,78 @@ describe('tick', () => {
     expect(res).toEqual([{ id: 'a', action: 'launched', exit: 1, timedOut: false }]);
     expect(readState(root).jobs.a.consecutiveFailures).toBe(2); // incremented, exactly as before
     expect(readState(root).jobs.a.breakerTripped).toBe(true);   // reached maxConsecutiveFailures: 2
+  });
+
+  // What a run COST. Successful runs are the expensive ones, and their result JSON was
+  // parsed for classification and then dropped — leaving wall-clock duration, which is
+  // meaningless across jobs on different models, as the only cost proxy.
+  describe('usage/cost capture in the run log', () => {
+    const dueJob = () => {
+      writeJobs(root, { version: 1, defaults: {}, jobs: [{ id: 'a', schedule: '* * * * *', enabled: true, prompt: 'go' }] });
+      writeJobState(root, 'a', { lastRun: NOW - MIN, lastExit: 0, pid: null });
+    };
+    const resultJson = (extra: Record<string, unknown> = {}) => JSON.stringify({
+      type: 'result', subtype: 'success', is_error: false,
+      duration_ms: 120000, duration_api_ms: 98765, num_turns: 12, total_cost_usd: 0.42,
+      usage: { input_tokens: 1234, output_tokens: 5678, cache_read_input_tokens: 90123, cache_creation_input_tokens: 4567 },
+      modelUsage: { 'claude-opus-4-5-20260101': { inputTokens: 1234, outputTokens: 5678, costUSD: 0.42 } },
+      result: 'done', ...extra,
+    });
+    const loggedRow = (deps: any) => deps.appendLog.mock.calls[0][1];
+
+    it('records the usage block on a SUCCESSFUL run, additively to the existing fields', async () => {
+      dueJob();
+      const deps = fakeDeps({ runJob: vi.fn(async () => ({ pid: 1, exit: 0, timedOut: false, durationMs: 7, out: resultJson(), err: '' })) });
+      await tick({ root, now: NOW, deps });
+      const row = loggedRow(deps);
+      expect(row).toMatchObject({ ts: NOW, job: 'a', exit: 0, timedOut: false, durationMs: 7, outcome: 'success' });
+      expect(row.usage).toEqual({
+        costUsd: 0.42, in: 1234, out: 5678, cacheRead: 90123, cacheCreate: 4567, turns: 12, apiMs: 98765,
+        models: { 'claude-opus-4-5-20260101': { in: 1234, out: 5678, costUsd: 0.42 } },
+      });
+      expect(row.raw).toBeUndefined(); // success still keeps no raw tail
+    });
+
+    it('logs a row with NO usage field when a successful run printed non-JSON output', async () => {
+      dueJob();
+      const deps = fakeDeps({ runJob: vi.fn(async () => ({ pid: 1, exit: 0, timedOut: false, durationMs: 7, out: 'all done, nothing to do', err: '' })) });
+      await tick({ root, now: NOW, deps });
+      const row = loggedRow(deps);
+      expect(row).toMatchObject({ job: 'a', outcome: 'success' });
+      expect('usage' in row).toBe(false);
+    });
+
+    it('records token counts and omits costUsd when total_cost_usd is missing', async () => {
+      dueJob();
+      const noCost = JSON.parse(resultJson());
+      delete noCost.total_cost_usd;
+      const deps = fakeDeps({ runJob: vi.fn(async () => ({ pid: 1, exit: 0, timedOut: false, durationMs: 7, out: JSON.stringify(noCost), err: '' })) });
+      await tick({ root, now: NOW, deps });
+      const row = loggedRow(deps);
+      expect(row.usage).toMatchObject({ in: 1234, out: 5678, turns: 12 });
+      expect('costUsd' in row.usage).toBe(false);
+    });
+
+    it('a timeout-killed run (exit null, truncated output) logs its row and does not throw', async () => {
+      dueJob();
+      const truncated = '{"type":"result","subtype":"success","usage":{"input_to';
+      const deps = fakeDeps({ runJob: vi.fn(async () => ({ pid: 1, exit: null, timedOut: true, durationMs: 900000, out: truncated, err: '' })) });
+      await expect(tick({ root, now: NOW, deps })).resolves.toBeDefined();
+      const row = loggedRow(deps);
+      expect(row).toMatchObject({ job: 'a', exit: null, timedOut: true, outcome: 'failure' });
+      expect('usage' in row).toBe(false);
+      expect(readState(root).jobs.a.consecutiveFailures).toBe(1); // breaker path unchanged
+    });
+
+    it('records usage on a usage-limit skip too when the result JSON carries it', async () => {
+      dueJob();
+      const out = resultJson({ is_error: true, subtype: 'error_during_execution', api_error_status: 529, result: 'API Error: 529 overloaded_error' });
+      const deps = fakeDeps({ runJob: vi.fn(async () => ({ pid: 1, exit: 1, timedOut: false, durationMs: 7, out, err: '' })) });
+      await tick({ root, now: NOW, deps });
+      const row = loggedRow(deps);
+      expect(row).toMatchObject({ outcome: 'skipped', reason: 'api-overload' });
+      expect(row.usage).toMatchObject({ costUsd: 0.42, in: 1234 });
+    });
   });
 
   it('clears a stale usage-limit skip marker once the job runs for real again', async () => {

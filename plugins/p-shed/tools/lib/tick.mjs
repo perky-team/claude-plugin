@@ -6,7 +6,7 @@ import { appendLog as realAppendLog, rotateLogs as realRotateLogs } from './logs
 import { readPause } from './breaker.mjs';
 import { readGlobalPause } from './pause.mjs';
 import { isPidAlive, readPid, writePid, removePid } from './pids.mjs';
-import { classifyRun, resolveUsageLimitPattern, parseResetAt, truncateOutput } from './classify.mjs';
+import { classifyRun, classifySkipReason, parseUsage, resolveUsageLimitPattern, parseResetAt, truncateOutput } from './classify.mjs';
 
 export async function tick({ root, now = Date.now(), deps = {} }) {
   const d = {
@@ -114,18 +114,27 @@ export async function tick({ root, now = Date.now(), deps = {} }) {
     // unconfirmed, so a limit we failed to pattern-match stays visible in the log and
     // the pattern can be corrected (jobs.yml / env) after at most one breaker trip.
     const rawTail = outcome === 'success' ? undefined : truncateOutput(r.out, r.err);
-    const withRaw = (rec) => (rawTail ? { ...rec, raw: rawTail } : rec);
+
+    // Cost accounting: keep the compact usage block from EVERY run whose result JSON
+    // parsed — success included, since those are the expensive ones. Purely additive
+    // to the row (existing readers key off field names) and best-effort: a missing,
+    // partial or malformed result just omits the block, never breaks the tick.
+    const usage = parseUsage(r.out);
+    const withRunDetail = (rec) => ({ ...rec, ...(rawTail ? { raw: rawTail } : {}), ...(usage ? { usage } : {}) });
 
     if (outcome === 'usage_limit') {
       // Quota/infra, not a code failure: do NOT touch the failure counter or breaker.
       // Record the skip so `status` can show a stuck-on-limit job; the next tick retries.
+      // The reason distinguishes a real subscription limit from a transient API
+      // overload — same scheduling, very different operational meaning.
+      const reason = classifySkipReason(r.out, r.err);
       const resetAt = parseResetAt(r.out, r.err);
-      const next = { ...prev, lastRun: now, lastExit: r.exit, pid: null, lastSkipReason: 'usage-limit', lastSkipAt: now };
+      const next = { ...prev, lastRun: now, lastExit: r.exit, pid: null, lastSkipReason: reason, lastSkipAt: now };
       if (resetAt) next.lastSkipResetAt = resetAt; else delete next.lastSkipResetAt;
       d.writeJobState(root, job.id, next);
-      d.appendLog(root, withRaw({ ts: now, job: job.id, exit: r.exit, timedOut: r.timedOut, durationMs: r.durationMs, outcome: 'skipped', reason: 'usage-limit', ...(guarded ? { guarded: true } : {}), ...(resetAt ? { resetAt } : {}) }), now);
+      d.appendLog(root, withRunDetail({ ts: now, job: job.id, exit: r.exit, timedOut: r.timedOut, durationMs: r.durationMs, outcome: 'skipped', reason, ...(guarded ? { guarded: true } : {}), ...(resetAt ? { resetAt } : {}) }), now);
       d.removePid(job.id);
-      results.push({ id: job.id, action: 'skipped-usage-limit', reason: 'usage-limit', ...(resetAt ? { resetAt } : {}) });
+      results.push({ id: job.id, action: 'skipped-usage-limit', reason, ...(resetAt ? { resetAt } : {}) });
       continue;
     }
 
@@ -147,7 +156,7 @@ export async function tick({ root, now = Date.now(), deps = {} }) {
       delete next.breakerAt;
     }
     d.writeJobState(root, job.id, next);
-    d.appendLog(root, withRaw({ ts: now, job: job.id, exit: r.exit, timedOut: r.timedOut, durationMs: r.durationMs, outcome, ...(guarded ? { guarded: true } : {}) }), now);
+    d.appendLog(root, withRunDetail({ ts: now, job: job.id, exit: r.exit, timedOut: r.timedOut, durationMs: r.durationMs, outcome, ...(guarded ? { guarded: true } : {}) }), now);
     d.removePid(job.id);
     results.push({ id: job.id, action: 'launched', exit: r.exit, timedOut: r.timedOut });
   }

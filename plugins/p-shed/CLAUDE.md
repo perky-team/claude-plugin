@@ -34,6 +34,33 @@ Pure scheduler/launcher. Key decisions:
   classification (self-reveal), so an unmatched limit shape is visible after one trip. Do
   **not** collapse this back to a 2-way check — a false "failure" here re-introduces the
   bug where a quota window trips the breaker and needs a manual `reset-breaker`.
+- **The skip REASON is split, and the structured signal is an allowlist.** Two separate
+  rules hang off the classification above; both were bugs found in a live deployment.
+  1. `classifySkipReason(out, err)` → `usage-limit` | `api-overload` labels the recorded
+     skip (log `reason`, state `lastSkipReason`, `status`'s `lastSkip` column). Subscription
+     wins when both signatures are present — it is the more consequential state and the one
+     carrying a reset time. Keep it a **separate exported helper**, not a wider `classifyRun`
+     return, so the 3-way contract and its callers/tests stay untouched. Scheduling is
+     identical for both labels (skip, breaker untouched, retry next tick) — this is
+     reporting only. Do not re-merge the labels: two logged "usage-limit" skips that were
+     really `api_error_status: 529` made the bot look quota-starved when it was not.
+  2. `structuredLimit` treats ONLY retryable statuses as a limit
+     (`RETRYABLE_API_STATUSES` = 408/429/500/502/503/504/529). Any other non-null
+     `api_error_status` — 400 bad request, 401 expired credential, 403 revoked key — falls
+     through to `failure` **on purpose**: it will fail identically forever, so it belongs to
+     the breaker. Do not widen this back to "any non-null status", which turned a dead
+     credential into an infinite silent skip that looked healthy to every watchdog keyed on
+     `breakerTripped`. The text path's numeric codes stay scoped to an `api error …` context.
+- **Every run's cost is logged, success included.** `parseUsage(out)` (`classify.mjs`,
+  reusing `parseResult` — do not duplicate the salvage parse) folds the
+  `--output-format json` result into a compact `usage` block on the log row
+  (`costUsd`, `in`/`out`/`cacheRead`/`cacheCreate`, `turns`, `apiMs`, per-model `models`).
+  Successful runs are the expensive ones and their result was previously parsed for
+  classification and thrown away, leaving wall-clock duration — meaningless across models
+  and effort levels — as the only cost proxy. It is strictly **additive** (existing
+  consumers read by field name) and **never throws**: missing/partial/non-numeric fields
+  are omitted, a result with no usable numbers omits the whole block. The scheduler's job
+  is to schedule; one weird run must not wedge the loop.
 - **State writes are read-modify-write.** `tick` merges into the existing state object
   (spread prev, then set lastRun/lastExit/pid/consecutiveFailures/breaker) rather than
   replacing it, so breaker fields survive across ticks.
