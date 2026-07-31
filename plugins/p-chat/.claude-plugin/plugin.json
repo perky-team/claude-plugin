@@ -1,6 +1,6 @@
 {
   "name": "p-chat",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Dumb Telegram channel for Claude Code loops: a p-shed guard + CLI (tool `pchat`: init, guard, pending, ack, send, reset, status). Scripted /commands are answered by the guard itself — no Claude launch, works even when Claude is down or usage-limited; a pending free-text question makes the guard request a launch, so Claude runs exactly as often as there are questions. Peek/confirm cursor over getUpdates gives at-least-once delivery; chat-id allowlist is fail-closed; message text is never interpolated into shell commands; the bot token lives only in a token file. Zero deps. Skills: init, respond.",
   "author": {
     "name": "Andrey Sukharev",
