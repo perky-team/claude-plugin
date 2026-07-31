@@ -2,9 +2,11 @@
 
 Date: 2026-07-31
 Status: **Design settled**, ready for an implementation plan.
-Deliverable: p-shed 0.10.0 — two new commands (`wait-idle`, `deploy`), two new lib
-modules, one new run-file (`run/DEPLOY`), a `--` terminator in the shared arg parser,
-an orphan reclaim in `tick`, and a two-line change to the pause-marker origin rules.
+Deliverable: two new commands (`wait-idle`, `deploy`), two new lib modules, one new
+run-file (`run/DEPLOY`), a `--` terminator in the shared arg parser, an orphan reclaim in
+`tick`, and a two-line change to the pause-marker origin rules. The version bump to
+p-shed 0.10.0 is deferred to a release — `plugin.json` stays at 0.9.0 until the repo
+owner asks for one (see the project's release-tagging rule).
 
 Every claim in §3 about existing p-shed behavior was measured against the code in this
 repo, not inferred; the measurement is named next to it. The five failures in §0 come

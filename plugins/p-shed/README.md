@@ -27,8 +27,8 @@ Tool: `node tools/pshed.mjs <command>` (all support `--json`; exit `0` ok / `1` 
 | `rm-job` | Delete a job (`--id`). |
 | `reset-breaker <id>` | Clear a job's tripped circuit breaker and its **self**-pause marker so it schedules again. An operator pause (`pause --id`) survives — lift that with `resume --id`. |
 | `pause` / `resume` | Reversibly halt / resume the **whole** scheduler (`run/PAUSED`; cron stays installed), or with `--id <job>` / `--group <name>` just that job or every member of that concurrency group (`run/<id>.pause`). `pause` accepts `--reason`; both idempotent. An unknown id, an unmatched group, or both flags at once is an error (exit 2) — never a global pause. |
-| `wait-idle` | Block until no job (or no member of `--group`) holds a live pidfile. Changes no state. `--timeout-sec` (default 1800), `--poll-ms` (default 1000). Exit `0` idle / `1` timed out (holder named) / `2` validation. |
-| `deploy` | Open a maintenance window and run a command in it: wait for idle → pause → re-check → run → always release. `--reason` required, `--group` optional, then `-- <cmd> [args...]`. The command's stdout/stderr pass through untouched and its exit code becomes `deploy`'s; p-shed's own report goes to stderr. Exit: the command's own code when it ran (`0` on success) / `1` the wait timed out or deploy itself failed / `2` validation (`--id` given, `--reason` or command missing) / `127` the command could not be spawned — POSIX only, on Windows the shell reports plain `1` / `128+signum` killed by a signal / `130` operator interrupted. Nothing is left paused in any of these cases. |
+| `wait-idle` | Block until no job (or no member of `--group`) holds a live pidfile. Changes no state. `--timeout-sec` (default 1800), `--poll-ms` (default 1000). Human-readable report by default; `--json` for machine output (mirrors `deploy`, below). Exit `0` idle / `1` timed out (holder named) / `2` validation. |
+| `deploy` | Open a maintenance window and run a command in it: wait for idle → pause → re-check → run → always release. `--reason` required, `--group` optional, then `-- <cmd> [args...]`. Refuses outright (does not wait, does not pause) when another `deploy` already holds `run/DEPLOY` with a live pid, naming that pid and its reason. The command's stdout/stderr pass through untouched and its exit code becomes `deploy`'s; p-shed's own report — including every validation error — goes to stderr, honouring `--json`, so nothing but the deployed command's own output ever reaches stdout. Exit: the command's own code when it ran (`0` on success) / `1` the wait timed out or deploy itself failed / `2` validation (`--id` given, `--reason` or command missing) or another deploy already in progress / `127` the command could not be spawned — POSIX only, on Windows the shell reports plain `1` / `128+signum` killed by a signal / `130` operator interrupted. Nothing is left paused in any of these cases. |
 | `status` | Report, from disk + the OS scheduler: installed?, globally paused?, and per job running/paused/breaker/last-run. JSON by default, `--human` for a text table. |
 | `stop` `[--kill]` | Honest teardown of the OS scheduler entry — reports `removed: true|false` (see below). `--kill` also SIGTERM→SIGKILLs any in-flight jobs (`--grace-ms` tunes the escalation delay). |
 | `install-cron` / `remove-cron` | Register/unregister the every-minute `tick` in the OS scheduler for this folder. `remove-cron` reports `removed` and warns on a cwd mismatch (see below). |
@@ -47,13 +47,17 @@ Tool: `node tools/pshed.mjs <command>` (all support `--json`; exit `0` ok / `1` 
 | `logs/<date>.jsonl` | gitignore | one record per run (see below); auto-rotated (7-day retention) |
 | `run/<id>.pid` | gitignore | duplicate-guard pidfile |
 | `run/<id>.pause` | gitignore | per-job pause marker (contents = a human-readable reason). A job's own run writes it to stop being scheduled; `pause --id/--group` writes the same file with a leading `#pshed origin=operator` line. Presence pauses, so a bare `touch` works and an empty marker is a valid self-pause |
-| `run/PAUSED` | gitignore | global pause marker (`{ createdAt, reason? }`); halts every job while cron stays installed. Written by `pause`, removed by `resume` |
-| `run/DEPLOY` | gitignore | `{pid, scope, group, reason, createdAt}` — the process holding a deploy pause. Written before the pause; the tick reclaims any deploy-origin pause whose owner is gone. |
+| `run/PAUSED` | gitignore | global pause marker (`{ createdAt, reason?, origin? }`); halts every job while cron stays installed. Written by `pause`, removed by `resume`. An operator `pause` landing on a `deploy`-origin marker takes ownership of it (origin flips to its own, reason replaces the deploy's) so the halt survives the deploy's own release |
+| `run/DEPLOY` | gitignore | `{pid, scope, group, reason, createdAt}` — the process holding a deploy pause, written atomically (temp file + rename) so a concurrent reader never sees a torn write. Written before the pause; the tick reclaims any deploy-origin pause whose owner is gone. One slot, not a lock: a second `deploy` refuses to start while this names a LIVE pid, and a deploy only ever removes this file when it still names its OWN pid. |
 
 ### Run log records (`logs/<date>.jsonl`)
 
 One JSON object per line, appended per run and rotated after 7 days. Fields are added,
-never renamed or removed — read by name and ignore what you don't know:
+never renamed or removed — read by name and ignore what you don't know. There are two
+kinds of row, distinguished by which fields they carry — a consumer should branch on
+`action` being present before assuming the run-record shape below:
+
+**Run records** — one per job launch/skip/guard-error. `ts` is always present:
 
 | Field | When | Meaning |
 |---|---|---|
@@ -65,6 +69,14 @@ never renamed or removed — read by name and ignore what you don't know:
 | `guarded` | guarded jobs | the launch passed a guard |
 | `raw` | non-success | truncated tail of the run's output (self-reveal, 2 KB) |
 | `usage` | result JSON parsed | what the run cost — see below |
+
+**Reclaim records** — one per tick that lifted an abandoned deploy pause (see
+`run/DEPLOY` below). Not a run: no job launched, so it carries neither `outcome` (never
+one of the four run values above) nor a real `durationMs`, and `job` is explicit `null`
+rather than an absent field:
+
+    {"ts":1784154000000,"job":null,"action":"reclaimed-deploy-pause",
+     "reclaimed":[{"scope":"global"}]}
 
 The `usage` block is captured for **every** run whose `--output-format json` result
 parsed, successful runs included, so "which job is expensive" is answerable without
@@ -236,6 +248,13 @@ The same file is written by two very different actors, so it records its **origi
 |---|---|---|
 | the job itself (`echo "verify went red" > run/<id>.pause`, or a bare `touch`) | the plain reason, no header | `reset-breaker <id>` — un-sticking it is the whole point — or `resume --id` |
 | an operator (`pshed pause --id <job>` / `--group <name>`) | `#pshed origin=operator` + the reason | `resume --id` / `--group` **only** |
+| `deploy` (holding the loop during maintenance) | `#pshed origin=deploy` + the reason | `deploy`'s own release, or the tick's reclaim once its owner is gone |
+
+An operator `pause` landing on a marker that is currently `deploy`-origin **takes
+ownership of it**: origin flips to `operator` and the reason is replaced (when one was
+given), so a human's halt set mid-deploy survives that deploy finishing and releasing —
+release only ever clears a marker still carrying its own origin. Landing on a `self` or
+already-`operator` marker is unchanged: the **first** reason wins.
 
 `reset-breaker` deliberately does **not** lift an operator pause: an unrelated failure
 reset must never cancel a halt a human put there on purpose. It reports
@@ -306,6 +325,12 @@ Three levers, deliberately distinct:
   scheduler), the global pause state, and per job — running (live pid), self-paused,
   breaker state (consecutive failures / reason), last run/exit, and the last usage-limit
   skip (`lastSkip` column / `lastSkipReason` field) so a stuck-on-limit job is visible.
+  Both the global and per-job pause report a `pauseOrigin` (`self` / `operator` /
+  `deploy`) alongside `pauseReason` — without it, a live `deploy` and an operator pause
+  someone forgot to `resume` look identical, which is exactly the confusion the origin
+  field exists to remove (`reset-breaker` already made this same distinction, reporting
+  `deployPause: true`). `--human`'s per-job table gains an `origin` column; the global
+  `paused:` line appends `[deploy]` only for a non-operator origin.
 
 ### `remove-cron` / `stop` are honest about a cwd mismatch
 
