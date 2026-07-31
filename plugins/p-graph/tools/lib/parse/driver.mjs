@@ -11,6 +11,22 @@ const GO_BUILTINS = new Set([
   'len', 'make', 'max', 'min', 'new', 'panic', 'print', 'println', 'real', 'recover',
 ]);
 
+// Go's predeclared type names. `float64(n)` parses as a call, but it converts a
+// value — it never targets a repo symbol, so it must not be resolved or reported
+// as a gap.
+const GO_PREDECLARED_TYPES = new Set([
+  'any', 'bool', 'byte', 'comparable', 'complex64', 'complex128', 'error',
+  'float32', 'float64', 'int', 'int8', 'int16', 'int32', 'int64', 'rune',
+  'string', 'uint', 'uint8', 'uint16', 'uint32', 'uint64', 'uintptr',
+]);
+
+// The last segment of a dotted target name. A call site records whatever the
+// source wrote — `bp.GetBuffer` under an import alias, `api.W.helper` for an own
+// receiver — so the bare segment is the only part that is stable across
+// qualifiers, and it is what the gap report has to match on.
+const bareSegment = (name) =>
+  typeof name === 'string' && name.includes('.') ? name.slice(name.lastIndexOf('.') + 1) : name;
+
 function within(inner, outer) {
   if (inner === outer) return false;
   const startsAfter = outer.startLine < inner.startLine ||
@@ -226,10 +242,17 @@ export async function extract({ file, lang, langId, scm, source }) {
       const node = fd.node;
       const typeName = goFieldTypeName(node?.childForFieldName?.('type'), goCtx.pkg);
       if (!typeName) continue; // embedded field or a type shape we don't resolve through
+      let hasNamedField = false;
       for (let i = 0; i < node.childCount; i++) {
         if (node.fieldNameForChild(i) !== 'name') continue;
+        hasNamedField = true;
         fieldTypes.push({ key: `${structDef.qname}.${node.child(i).text}`, type: typeName, file });
       }
+      // An embedded field has a type and no name. Record it under a synthetic
+      // "#embed" key: knowing what a struct embeds is what lets the resolver tell
+      // a real promoted method (the struct embeds a repo type) from a call on an
+      // external one (`struct{ sync.Mutex }` and then `l.Lock()`).
+      if (!hasNamedField) fieldTypes.push({ key: `${structDef.qname}#embed`, type: typeName, file });
     }
   }
 
@@ -267,9 +290,15 @@ export async function extract({ file, lang, langId, scm, source }) {
         if (owner) { dst_name = `${owner.qname}.${c.text}`; method = c.text; }
       }
     }
+    // A plain-identifier call to a builtin or a predeclared type names nothing in
+    // the repo. Marked here, once, so neither the resolver nor the gap report has
+    // to keep a Go word list in SQL.
+    const external = lang === 'go' && c.node?.type !== 'field_identifier' &&
+      (GO_BUILTINS.has(c.text) || GO_PREDECLARED_TYPES.has(c.text)) ? 1 : 0;
     edges.push({
       src_id: enclosing ? enclosing.id : null,
-      dst_id: null, dst_name, field_key, method, kind, file, line: c.startLine,
+      dst_id: null, dst_name, dst_bare: bareSegment(dst_name), lang, external,
+      field_key, method, kind, file, line: c.startLine,
     });
   }
   return { nodes, edges, fieldTypes };

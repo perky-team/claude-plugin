@@ -21,10 +21,17 @@ function loadDatabaseSync() {
 // a bare name, so it no longer collides with same-named methods on other types.
 // dst_name values changed for those edges — an old DB must fully reindex to pick
 // the new resolution up. No DDL change.
-export const SCHEMA_VERSION = 5;
+// 6: edges gained dst_bare/lang/external, and field_types gained "#embed" rows.
+// These are new columns, which CREATE TABLE IF NOT EXISTS can never add to an
+// existing table, so openStore now drops the graph tables when the stored version
+// is older. The DB is a rebuildable cache; dropping it costs one reindex.
+export const SCHEMA_VERSION = 6;
+
+const META_DDL = `
+CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
+`;
 
 const DDL = `
-CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS files (
   path TEXT PRIMARY KEY, hash TEXT, lang TEXT, indexed_at TEXT
 );
@@ -38,16 +45,17 @@ CREATE INDEX IF NOT EXISTS nodes_name ON nodes(name);
 CREATE INDEX IF NOT EXISTS nodes_qname ON nodes(qname);
 CREATE TABLE IF NOT EXISTS edges (
   src_id TEXT, dst_id TEXT, dst_name TEXT, kind TEXT, file TEXT, line INTEGER,
-  field_key TEXT, method TEXT
+  field_key TEXT, method TEXT, dst_bare TEXT, lang TEXT, external INTEGER DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS edges_src ON edges(src_id);
 CREATE INDEX IF NOT EXISTS edges_dst ON edges(dst_id);
 CREATE INDEX IF NOT EXISTS edges_dstname ON edges(dst_name);
+CREATE INDEX IF NOT EXISTS edges_dstbare ON edges(dst_bare);
 CREATE INDEX IF NOT EXISTS edges_file ON edges(file);
 CREATE INDEX IF NOT EXISTS edges_fieldkey ON edges(field_key);
 -- Struct-field-type table for Go: key "<pkg>.<Struct>.<field>" -> package-
 -- qualified field type ('*' stripped), e.g. "events.Server.dimpleCore" ->
--- "core.Core". Lets resolvePending() type a recv.field.Method() call.
+-- "core.Core". The key "<pkg>.<Struct>#embed" holds an embedded type instead.
 CREATE TABLE IF NOT EXISTS field_types (
   key TEXT, type TEXT, file TEXT
 );
@@ -60,6 +68,21 @@ export function openStore(dbPath, opts = {}) {
   if (opts.readOnly) return openReadOnly(DatabaseSync, dbPath);
   const db = new DatabaseSync(dbPath);
   db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = OFF;');
+  db.exec(META_DDL);
+  // A schema bump can add columns, and CREATE TABLE IF NOT EXISTS will not add
+  // them to a table that already exists — a prepared statement would then fail on
+  // a missing column and take the whole CLI down. The graph is a rebuildable
+  // cache, so drop it and let the next index refill it. The stored schema_version
+  // is left as-is (not bumped, not cleared) here: ensureFresh() drives the real
+  // rebuild off it still reading stale, and only markSchemaCurrent() — called
+  // after that rebuild actually repopulates the tables — is allowed to raise it.
+  // Bumping it in openStore would make an empty, just-dropped graph look current.
+  const storedVersion = Number(db.prepare(`SELECT value FROM meta WHERE key = 'schema_version'`).get()?.value);
+  if (storedVersion && storedVersion < SCHEMA_VERSION) {
+    for (const t of ['nodes_fts', 'edges', 'nodes', 'files', 'field_types']) {
+      db.exec(`DROP TABLE IF EXISTS ${t}`);
+    }
+  }
   db.exec(DDL);
 
   let hasFts = false;
@@ -90,7 +113,8 @@ export function openStore(dbPath, opts = {}) {
   const delNodesByFile = db.prepare('DELETE FROM nodes WHERE file = ?');
   const delEdgesByFile = db.prepare('DELETE FROM edges WHERE file = ?');
   const insEdge = db.prepare(
-    'INSERT INTO edges (src_id,dst_id,dst_name,kind,file,line,field_key,method) VALUES (?,?,?,?,?,?,?,?)');
+    `INSERT INTO edges (src_id,dst_id,dst_name,kind,file,line,field_key,method,dst_bare,lang,external)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?)`);
   const insFieldType = db.prepare('INSERT INTO field_types (key,type,file) VALUES (?,?,?)');
   const delFieldTypesByFile = db.prepare('DELETE FROM field_types WHERE file = ?');
   const insFile = db.prepare(`INSERT INTO files (path,hash,lang,indexed_at)
@@ -137,7 +161,9 @@ export function openStore(dbPath, opts = {}) {
           n.start_line, n.end_line, n.signature, n.doc, n.container_id);
         if (insFts) insFts.run(n.id, n.name, n.qname, n.signature);
       }
-      for (const e of edges) insEdge.run(e.src_id, e.dst_id ?? null, e.dst_name ?? null, e.kind, e.file, e.line, e.field_key ?? null, e.method ?? null);
+      for (const e of edges) insEdge.run(e.src_id, e.dst_id ?? null, e.dst_name ?? null,
+        e.kind, e.file, e.line, e.field_key ?? null, e.method ?? null,
+        e.dst_bare ?? null, e.lang ?? null, e.external ?? 0);
       for (const f of fieldTypes) insFieldType.run(f.key, f.type, f.file ?? file);
       db.prepare('COMMIT').run();
     } catch (err) { db.prepare('ROLLBACK').run(); throw err; }
