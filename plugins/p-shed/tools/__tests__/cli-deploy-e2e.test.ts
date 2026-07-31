@@ -2,10 +2,10 @@
 // so every assertion here also checks that run/PAUSED stayed absent.
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, chmodSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { formatDeploy, quoteWinArg } from '../pshed.mjs';
+import { formatDeploy, formatWaitIdle, quoteWinArg } from '../pshed.mjs';
 
 const CLI = join(process.cwd(), 'plugins/p-shed/tools/pshed.mjs');
 
@@ -69,6 +69,72 @@ describe('formatDeploy', () => {
     expect(text).not.toMatch(/, released/i);
     expect(text).toMatch(/nothing paused, nothing run/i);
   });
+
+  // M2: the 'ok' branch used to claim "paused the scheduler ... released" unconditionally,
+  // even when this run walked into an existing pause and OWNED NOTHING (ownedGlobal:
+  // false, ever preserved). It paused and released nothing — same false-report shape the
+  // 'aborted' branch above exists to avoid, just for a different outcome.
+  it('reports honestly when the run walked into an existing global pause and released nothing', () => {
+    const report = {
+      action: 'deploy', outcome: 'ok', exit: 0, waitedMs: 0, attempts: 1,
+      scope: 'global', group: null, pausedIds: [], ownedGlobal: false,
+      preserved: [{ scope: 'global' }], releaseErrors: [],
+    };
+    const text = formatDeploy(report);
+    expect(text).not.toMatch(/paused the scheduler/i);
+    expect(text).not.toMatch(/, released/i);
+    expect(text).toMatch(/found the scheduler already paused/i);
+  });
+
+  it('still reports the honest paused/released claim when this run genuinely owned the global pause', () => {
+    const report = {
+      action: 'deploy', outcome: 'ok', exit: 0, waitedMs: 3, attempts: 1,
+      scope: 'global', group: null, pausedIds: [], ownedGlobal: true,
+      preserved: [], releaseErrors: [],
+    };
+    const text = formatDeploy(report);
+    expect(text).toMatch(/paused the scheduler/i);
+    expect(text).toMatch(/, released/i);
+  });
+
+  it('group scope: reports members actually paused, distinct from ones only preserved', () => {
+    const report = {
+      action: 'deploy', outcome: 'ok', exit: 0, waitedMs: 1, attempts: 1,
+      scope: 'group', group: 'hft', pausedIds: ['worker'], ownedGlobal: false,
+      preserved: [{ scope: 'job', id: 'chat', origin: 'operator' }], releaseErrors: [],
+    };
+    const text = formatDeploy(report);
+    expect(text).toMatch(/paused 1 member\(s\) of group hft/i);
+    expect(text).toMatch(/, released/i);
+    expect(text).toMatch(/kept 1 pre-existing pause\(s\)/i);
+  });
+
+  it('group scope: every member already paused — nothing owned, nothing released', () => {
+    const report = {
+      action: 'deploy', outcome: 'ok', exit: 0, waitedMs: 1, attempts: 1,
+      scope: 'group', group: 'hft', pausedIds: [], ownedGlobal: false,
+      preserved: [{ scope: 'job', id: 'worker', origin: 'operator' }, { scope: 'job', id: 'chat', origin: 'operator' }],
+      releaseErrors: [],
+    };
+    const text = formatDeploy(report);
+    expect(text).not.toMatch(/, released/i);
+    expect(text).toMatch(/found group hft already paused/i);
+  });
+
+  // C1: a second deploy refused outright before ever touching run/DEPLOY or a pause.
+  it('reports a refusal by name — the holder pid and reason, nothing paused or run', () => {
+    const report = {
+      action: 'deploy', outcome: 'busy', exit: 2, waitedMs: 0, attempts: 0,
+      scope: 'global', group: null, pausedIds: [], ownedGlobal: false, preserved: [],
+      holder: { pid: 1234, reason: 'prompt update' },
+      message: 'another deploy is in progress (pid 1234, reason "prompt update")',
+    };
+    const text = formatDeploy(report);
+    expect(text).toMatch(/refused/i);
+    expect(text).toMatch(/pid 1234/);
+    expect(text).toMatch(/"prompt update"/);
+    expect(text).toMatch(/nothing paused, nothing run/i);
+  });
 });
 
 describe('wait-idle', () => {
@@ -129,6 +195,31 @@ describe('wait-idle', () => {
     expect(r.status).toBe(2);
     expect(JSON.parse(r.stdout).error.code).toBe('validation');
     expect(existsSync(pshed('run', 'PAUSED'))).toBe(false);
+  });
+
+  // M9: without --json the output used to be JSON regardless — the flag was inert.
+  // `deploy`, wait-idle's sibling operator command, already toggles genuinely on
+  // presence/absence of --json, so wait-idle now mirrors it instead of leaving the flag
+  // documented but meaningless.
+  it('without --json prints a human-readable line, not JSON', () => {
+    writeJobs(TWO_JOBS);
+    const r = cli(['wait-idle']);
+    expect(r.status).toBe(0);
+    expect(() => JSON.parse(r.stdout)).toThrow();
+    expect(r.stdout).toMatch(/idle/i);
+  });
+
+  it('still honours --json exactly as before when it IS passed', () => {
+    writeJobs(TWO_JOBS);
+    const r = cli(['wait-idle', '--json']);
+    expect(r.status).toBe(0);
+    expect(() => JSON.parse(r.stdout)).not.toThrow();
+  });
+
+  it('formatWaitIdle names the holders on a timeout, mirroring formatDeploy', () => {
+    const report = { action: 'wait-idle', idle: false, scope: 'global', group: null, waitedMs: 4200, holders: [{ id: 'worker', pid: 111 }] };
+    expect(formatWaitIdle(report)).toMatch(/timed out after 4s/);
+    expect(formatWaitIdle(report)).toMatch(/worker \(pid 111\)/);
   });
 });
 
@@ -201,6 +292,49 @@ describe('deploy', () => {
     expect(existsSync(pshed('run', 'PAUSED'))).toBe(false);
   });
 
+  // M1: deploy's own spawn/timeout/aborted outcomes were already reported on stderr, but
+  // validation errors still went through the generic emitJson path onto STDOUT — the
+  // exact channel this command exists to keep clean for the deployed command. The
+  // reviewers' literal reproduction: a shell redirect of deploy's stdout (`> sha.txt`)
+  // ends up holding a JSON error blob instead of staying empty, because the command never
+  // even starts. `--timeout-sec abc` fails inside timeoutMsFrom (a ValidationError thrown
+  // well after the four explicit --id/--reason/--/command checks), so this also proves
+  // the fix isn't just those four checks but the whole validation surface.
+  it('a non-numeric --timeout-sec reports on stderr, not stdout, honouring --json', () => {
+    writeJobs(TWO_JOBS);
+    const r = cli(['deploy', '--reason', 'x', '--timeout-sec', 'abc', '--json', '--', NODE, '-e', 'console.log("MUST-NOT-RUN")']);
+    expect(r.status).toBe(2);
+    expect(r.stdout).toBe(''); // nothing — not even a stray newline — reaches stdout
+    expect(r.stdout).not.toContain('MUST-NOT-RUN'); // the command never even ran
+    const report = JSON.parse(r.stderr);
+    expect(report.error.code).toBe('validation');
+    expect(existsSync(pshed('run', 'PAUSED'))).toBe(false);
+  });
+
+  it('the same validation failure without --json is human text on stderr, still not stdout', () => {
+    writeJobs(TWO_JOBS);
+    const r = cli(['deploy', '--reason', 'x', '--timeout-sec', 'abc', '--', NODE, '-e', '0']);
+    expect(r.status).toBe(2);
+    expect(r.stdout).toBe('');
+    expect(() => JSON.parse(r.stderr)).toThrow();
+    expect(r.stderr).toMatch(/timeout-sec/);
+  });
+
+  it('the --id / --reason / missing-command validation errors also stay off stdout', () => {
+    writeJobs(TWO_JOBS);
+    const withId = cli(['deploy', '--reason', 'x', '--id', 'worker', '--json', '--', NODE, '-e', '0']);
+    expect(withId.stdout).toBe('');
+    expect(JSON.parse(withId.stderr).error.code).toBe('validation');
+
+    const noReason = cli(['deploy', '--json', '--', NODE, '-e', '0']);
+    expect(noReason.stdout).toBe('');
+    expect(JSON.parse(noReason.stderr).error.code).toBe('validation');
+
+    const noCommand = cli(['deploy', '--reason', 'x', '--json']);
+    expect(noCommand.stdout).toBe('');
+    expect(JSON.parse(noCommand.stderr).error.code).toBe('validation');
+  });
+
   it('exits 1 on timeout: nothing paused, nothing run', () => {
     writeJobs(TWO_JOBS);
     claimPid('worker');
@@ -237,6 +371,59 @@ describe('deploy', () => {
     expect(stopped.killed).toEqual({ terminated: 0, ids: [] });
     expect(existsSync(pshed('run', 'DEPLOY'))).toBe(true);
   });
+});
+
+// C1: the blocker itself, reproduced with two REAL OS processes — same as the two
+// independent reviewers who found it (one reading the code, one driving the live CLI).
+// Deploy A holds run/DEPLOY with a live pid while its command is still running; deploy B
+// must refuse outright instead of overwriting A's ownership and running its own command
+// alongside A's. This is the scenario the unit-level tests in deploy.test.ts also cover,
+// but only real concurrent processes prove the fix holds against the actual timeline —
+// no crash, no signal, no kill, just two overlapping `deploy` invocations.
+describe('C1 — a second deploy refuses while a real first deploy is still running', () => {
+  const NODE = process.execPath;
+
+  it("does not disturb the first deploy's ownership or pause, and never runs its own command", async () => {
+    writeJobs(TWO_JOBS);
+    const { spawn } = await import('node:child_process');
+    // Deploy A: a short-lived command, just long enough to still be running when deploy B
+    // is driven below. It is left to exit ON ITS OWN (never killed) — on Windows,
+    // forcefully killing only the immediate `deploy` process leaves its own spawned
+    // grandchild (the deployed command, launched through cmd.exe by spawnInherit) as an
+    // orphan still holding a handle on `root`'s cwd, which then fails this test's own
+    // temp-dir cleanup in afterEach. Letting both processes finish naturally avoids that
+    // entirely and is a truer rendition of the review's timeline besides (A finishes
+    // normally; nothing crashes, no signal, no kill).
+    const a = spawn('node', [CLI, 'deploy', '--reason', 'A in progress', '--', NODE, '-e', 'setTimeout(()=>{}, 1500)'], { cwd: root, stdio: 'ignore' });
+    const aExit = new Promise((r) => a.on('exit', r));
+    try {
+      const deployPath = pshed('run', 'DEPLOY');
+      const pausedPath = pshed('run', 'PAUSED');
+      // Ownership (run/DEPLOY) is written BEFORE the pause (own -> wait -> pause, see
+      // CLAUDE.md), so poll for the LATER of the two — otherwise this can race and
+      // observe DEPLOY without PAUSED yet.
+      const deadline = Date.now() + 8000;
+      while (!existsSync(pausedPath) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+      expect(existsSync(deployPath)).toBe(true); // A has claimed ownership
+      expect(existsSync(pausedPath)).toBe(true); // and is holding the scheduler paused
+      const ownerBefore = JSON.parse(readFileSync(deployPath, 'utf-8'));
+
+      // Deploy B, run to completion synchronously: it must be refused immediately, not
+      // wait, not run its own command.
+      const b = cli(['deploy', '--reason', 'B wants in', '--json', '--', NODE, '-e', 'console.log("B-RAN")']);
+      expect(b.status).toBe(2);
+      expect(b.stdout).not.toContain('B-RAN'); // B's command never ran
+      const report = JSON.parse(b.stderr);
+      expect(report.outcome).toBe('busy');
+      expect(report.holder.pid).toBe(ownerBefore.pid);
+
+      // A's ownership and pause are untouched by B's refusal.
+      expect(JSON.parse(readFileSync(deployPath, 'utf-8'))).toMatchObject({ pid: ownerBefore.pid });
+      expect(existsSync(pshed('run', 'PAUSED'))).toBe(true);
+    } finally {
+      await aExit; // let A finish and release the checkout on its own
+    }
+  }, 20_000);
 });
 
 // POSIX only: measured, a spawn error other than ENOENT (e.g. EACCES on a file without

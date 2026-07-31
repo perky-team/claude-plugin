@@ -258,7 +258,9 @@ async function main() {
     // wait-idle: block until nothing in scope is running. Changes NO state — it is the
     // primitive `deploy` is built from, and what a human wants when the next step is
     // manual. resolveTarget is reused so an unknown group is a loud exit 2, never a
-    // silent widening to "the whole scheduler".
+    // silent widening to "the whole scheduler". Reports human-readable by default,
+    // `--json` for machine output — mirrors `deploy`, its sibling operator command,
+    // instead of silently ignoring the flag and always emitting JSON either way.
     if (command === 'wait-idle') {
       const { defaults, jobs } = readJobs(root);
       if (args.id !== undefined) {
@@ -270,79 +272,98 @@ async function main() {
         root, jobs, defaults, group,
         timeoutMs: timeoutMsFrom(args), pollMs: pollMsFrom(args),
       });
-      return emitJson({
+      const report = {
         action: 'wait-idle', idle: res.idle, scope: group ? 'group' : 'global', group,
         waitedMs: res.waitedMs, holders: res.holders,
-      }, res.idle ? 0 : 1);
+      };
+      if (args.json) return emitJson(report, res.idle ? 0 : 1);
+      process.stdout.write(formatWaitIdle(report) + '\n');
+      return process.exit(res.idle ? 0 : 1);
     }
 
     // deploy: the indivisible dance. Its report goes to STDERR on purpose — stdout and
     // stderr belong to the deployed command, and mixing a scheduler JSON blob into
-    // `git push` output would make both unparseable.
+    // `git push` output would make both unparseable. Everything this command can fail
+    // on — argument validation included — reports through that same channel: an earlier
+    // version routed validation errors through the generic emitJson (STDOUT) path below,
+    // so `pshed deploy --reason x --timeout-sec abc -- git rev-parse HEAD > sha.txt`
+    // wrote a JSON error blob into sha.txt instead of the command never running at all.
     if (command === 'deploy') {
-      const { defaults, jobs } = readJobs(root);
-      const cmdv = args['--'];
-      // --id is REJECTED, not ignored: parseArgs swallows unknown flags, so accepting it
-      // silently would pause the ENTIRE scheduler while the operator believes one job was
-      // targeted — the regression lib/target.mjs exists to prevent.
-      if (args.id !== undefined) {
-        return emitJson({ error: { code: 'validation', message: 'deploy has no --id: a groupmate would keep writing the same checkout. Use --group, or no flag for the whole scheduler' } }, 2);
-      }
-      if (typeof args.reason !== 'string' || args.reason.trim() === '') {
-        return emitJson({ error: { code: 'validation', message: 'deploy requires --reason "<text>": it lands in the pause marker, and a halted loop with no stated reason is what status exists to prevent' } }, 2);
-      }
-      if (cmdv === undefined) {
-        return emitJson({ error: { code: 'validation', message: 'deploy requires a command after --, e.g. pshed deploy --reason "x" -- git pull' } }, 2);
-      }
-      if (cmdv.length === 0) {
-        return emitJson({ error: { code: 'validation', message: 'no command after --' } }, 2);
-      }
-      const target = resolveTarget({ jobs, defaults, group: args.group });
-
-      // POSIX signal handling. Two distinct moments need covering and a naive trap only
-      // covers one: an interrupt DURING the wait (no child exists yet) and one during the
-      // command. A cancel flag handles the first — waitForIdle polls it and unwinds — and
-      // killing the child handles the second. Both then fall through runDeploy's finally,
-      // which is what actually releases. Calling process.exit() from the handler would
-      // SKIP that finally and leave the loop paused, so it must not appear here.
-      // Measured: on Windows neither SIGINT nor SIGTERM ever reaches a handler, so this
-      // is POSIX-only and the tick's reclaim is what covers that platform.
-      let cancelled = false;
-      if (process.platform !== 'win32') {
-        for (const sig of ['SIGINT', 'SIGTERM']) {
-          process.on(sig, () => { cancelled = true; deployChild?.kill(sig); });
-        }
-      }
-
-      const timeoutMs = timeoutMsFrom(args);
-      const pollMs = pollMsFrom(args);
-
-      // runDeploy's own outcomes (ok/timeout/aborted) are reported below, but spawnInherit
-      // can also REJECT — any spawn error other than ENOENT (EACCES on a file without the
-      // execute bit, ENOEXEC on a bad shebang, ...) — and runDeploy re-throws that after its
-      // finally block has already released the pause. Left uncaught here, it would escape
-      // to main()'s generic catch, which reports via emitJson — straight onto STDOUT. That
-      // is exactly the channel this command exists to keep clean for the deployed command,
-      // so this failure gets its own report, on stderr, honouring --json like every other
-      // outcome, instead of falling through to the generic handler.
-      let res;
       try {
-        res = await runDeploy({
-          root, jobs, defaults, group: target ? target.group : null,
-          reason: args.reason, timeoutMs, pollMs,
-          cmd: cmdv[0], args: cmdv.slice(1),
-          deps: { spawn: spawnInherit, isAborted: () => cancelled },
-        });
+        const { defaults, jobs } = readJobs(root);
+        const cmdv = args['--'];
+        // --id is REJECTED, not ignored: parseArgs swallows unknown flags, so accepting it
+        // silently would pause the ENTIRE scheduler while the operator believes one job was
+        // targeted — the regression lib/target.mjs exists to prevent.
+        if (args.id !== undefined) {
+          throw new ValidationError('deploy has no --id: a groupmate would keep writing the same checkout. Use --group, or no flag for the whole scheduler');
+        }
+        if (typeof args.reason !== 'string' || args.reason.trim() === '') {
+          throw new ValidationError('deploy requires --reason "<text>": it lands in the pause marker, and a halted loop with no stated reason is what status exists to prevent');
+        }
+        if (cmdv === undefined) {
+          throw new ValidationError('deploy requires a command after --, e.g. pshed deploy --reason "x" -- git pull');
+        }
+        if (cmdv.length === 0) {
+          throw new ValidationError('no command after --');
+        }
+        const target = resolveTarget({ jobs, defaults, group: args.group });
+
+        // POSIX signal handling. Two distinct moments need covering and a naive trap only
+        // covers one: an interrupt DURING the wait (no child exists yet) and one during the
+        // command. A cancel flag handles the first — waitForIdle polls it and unwinds — and
+        // killing the child handles the second. Both then fall through runDeploy's finally,
+        // which is what actually releases. Calling process.exit() from the handler would
+        // SKIP that finally and leave the loop paused, so it must not appear here.
+        // Measured: on Windows neither SIGINT nor SIGTERM ever reaches a handler, so this
+        // is POSIX-only and the tick's reclaim is what covers that platform.
+        let cancelled = false;
+        if (process.platform !== 'win32') {
+          for (const sig of ['SIGINT', 'SIGTERM']) {
+            process.on(sig, () => { cancelled = true; deployChild?.kill(sig); });
+          }
+        }
+
+        // --timeout-sec / --poll-ms parsing can also throw ValidationError (e.g. a
+        // non-numeric --timeout-sec) — inside this try so it lands on stderr too, not
+        // the generic catch at the bottom of main(), which reports via emitJson on
+        // STDOUT.
+        const timeoutMs = timeoutMsFrom(args);
+        const pollMs = pollMsFrom(args);
+
+        // runDeploy's own outcomes (ok/busy/timeout/aborted) are reported below, but
+        // spawnInherit can also REJECT — any spawn error other than ENOENT (EACCES on a
+        // file without the execute bit, ENOEXEC on a bad shebang, ...) — and runDeploy
+        // re-throws that after its finally block has already released the pause. Left
+        // uncaught here, it would escape to main()'s generic catch, which reports via
+        // emitJson — straight onto STDOUT. That is exactly the channel this command
+        // exists to keep clean for the deployed command, so this failure gets its own
+        // report, on stderr, honouring --json like every other outcome, instead of
+        // falling through to the generic handler.
+        let res;
+        try {
+          res = await runDeploy({
+            root, jobs, defaults, group: target ? target.group : null,
+            reason: args.reason, timeoutMs, pollMs,
+            cmd: cmdv[0], args: cmdv.slice(1),
+            deps: { spawn: spawnInherit, isAborted: () => cancelled },
+          });
+        } catch (e) {
+          // The pause was already released by runDeploy's finally — this is a reporting
+          // failure only, so say plainly what broke and move on with exit 1 (not any of the
+          // command's own codes, not 127/130/2 — none of those fit an unspawnable-but-not-
+          // missing target, so it gets the internal-failure code).
+          res = { outcome: 'error', exit: 1, message: e?.message ?? String(e) };
+        }
+        const report = { action: 'deploy', ...res };
+        process.stderr.write(args.json ? JSON.stringify(report) + '\n' : formatDeploy(report) + '\n');
+        process.exit(deployExitCode(res));
       } catch (e) {
-        // The pause was already released by runDeploy's finally — this is a reporting
-        // failure only, so say plainly what broke and move on with exit 1 (not any of the
-        // command's own codes, not 127/130/2 — none of those fit an unspawnable-but-not-
-        // missing target, so it gets the internal-failure code).
-        res = { outcome: 'error', exit: 1, message: e?.message ?? String(e) };
+        if (!(e instanceof ValidationError)) throw e;
+        const err = { error: { code: 'validation', message: e.message } };
+        process.stderr.write(args.json ? JSON.stringify(err) + '\n' : `deploy: ${e.message}\n`);
+        process.exit(2);
       }
-      const report = { action: 'deploy', ...res };
-      process.stderr.write(args.json ? JSON.stringify(report) + '\n' : formatDeploy(report) + '\n');
-      process.exit(deployExitCode(res));
     }
 
     if (command === 'install-cron' || command === 'remove-cron') {
@@ -482,6 +503,12 @@ function formatHolders(holders) {
 }
 
 export function formatDeploy(r) {
+  // Refused before anything was even attempted (see lib/deploy.mjs's ownership check):
+  // no wait, no pause, no run/DEPLOY write. Names the holder the same way the timeout
+  // branch below names whoever it waited for.
+  if (r.outcome === 'busy') {
+    return `deploy: refused — ${r.message}; nothing paused, nothing run`;
+  }
   if (r.outcome === 'timeout') {
     return `deploy: timed out after ${Math.round(r.waitedMs / 1000)}s waiting for ${formatHolders(r.holders)}; nothing paused, nothing run`;
   }
@@ -504,21 +531,43 @@ export function formatDeploy(r) {
   // reproduce the exact false-report bug the 'aborted' branch above was added to fix, the
   // next time a fourth outcome is introduced.
   if (r.outcome === 'ok') {
-    const scope = r.scope === 'group' ? `group ${r.group}` : 'the scheduler';
+    const scopeLabel = r.scope === 'group' ? `group ${r.group}` : 'the scheduler';
     const kept = r.preserved.length ? `; kept ${r.preserved.length} pre-existing pause(s)` : '';
-    return `deploy: waited ${Math.round(r.waitedMs / 1000)}s, paused ${scope}, command exited ${r.exit}, released${kept}`;
+    // Whether THIS run actually placed a pause — walking into one that was already
+    // there (every member preserved, nothing owned) is not "paused ... released": this
+    // run released nothing, because it held nothing. Same false-report shape the
+    // 'aborted' branch above exists to avoid, just for the 'ok' outcome instead.
+    const didPause = r.scope === 'group' ? r.pausedIds.length > 0 : r.ownedGlobal;
+    const pausePhrase = r.scope === 'group'
+      ? (r.pausedIds.length ? `paused ${r.pausedIds.length} member(s) of ${scopeLabel}` : `found ${scopeLabel} already paused`)
+      : (r.ownedGlobal ? `paused ${scopeLabel}` : `found ${scopeLabel} already paused`);
+    const releasePhrase = didPause ? ', released' : '';
+    return `deploy: waited ${Math.round(r.waitedMs / 1000)}s, ${pausePhrase}, command exited ${r.exit}${releasePhrase}${kept}`;
   }
   return `deploy: unrecognized outcome '${r.outcome}'`;
 }
 
 // Mirrors formatDeploy's explicitness: 'ok' returns the command's own exit code, 'aborted'
-// is the conventional 130, and everything else (timeout, error, or any future outcome) is
-// an internal/administrative failure, not the command's own result — exit 1, never a
-// silent fallthrough to "must have been fine".
+// is the conventional 130, 'busy' is the same validation-class exit as --id/--reason/missing
+// command below, and everything else (timeout, error, or any future outcome) is an
+// internal/administrative failure, not the command's own result — exit 1, never a silent
+// fallthrough to "must have been fine".
 function deployExitCode(res) {
   if (res.outcome === 'ok') return res.exit;
   if (res.outcome === 'aborted') return 130;
+  if (res.outcome === 'busy') return 2;
   return 1;
+}
+
+// wait-idle's human-readable report, mirroring formatDeploy's voice (and reusing
+// formatHolders so a timed-out wait names its holders the same way deploy's own timeout
+// does).
+export function formatWaitIdle(r) {
+  const scopeLabel = r.scope === 'group' ? `group ${r.group}` : 'the scheduler';
+  if (r.idle) {
+    return `wait-idle: ${scopeLabel} idle after ${Math.round(r.waitedMs / 1000)}s`;
+  }
+  return `wait-idle: timed out after ${Math.round(r.waitedMs / 1000)}s waiting for ${formatHolders(r.holders)}`;
 }
 
 // Whether this folder's every-minute tick is registered in the OS scheduler. Read-only
