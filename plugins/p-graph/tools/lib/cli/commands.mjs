@@ -67,7 +67,7 @@ export async function runCommand(ctx) {
 
   if (command === 'callers') {
     const target = opts._[0];
-    const rows = store.callers(target), unresolved = store.unresolvedFor(target);
+    const rows = store.callers(target), unresolved = store.gapsFor(target);
     if (opts.json) return emitJson({ callers: rows, unresolved });
     rows.forEach((r) => out(fmtNode(r)));
     return emitGaps(unresolved);
@@ -77,7 +77,7 @@ export async function runCommand(ctx) {
     const rows = store.callees(target);
     // The source of every gap here IS the symbol asked about — label it, so the
     // banner reads the same way as it does for callers.
-    const unresolved = store.unresolvedFrom(target).map((r) => ({ ...r, src_qname: target }));
+    const unresolved = store.gapsFrom(target).map((r) => ({ ...r, src_qname: target }));
     if (opts.json) return emitJson({ callees: rows, unresolved });
     rows.forEach((r) => out(fmtNode(r)));
     return emitGaps(unresolved);
@@ -86,7 +86,7 @@ export async function runCommand(ctx) {
     const target = opts._[0];
     // The frontier, not just the target: an impact walk also stops at an
     // unattributed call to something it already reached.
-    const rows = store.impact(target), unresolved = store.unresolvedAround(target);
+    const rows = store.impact(target), unresolved = store.gapsAround(target);
     if (opts.json) return emitJson({ impact: rows, unresolved });
     rows.length ? rows.forEach((r) => out(fmtNode(r))) : out('(no impact)');
     return emitGaps(unresolved);
@@ -106,8 +106,8 @@ export async function runCommand(ctx) {
     const n = store.node(opts._[0]); if (!n) die('symbol not found', 1);
     const ctxObj = {
       node: n, callers: store.callers(opts._[0]), callees: store.callees(opts._[0]),
-      unresolved_in: store.unresolvedFor(opts._[0]),
-      unresolved_out: store.unresolvedFrom(opts._[0]).map((r) => ({ ...r, src_qname: n.qname })),
+      unresolved_in: store.gapsFor(opts._[0]),
+      unresolved_out: store.gapsFrom(opts._[0]).map((r) => ({ ...r, src_qname: n.qname })),
     };
     if (opts.json) return emitJson(ctxObj);
     out(fmtNode(n));

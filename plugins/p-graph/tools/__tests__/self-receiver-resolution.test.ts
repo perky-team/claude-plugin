@@ -103,7 +103,7 @@ func Free(x *Server) { x.helper() }
     // `x` is a parameter, not the enclosing receiver (Free is not a method), so
     // the call stays unattributed rather than being guessed at.
     expect(store.callers('api.Server.helper')).toEqual([]);
-    expect(store.unresolvedFor('api.Server.helper')).toHaveLength(1);
+    expect(store.gapsFor('api.Server.helper')).toHaveLength(1);
 
     store.close();
   }, 30000);

@@ -332,49 +332,120 @@ function attachReadHelpers(store, db, hasFts) {
     fts: hasFts,
   });
 
-  // Where the graph gave up. A call edge with no dst_id is a call site pgraph
-  // could not attribute to exactly one symbol: an ambiguous bare name, a
-  // receiver it cannot type (interface, parameter, local, long field chain), or
-  // a call into the stdlib / a third-party package. Every query walks resolved
-  // edges only, so without these reports a dropped call site is
-  // indistinguishable from "nothing calls this" — the graph would answer with
-  // silent holes. Reporting them turns a silent hole into a stated one.
-  const unresolvedByNames = (names) => {
-    const list = [...new Set(names.filter(Boolean).map(String))];
-    if (!list.length) return [];
-    const rows = [];
-    // Chunked so a large impact set can't blow SQLite's bound-parameter limit.
-    for (let i = 0; i < list.length; i += 400) {
-      const chunk = list.slice(i, i + 400);
-      rows.push(...db.prepare(`
-        SELECT e.dst_name, e.file, e.line, s.qname AS src_qname
-        FROM edges e LEFT JOIN nodes s ON s.id = e.src_id
-        WHERE e.kind = 'call' AND e.dst_id IS NULL
-          AND e.dst_name IN (${chunk.map(() => '?').join(',')})`).all(...chunk));
+  // Where an answer is incomplete. Queries walk resolved edges only, so without
+  // this a dropped call site and "nothing calls this" print the same thing.
+  // `reason`:
+  //   'ambiguous' — an unresolved call whose bare name matches a repo symbol, so
+  //                 a real target may exist and be missing from the answer
+  //   'external'  — an unresolved call with no repo candidate at all (stdlib,
+  //                 third party, Go builtin): expected, counted, not worth listing
+  //   'no-caller' — a RESOLVED call to the target made outside any indexed symbol
+  //                 (module scope, a callback body), which `callers` cannot show
+  // `reachable` is 0 only for a Go 'ambiguous' row in a file that neither belongs
+  // to nor imports the target's package: a same-name coincidence is then far more
+  // likely than a real call. Everything else is 1, including all non-Go rows.
+  const gapRows = db.prepare(`
+    SELECT e.dst_name, e.dst_bare, e.file, e.line, e.external, e.lang,
+           s.qname AS src_qname,
+           CASE WHEN e.external = 1 THEN 0 ELSE (
+             SELECT count(*) FROM nodes n
+             WHERE n.name = e.dst_bare AND n.lang = e.lang
+               AND n.kind IN ('function','method','class')) END AS candidates
+    FROM edges e LEFT JOIN nodes s ON s.id = e.src_id
+    WHERE e.kind = 'call' AND e.dst_id IS NULL
+      AND (e.dst_name = ? OR e.dst_bare = ?)`);
+  const noCallerRows = db.prepare(`
+    SELECT e.dst_name, e.file, e.line FROM edges e
+    WHERE e.kind = 'call' AND e.dst_id = ? AND e.src_id IS NULL`);
+  const fileInPackage = db.prepare(
+    `SELECT 1 FROM nodes WHERE file = ? AND qname LIKE ? LIMIT 1`);
+  // Import paths are stored quoted: "x/internal/bufferpool" or "bufferpool".
+  // SQL LIKE treats `_` as a one-character wildcard, so a package name that
+  // contains an underscore can over-match a different import path that has some
+  // other character in that spot. Accepted on purpose: `reachable` is a
+  // relevance hint, not a resolution decision, so the worst case is a rare
+  // false "yes", never a wrong link between symbols.
+  const fileImportsPackage = db.prepare(`
+    SELECT 1 FROM edges WHERE kind = 'import' AND file = ?
+      AND (dst_name LIKE ? OR dst_name LIKE ?) LIMIT 1`);
+
+  // The Go package a symbol lives in is the first segment of its qname.
+  const goPackageOf = (node) =>
+    node && node.lang === 'go' && node.qname.includes('.') ? node.qname.split('.')[0] : null;
+
+  const reachableIn = (file, pkg) => {
+    if (!pkg) return 1;
+    if (fileInPackage.get(file, `${pkg}.%`)) return 1;
+    if (fileImportsPackage.get(file, `%/${pkg}"`, `"${pkg}"`)) return 1;
+    return 0;
+  };
+
+  // `callerCheckIds` are the node ids checked for a resolved-but-caller-less
+  // call (the 'no-caller' reason). Both name-matched gaps and no-caller gaps
+  // share one `seen` set, so a caller that wants no-caller rows for several
+  // node ids at once (gapsAround, across a whole impact set) never needs a
+  // second dedupe pass on top of this one.
+  const collectGaps = (names, target, callerCheckIds = target ? [target.id] : []) => {
+    const pkg = goPackageOf(target);
+    const seen = new Set(), out = [];
+    for (const name of new Set(names.filter(Boolean).map(String))) {
+      for (const r of gapRows.all(name, name)) {
+        const key = `${r.file}|${r.line}|${r.dst_name}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const reason = r.candidates > 0 ? 'ambiguous' : 'external';
+        out.push({
+          file: r.file, line: r.line, dst_name: r.dst_name, src_qname: r.src_qname,
+          reason,
+          reachable: reason === 'ambiguous' && r.lang === 'go' ? reachableIn(r.file, pkg) : 1,
+        });
+      }
     }
-    return rows.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
+    for (const id of callerCheckIds) {
+      for (const r of noCallerRows.all(id)) {
+        const key = `${r.file}|${r.line}|${r.dst_name}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push({ file: r.file, line: r.line, dst_name: r.dst_name,
+          src_qname: null, reason: 'no-caller', reachable: 1 });
+      }
+    }
+    return out.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
   };
-  // A call site carries whatever the source wrote — usually the bare method
-  // name, even when the user asks by qname. Match on both.
-  const targetNames = (nameOrId) => {
-    const n = store.node(nameOrId);
-    return n ? [String(nameOrId), n.name, n.qname] : [String(nameOrId)];
+
+  // A call site records whatever the source wrote, so match the target's bare
+  // name as well as its qname — that is what finds a call made through an import
+  // alias, a shadowed package name, or a receiver-qualified guess that missed.
+  store.gapsFor = (name) => {
+    const target = store.node(name);
+    return collectGaps(target ? [String(name), target.name, target.qname] : [String(name)], target);
   };
-  store.unresolvedFor = (name) => unresolvedByNames(targetNames(name));
-  store.unresolvedFrom = (name) => {
+  store.gapsFrom = (name) => {
     const n = store.node(name);
     if (!n) return [];
     return db.prepare(`
-      SELECT dst_name, file, line FROM edges
-      WHERE kind = 'call' AND dst_id IS NULL AND src_id = ?
-      ORDER BY file, line`).all(n.id);
+      SELECT e.dst_name, e.dst_bare, e.file, e.line, e.external, e.lang,
+             (SELECT count(*) FROM nodes n2
+              WHERE n2.name = e.dst_bare AND n2.lang = e.lang
+                AND n2.kind IN ('function','method','class')) AS candidates
+      FROM edges e WHERE e.kind = 'call' AND e.dst_id IS NULL AND e.src_id = ?
+      ORDER BY e.file, e.line`).all(n.id).map((r) => ({
+        file: r.file, line: r.line, dst_name: r.dst_name, src_qname: n.qname,
+        reason: r.external === 1 || r.candidates === 0 ? 'external' : 'ambiguous',
+        reachable: 1,
+      }));
   };
-  // The frontier of an impact walk: gaps naming the target itself AND gaps
-  // naming anything the walk already reached, which is where it stopped.
-  store.unresolvedAround = (name) => unresolvedByNames([
-    ...targetNames(name),
-    ...store.impact(name).flatMap((n) => [n.name, n.qname]),
-  ]);
+  // The frontier of an impact walk: gaps naming the target AND gaps naming
+  // anything the walk already reached, which is where it stopped. impact() runs
+  // once here and its result feeds both the name list and the no-caller check.
+  store.gapsAround = (name) => {
+    const target = store.node(name);
+    const names = target ? [String(name), target.name, target.qname] : [String(name)];
+    const reached = store.impact(name);
+    for (const n of reached) { names.push(n.name, n.qname); }
+    const callerCheckIds = [...(target ? [target.id] : []), ...reached.map((n) => n.id)];
+    return collectGaps(names, target, callerCheckIds);
+  };
   const MAX_DEPTH = 50;
   store.impact = (name) => {
     const target = store.node(name);

@@ -84,7 +84,7 @@ describe('unresolved call-site reporting', () => {
 
     // Asking by qname must still surface the call sites left bare: they carry
     // the target's bare name, which is exactly why they could not be attributed.
-    const rows = store.unresolvedFor('store.Postgres.ListGroups');
+    const rows = store.gapsFor('store.Postgres.ListGroups');
     expect(rows.map((r) => `${r.file}:${r.line}`)).toEqual([
       'internal/api/server.go:7',
       'internal/api/server.go:9',
@@ -93,9 +93,9 @@ describe('unresolved call-site reporting', () => {
     expect(rows[0].src_qname).toBe('api.Server.HandleList');
     expect(rows[0].dst_name).toBe('ListGroups');
     // The bare name works too — that is what a user usually types.
-    expect(store.unresolvedFor('ListGroups')).toHaveLength(3);
+    expect(store.gapsFor('ListGroups')).toHaveLength(3);
     // A symbol nothing calls ambiguously reports nothing.
-    expect(store.unresolvedFor('api.Serve')).toEqual([]);
+    expect(store.gapsFor('api.Serve')).toEqual([]);
 
     store.close();
   }, 30000);
@@ -105,12 +105,12 @@ describe('unresolved call-site reporting', () => {
     const store = openStore(':memory:');
     await indexFull({ root: dir, store, ignorePatterns: [] });
 
-    const rows = store.unresolvedFrom('api.Server.HandleList');
+    const rows = store.gapsFrom('api.Server.HandleList');
     expect(rows).toHaveLength(1);
     expect(rows[0].dst_name).toBe('ListGroups');
     expect(rows[0].line).toBe(7);
     // The call that resolved is not reported as a gap.
-    expect(store.unresolvedFrom('api.Server.HandleTyped')).toEqual([]);
+    expect(store.gapsFrom('api.Server.HandleTyped')).toEqual([]);
 
     store.close();
   }, 30000);
@@ -126,7 +126,7 @@ describe('unresolved call-site reporting', () => {
       .toEqual(['api.Server.HandleTyped']);
     // The frontier report must include BOTH the target's own bare call sites and
     // the one where the walk stopped one level up.
-    const rows = store.unresolvedAround('store.Postgres.ListGroups');
+    const rows = store.gapsAround('store.Postgres.ListGroups');
     expect(rows.map((r) => `${r.file}:${r.line}`)).toEqual([
       'internal/api/server.go:7',
       'internal/api/server.go:9',
@@ -134,6 +134,141 @@ describe('unresolved call-site reporting', () => {
       'internal/http/router.go:8',
     ]);
 
+    store.close();
+  }, 30000);
+});
+
+// Fixture with the three shapes that hide from a name-keyed report: a local
+// variable that shadows an imported package, a failed own-receiver guess, and a
+// call site outside any indexed symbol.
+function writeHidingFixture() {
+  write('internal/config/config.go', `package config
+func Load() {}
+`);
+  write('internal/related/related.go', `package related
+import "x/internal/config"
+type IndexConfig struct{}
+func (c IndexConfig) ToKeywords() {}
+func Do() {
+	config := IndexConfig{}
+	config.ToKeywords()
+}
+`);
+  write('internal/emb/emb.go', `package emb
+type Base struct{}
+func (b *Base) Get() string { return "" }
+type Wrap struct{ Base }
+func (w *Wrap) Do() string { return w.Get() }
+`);
+  write('internal/rival/rival.go', `package rival
+type Rival struct{}
+func (r *Rival) Get() string { return "" }
+`);
+  write('web/boot.ts', `import { Engine } from './engine';
+const e = new Engine();
+e.start();
+`);
+  // Motor's method has a different name from Engine's on purpose: if both were
+  // "start", the bare name would not be unique, and the store's own bare-name
+  // fallback (Pass B) would leave the call unresolved instead of the resolved,
+  // caller-less edge this fixture needs.
+  write('web/engine.ts', `export class Engine { start() {} }
+export class Motor { spin() {} }
+`);
+}
+
+describe('the gap report finds gaps recorded under another name', () => {
+  it('reports a call recorded under a shadowed package name', async () => {
+    writeHidingFixture();
+    const store = openStore(':memory:');
+    await indexFull({ root: dir, store, ignorePatterns: [] });
+
+    // The call is recorded as "config.ToKeywords" because a local variable shadows
+    // the imported package. Asking about the method by qname must still find it.
+    const rows = store.gapsFor('related.IndexConfig.ToKeywords');
+    const row = rows.find((r) => r.file === 'internal/related/related.go');
+    expect(row).toBeTruthy();
+    expect(row.dst_name).toBe('config.ToKeywords');
+    expect(row.reason).toBe('ambiguous');
+    store.close();
+  }, 30000);
+
+  it('reports a failed own-receiver guess for a promoted method', async () => {
+    writeHidingFixture();
+    const store = openStore(':memory:');
+    await indexFull({ root: dir, store, ignorePatterns: [] });
+
+    // emb.Wrap embeds a repo type, so Pass C links it. Break that by making the
+    // embedded type external-only, leaving a gap recorded as "emb.Wrap.Get".
+    write('internal/emb/emb.go', `package emb
+import "sync"
+type Wrap struct{ sync.Mutex }
+func (w *Wrap) Do() string { return w.Get() }
+`);
+    await indexFull({ root: dir, store, ignorePatterns: [] });
+
+    const rows = store.gapsFor('rival.Rival.Get');
+    const row = rows.find((r) => r.file === 'internal/emb/emb.go');
+    expect(row).toBeTruthy();
+    expect(row.dst_name).toBe('emb.Wrap.Get');
+    expect(row.reason).toBe('ambiguous');
+    store.close();
+  }, 30000);
+
+  it('reports a resolved call site that sits outside any indexed symbol', async () => {
+    writeHidingFixture();
+    const store = openStore(':memory:');
+    await indexFull({ root: dir, store, ignorePatterns: [] });
+
+    // `e.start()` is at module scope in boot.ts: resolved, but callers() cannot
+    // show a caller row for it.
+    expect(store.callers('Engine.start')).toEqual([]);
+    const rows = store.gapsFor('Engine.start');
+    const row = rows.find((r) => r.file === 'web/boot.ts');
+    expect(row).toBeTruthy();
+    expect(row.reason).toBe('no-caller');
+    store.close();
+  }, 30000);
+
+  it('separates calls that leave the repo from calls that may have a target here', async () => {
+    write('a/a.go', `package a
+import "fmt"
+type T struct{}
+func (t *T) Do() { fmt.Println("x"); _ = len("y") }
+`);
+    const store = openStore(':memory:');
+    await indexFull({ root: dir, store, ignorePatterns: [] });
+
+    const rows = store.gapsFrom('a.T.Do');
+    const reasons = rows.map((r) => r.reason).sort();
+    // fmt.Println has no repo candidate; len is a builtin marked external.
+    expect(reasons).toEqual(['external', 'external']);
+    store.close();
+  }, 30000);
+
+  it('flags a same-name gap in a file that cannot see the target package', async () => {
+    write('logs/logs.go', `package logs
+type Adapter struct{}
+func (a *Adapter) Errorf(f string, v ...any) {}
+`);
+    // A second, unrelated Errorf keeps the bare name from being repo-unique —
+    // otherwise the store's own bare-name fallback would resolve the call
+    // outright instead of leaving it as an ambiguous gap.
+    write('logs2/logs2.go', `package logs2
+type Adapter struct{}
+func (a *Adapter) Errorf(f string, v ...any) {}
+`);
+    write('far/far_test.go', `package far
+import "testing"
+func TestX(t *testing.T) { t.Errorf("boom") }
+`);
+    const store = openStore(':memory:');
+    await indexFull({ root: dir, store, ignorePatterns: [] });
+
+    const rows = store.gapsFor('logs.Adapter.Errorf');
+    const row = rows.find((r) => r.file === 'far/far_test.go');
+    expect(row).toBeTruthy();
+    expect(row.reachable).toBe(0); // far/ never imports logs/
     store.close();
   }, 30000);
 });
