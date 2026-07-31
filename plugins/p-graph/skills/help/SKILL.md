@@ -18,11 +18,15 @@ Present this cheat-sheet:
 - `files <path>` — files under a path with symbol counts.
 - `index [--full|--changed]` / `status` — build / inspect the graph.
 
-Refresh with `/p-graph:sync`. Prefer these over grep for structural questions.
+Refresh with `/p-graph:sync`. Use the graph for candidates and for a transitive
+`impact` sketch; confirm counts with grep — it costs about the same and cannot
+silently miss a hit.
 
 **Read the gap banner.** `callers` / `callees` / `impact` / `context` end with
-`⚠ N unattributed call sites` when the graph could not tell which symbol a call
-targets (interface, parameter or local receiver; ambiguous bare name). Those call
-sites are missing from the answer above it, so pass the banner on and grep to
-confirm. `status` shows the repo-wide share as `unattributed calls N/M`. Always
-ask by `qname` — a bare name merges every symbol that shares it.
+`⚠ N call sites missing from this answer` when the graph could not tell which
+symbol a call targets (interface, parameter or local receiver; ambiguous bare
+name), or when a resolved call has no caller symbol to show. Gaps are grouped —
+listed rows are worth checking, the two counted groups are scale. Pass the
+banner on and grep to confirm. `status` shows the repo-wide share as
+`unattributed calls N/M`. Always ask by `qname` — a bare name merges every
+symbol that shares it.

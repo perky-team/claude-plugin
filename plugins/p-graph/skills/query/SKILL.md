@@ -49,7 +49,7 @@ Run every command via `node "${CLAUDE_PLUGIN_ROOT}/tools/pgraph.mjs" <cmd>`. ALW
 `qname`, then feed that to `callers` / `callees` / `impact` / `trace`. `context X` is the fastest
 single call for "tell me about X" — one call returns the symbol plus its immediate callers and
 callees. Pass `--json` to any read command if you want to post-process the rows: `callers`,
-`callees` and `impact` return `{ <command>: [rows], unresolved: [gaps] }`.
+`callees` and `impact` return `{ <command>: [rows], gaps: [gap rows] }`.
 
 **Ask by `qname`, never by bare name.** `callers Get` matches *every* symbol named `Get` and merges
 their callers into one list with no marker. `callers store.Postgres.Get` asks about one symbol.
@@ -64,15 +64,23 @@ proof of a short list.
 `callers`, `callees`, `impact` and `context` therefore print, after the rows:
 
 ```
-⚠ 3 unattributed call sites — this answer may be incomplete:
+⚠ 3 call sites missing from this answer:
     internal/api/server.go:41  api.Server.HandleList -> ListGroups
+    internal/api/server.go:58  api.Serve -> bp.ListGroups
+    web/boot.ts:12  outside any indexed symbol -> start
+  + 12 same-name call sites in files that do not import the target's package — likely unrelated, not listed.
+  + 365 calls that leave the repo (stdlib, third party, builtins) — nothing to link.
+  Confirm with a text search before treating this answer as complete.
 ```
 
-**You MUST pass this on to the user whenever it appears** — the count, and the `file:line` of each
-gap. Never present a list as complete while the banner is there. Say plainly that the graph could
-not attribute those call sites and that a text search (grep for the bare name) is needed to close
-the gap. If the user's question is "did I find every call site?", the honest answer with a banner
-present is: **no — here is what the graph found, and here is where it gave up.**
+**You MUST pass this on to the user whenever it appears** — the listed `file:line` rows and both
+counts. Never present a list as complete while the banner is there. The listed rows are the ones
+worth checking by hand; the two counted groups are for scale, and you should say what they are
+rather than hiding them.
+
+A resolved row is a strong lead, not a fact: the graph matches names, not types. If the user's
+question is "did I find every call site?" or "is this safe to change?", the honest answer is: here
+is what the graph found, here is where it gave up — now confirm with a text search.
 
 `status` ends with `unattributed calls N/M`. A high share means treat every structural answer in
 that repo as a lead, not as proof.

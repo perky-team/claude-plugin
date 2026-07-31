@@ -1,12 +1,14 @@
-## p-graph — prefer the code graph over grep for structural questions
+## p-graph — a code knowledge graph for structural questions, checked with grep
 
 This repo has a `pgraph` code knowledge graph. For a natural-language structural
 question ("who calls X", "what breaks if I change Y", "how does X reach Y"), run
 `/p-graph:query <question>` — it picks the right commands and answers with
 `file:line` citations. To drive the CLI yourself, run via Bash:
 `node ${CLAUDE_PLUGIN_ROOT}/tools/pgraph.mjs <cmd>` — or the `pgraph` wrapper if
-installed. Use grep/Read only for literal text (string contents, comments, log
-messages).
+installed. Use the graph to find candidates fast and to get a transitive
+`impact` sketch in one call. Use grep/Read for literal text (string contents,
+comments, log messages) and to confirm any answer that carries the gap banner
+below — a text search costs about the same and cannot silently miss a hit.
 
 | Question | Command |
 |---|---|
@@ -23,10 +25,13 @@ messages).
 A call it cannot type — a method on an interface, a parameter, a local variable, or
 any ambiguous bare name — is dropped, and `callers` / `impact` / `trace` walk
 resolved calls only. `callers`, `callees`, `impact` and `context` print
-`⚠ N unattributed call sites` with each `file:line` when that happened; `status`
-shows the repo-wide share. **Relay that banner to the user and grep to close the
-gap — never present a list as complete while it is there.** Ask by `qname`, not by
-bare name: `callers Get` merges every symbol named `Get`.
+`⚠ N call sites missing from this answer` with each `file:line`, plus a count of
+same-name call sites in files that cannot see the target and a count of calls
+that leave the repo; `status` shows the repo-wide share. Gaps are grouped —
+listed rows are worth checking, the two counted groups are scale. **Relay that
+banner to the user and grep to close the gap — never present a list as complete
+while it is there.** Ask by `qname`, not by bare name: `callers Get` merges every
+symbol named `Get`.
 
 **Freshness:** structural queries **auto-refresh** the graph before answering —
 `pgraph` reindexes any changed files first, so a query never answers from a stale

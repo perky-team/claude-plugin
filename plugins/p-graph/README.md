@@ -80,9 +80,10 @@ Structural queries **auto-refresh** the graph before answering: `pgraph` reindex
 changed files first (incrementally, git-based), so day-to-day freshness is
 automatic and you rarely need `/p-graph:sync`. Pass `--stale-ok` or set
 `PGRAPH_AUTOREFRESH=0` on any query to skip the refresh and answer from the graph
-as-is (you'll get a `⚠ p-graph STALE` note on stderr when it's stale). Prefer these
-commands over grep for structural questions — a grep can find a symbol name in a
-string literal; the graph tells you what actually calls it at runtime.
+as-is (you'll get a `⚠ p-graph STALE` note on stderr when it's stale). Use the
+graph to find candidates fast and to get a transitive `impact` sketch in one
+call. Use grep to confirm a count: on a 900-file Go repo a text search costs
+about the same as a graph query, and it cannot silently omit a hit.
 
 ## How it works
 
@@ -93,7 +94,7 @@ string literal; the graph tells you what actually calls it at runtime.
 
 ### Name resolution
 
-Each symbol carries a bare `name` (used for search/UX) and a qualified `qname`. Call edges are resolved conservatively: an edge links to a target only when exactly one symbol matches — first by an exact qualified-name match, then falling back to a unique bare-name match. A genuinely ambiguous name (the same bare name in two places, with no qualifier to tell them apart) is left **unresolved** rather than linked to a guess — `pgraph` never invents a false edge, because a wrong edge would make `impact`/`callers`/`trace` lie. Calls into the standard library or external packages have no symbol in the repo and likewise stay unresolved.
+Each symbol carries a bare `name` (used for search/UX) and a qualified `qname`. Call edges are resolved conservatively: an edge links to a target only when exactly one symbol matches — first by an exact qualified-name match, then falling back to a unique bare-name match. A genuinely ambiguous name (the same bare name in two places, with no qualifier to tell them apart) is left **unresolved** rather than linked to a guess. That guard is not a proof of correctness: the resolver matches names, not types. A call on a function parameter or a local variable has no recorded type, so a bare name that happens to be unique in the repo still links — even when the real receiver is a different type altogether. Interface dispatch is not resolved at all; those calls are dropped by design and show up only in the gap report below. Measured on gohugoio/hugo before this round of fixes: exact qualified matches were correct in 18 of 18 hand-checked cases, and bare-name matches in 20 of 22 — Task 8 will publish fresh numbers. Treat a `callers` row as a strong lead, not as a fact. Calls into the standard library or external packages have no symbol in the repo and likewise stay unresolved.
 
 For **Go**, `qname` is package- and receiver-qualified — a package-level `New` in package `filesink` becomes `filesink.New`, and a method becomes `filesink.Writer.Write`. Call sites are qualified the same way: `filesink.New(...)` and same-package `New()` calls both resolve to `filesink.New`, so common names (`New`, `Write`, `Close`, `Run`) no longer collapse into one ambiguous bucket.
 
@@ -108,14 +109,20 @@ Dropping an ambiguous call keeps `pgraph` from inventing a false edge, but it co
 So every graph query names its own gaps. `callers`, `callees`, `impact` and `context` print, after the rows:
 
 ```
-⚠ 3 unattributed call sites — this answer may be incomplete:
+⚠ 3 call sites missing from this answer:
     internal/api/server.go:41  api.Server.HandleList -> ListGroups
-    internal/api/server.go:58  api.Serve -> ListGroups
-    internal/http/router.go:12  http.Router.Route -> ListGroups
-  The graph could not tell which symbol these call. Confirm with a text search before treating this answer as complete.
+    internal/api/server.go:58  api.Serve -> bp.ListGroups
+    web/boot.ts:12  outside any indexed symbol -> start
+  + 12 same-name call sites in files that do not import the target's package — likely unrelated, not listed.
+  + 365 calls that leave the repo (stdlib, third party, builtins) — nothing to link.
+  Confirm with a text search before treating this answer as complete.
 ```
 
-`impact` reports the whole **frontier** — gaps naming the target *and* gaps naming anything the walk already reached, which is where it stopped. `trace` says so too: a missing path prints `(no path — but N/M call sites are unattributed, so a real path may be invisible to the graph)`. `status` carries the repo-wide share as `unattributed calls N/M`. With `--json`, `callers`/`callees`/`impact` return `{ <command>: [rows], unresolved: [gaps] }`.
+A gap is matched by the **bare name** each call site actually wrote, not by the name you asked about. That is what finds a call made through an import alias (`bp.ListGroups` for `bufferpool.ListGroups`), through a local variable that shadows a package name, or through a receiver-qualified guess whose target does not exist. Three groups are reported separately, so the list stays short enough to read: call sites that may be a real miss are listed (capped at 20, with a `… and N more` line past that); same-name call sites in files that cannot even see the target's package are counted; and calls that leave the repo are counted. `--json` returns every row with its `reason` and `reachable` fields.
+
+`callers` also cannot show a caller row for a call made outside any indexed symbol — at module scope, or inside a callback that is not a definition. Those call sites are resolved in the graph but have no source symbol, so they appear in the gap report as `outside any indexed symbol` instead of vanishing.
+
+`impact` reports the whole **frontier** — gaps naming the target *and* gaps naming anything the walk already reached, which is where it stopped. `trace` says so too: a missing path prints `(no path — but N/M call sites are unattributed, so a real path may be invisible to the graph)`. `status` carries the repo-wide share as `unattributed calls N/M`. With `--json`, `callers`/`callees`/`impact` return `{ <command>: [rows], gaps: [gap rows] }`; `context` returns the two sides separately as `gaps_in` and `gaps_out`.
 
 One thing the reports cannot fix: `callers`, `callees` and `impact` match a bare `name` as well as a `qname`, so `callers Get` merges the callers of *every* symbol named `Get`. Ask by `qname` (`callers store.Postgres.Get`) whenever a name is shared.
 
