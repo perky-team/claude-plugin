@@ -37,18 +37,34 @@ export async function runCommand(ctx) {
 
   const fmtNode = (n) => `${n.kind} ${n.qname}  ${n.file}:${n.start_line}  ${n.signature}`;
 
-  // Name the call sites pgraph could not attribute to a symbol, so a short
-  // answer is never mistaken for a complete one. Queries walk resolved edges
-  // only: without this banner "no callers" and "I gave up here" print the same.
+  // Name the call sites this answer is missing, without burying them. A gap that
+  // shares a name with the target but sits in a file that cannot even see the
+  // target's package is almost always a coincidence, and a call that leaves the
+  // repo can never be linked — both are counted honestly and not listed, because
+  // a banner nobody reads is worse than none.
   const GAP_LIMIT = 20;
   const emitGaps = (rows) => {
-    if (!rows.length) return;
-    out(`⚠ ${rows.length} unattributed call site${rows.length === 1 ? '' : 's'} — this answer may be incomplete:`);
-    for (const r of rows.slice(0, GAP_LIMIT)) {
-      out(`    ${r.file}:${r.line}  ${r.src_qname ?? '(file scope)'} -> ${r.dst_name}`);
+    const listed = rows.filter((r) => r.reason !== 'external' && r.reachable !== 0);
+    const unrelated = rows.filter((r) => r.reason === 'ambiguous' && r.reachable === 0).length;
+    const external = rows.filter((r) => r.reason === 'external').length;
+    if (!listed.length && !unrelated && !external) return;
+    if (listed.length) {
+      out(`⚠ ${listed.length} call site${listed.length === 1 ? '' : 's'} missing from this answer:`);
+      for (const r of listed.slice(0, GAP_LIMIT)) {
+        const where = r.reason === 'no-caller'
+          ? 'outside any indexed symbol'
+          : (r.src_qname ?? 'file scope');
+        out(`    ${r.file}:${r.line}  ${where} -> ${r.dst_name}`);
+      }
+      if (listed.length > GAP_LIMIT) out(`    … and ${listed.length - GAP_LIMIT} more`);
     }
-    if (rows.length > GAP_LIMIT) out(`    … and ${rows.length - GAP_LIMIT} more`);
-    out('  The graph could not tell which symbol these call. Confirm with a text search before treating this answer as complete.');
+    if (unrelated) {
+      out(`  + ${unrelated} same-name call site${unrelated === 1 ? '' : 's'} in files that do not import the target's package — likely unrelated.`);
+    }
+    if (external) {
+      out(`  + ${external} call${external === 1 ? '' : 's'} that leave${external === 1 ? 's' : ''} the repo (stdlib, third party, builtins) — nothing to link.`);
+    }
+    out('  Confirm with a text search before treating this answer as complete.');
   };
 
   if (command === 'search') {
@@ -67,29 +83,26 @@ export async function runCommand(ctx) {
 
   if (command === 'callers') {
     const target = opts._[0];
-    const rows = store.callers(target), unresolved = store.gapsFor(target);
-    if (opts.json) return emitJson({ callers: rows, unresolved });
+    const rows = store.callers(target), gaps = store.gapsFor(target);
+    if (opts.json) return emitJson({ callers: rows, gaps });
     rows.forEach((r) => out(fmtNode(r)));
-    return emitGaps(unresolved);
+    return emitGaps(gaps);
   }
   if (command === 'callees') {
     const target = opts._[0];
-    const rows = store.callees(target);
-    // The source of every gap here IS the symbol asked about — label it, so the
-    // banner reads the same way as it does for callers.
-    const unresolved = store.gapsFrom(target).map((r) => ({ ...r, src_qname: target }));
-    if (opts.json) return emitJson({ callees: rows, unresolved });
+    const rows = store.callees(target), gaps = store.gapsFrom(target);
+    if (opts.json) return emitJson({ callees: rows, gaps });
     rows.forEach((r) => out(fmtNode(r)));
-    return emitGaps(unresolved);
+    return emitGaps(gaps);
   }
   if (command === 'impact') {
     const target = opts._[0];
     // The frontier, not just the target: an impact walk also stops at an
     // unattributed call to something it already reached.
-    const rows = store.impact(target), unresolved = store.gapsAround(target);
-    if (opts.json) return emitJson({ impact: rows, unresolved });
+    const rows = store.impact(target), gaps = store.gapsAround(target);
+    if (opts.json) return emitJson({ impact: rows, gaps });
     rows.length ? rows.forEach((r) => out(fmtNode(r))) : out('(no impact)');
-    return emitGaps(unresolved);
+    return emitGaps(gaps);
   }
   if (command === 'trace') {
     const path = store.trace(opts._[0], opts._[1]);
@@ -106,14 +119,14 @@ export async function runCommand(ctx) {
     const n = store.node(opts._[0]); if (!n) die('symbol not found', 1);
     const ctxObj = {
       node: n, callers: store.callers(opts._[0]), callees: store.callees(opts._[0]),
-      unresolved_in: store.gapsFor(opts._[0]),
-      unresolved_out: store.gapsFrom(opts._[0]).map((r) => ({ ...r, src_qname: n.qname })),
+      gaps_in: store.gapsFor(opts._[0]),
+      gaps_out: store.gapsFrom(opts._[0]),
     };
     if (opts.json) return emitJson(ctxObj);
     out(fmtNode(n));
     out('callers:'); ctxObj.callers.forEach((r) => out('  ' + fmtNode(r)));
     out('callees:'); ctxObj.callees.forEach((r) => out('  ' + fmtNode(r)));
-    return emitGaps([...ctxObj.unresolved_in, ...ctxObj.unresolved_out]);
+    return emitGaps([...ctxObj.gaps_in, ...ctxObj.gaps_out]);
   }
   if (command === 'explore') {
     const rows = opts._.map((q) => store.node(q)).filter(Boolean);
