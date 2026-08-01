@@ -83,6 +83,20 @@ describe('collectStatus', () => {
     const j = status.jobs.find((x: any) => x.id === 'selfpaused');
     expect(j).toMatchObject({ pauseOrigin: 'self' });
   });
+
+  // `writeGlobalPause` only ever writes an explicit `origin` field for a deploy pause — a
+  // plain `pshed pause --reason ...` writes none (see lib/pause.mjs) — so a present marker
+  // with no `origin` key can only be an ordinary operator pause. Before this fix, that case
+  // reported `pauseOrigin: undefined`, which a JSON consumer cannot tell apart from "marker
+  // present but truly unknown"; per-job status never has this ambiguity, since a written
+  // header always says which non-self origin it is.
+  it('reports pauseOrigin "operator" for a global marker with no explicit origin field', () => {
+    writeJobs(root, { version: 1, defaults: {}, jobs: [] });
+    writeGlobalPause(root, { reason: 'reconfiguring', now: 1 }); // no origin arg -> operator
+    const status = collectStatus(root);
+    expect(status.paused).toBe(true);
+    expect(status.pauseOrigin).toBe('operator');
+  });
 });
 
 describe('formatHuman', () => {

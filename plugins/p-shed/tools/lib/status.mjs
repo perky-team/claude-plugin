@@ -55,7 +55,13 @@ export function collectStatus(root, { installed = null, deps = {} } = {}) {
     pauseReason: gp != null ? gp.reason : undefined,
     // Same origin visibility as per-job, above, for the global marker: a live `deploy`
     // and a halt an operator set and forgot about used to be indistinguishable here.
-    pauseOrigin: gp != null ? gp.origin : undefined,
+    // `writeGlobalPause` only ever writes an explicit `origin` for a `deploy` pause — a
+    // plain `pause --reason ...` writes no origin field at all (see lib/pause.mjs) — so
+    // a present marker with no `origin` key can only be an ordinary operator pause, never
+    // "unknown". Defaulting to 'operator' here (instead of leaving it undefined) is what
+    // makes a JSON consumer able to tell the two apart at all; per-job already can't be
+    // ambiguous this way, since a written header always says which non-self origin it is.
+    pauseOrigin: gp != null ? (gp.origin ?? 'operator') : undefined,
     jobs: jobStatuses,
   };
 }
