@@ -18,12 +18,25 @@ const sentinel = () => join(root, 'called.txt');
 
 // A fake "claude" that copies the RUNNING job's pidfile into a sentinel, proving the
 // duplicate/group guard could see it for the whole run.
+//
+// The trailing `exit 0` is load-bearing: without it the script's status is the COPY's
+// status, so a missing or not-yet-written pidfile makes `cat` exit 1 and the run reads
+// as a genuine `failure`. Measured on Linux, where four tests in this file failed for
+// that reason alone — the scheduler was classifying the stub correctly and the stub was
+// lying. Windows hid it because `type` under `@echo off` leaves the batch status at 0.
 const wireFakeClaude = (id: string) => {
   const fake = join(root, process.platform === 'win32' ? 'claude.cmd' : 'claude.sh');
   if (process.platform === 'win32') {
-    writeFileSync(fake, `@echo off\r\ntype "${pidFile(id)}" > "${sentinel()}" 2>nul\r\n`);
+    writeFileSync(fake, `@echo off\r\ntype "${pidFile(id)}" > "${sentinel()}" 2>nul\r\nexit /b 0\r\n`);
   } else {
-    writeFileSync(fake, `#!/bin/sh\ncat "${pidFile(id)}" > "${sentinel()}" 2>/dev/null\n`);
+    // Wait briefly for the pidfile to appear before copying it. The pid only exists
+    // once the child is spawned, so `onSpawn` necessarily writes the file a moment
+    // AFTER the stub starts running — on Linux the stub routinely won this race and
+    // copied nothing, which the test then read as "the guard could not see the run".
+    writeFileSync(
+      fake,
+      `#!/bin/sh\ni=0\nwhile [ ! -s "${pidFile(id)}" ] && [ $i -lt 40 ]; do i=$((i+1)); sleep 0.05; done\ncat "${pidFile(id)}" > "${sentinel()}" 2>/dev/null\nexit 0\n`,
+    );
     chmodSync(fake, 0o755);
   }
   writeFileSync(join(root, '.pshed', 'config.json'), JSON.stringify({ nodeBin: 'node', claudeBin: fake }));
