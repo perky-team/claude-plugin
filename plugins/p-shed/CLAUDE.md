@@ -70,7 +70,16 @@ Pure scheduler/launcher. Key decisions:
   and **the reason stays plain text** (`status`'s `pauseReason` / `--human` column and
   the tick's `skipped-paused` are where a human reads it — a JSON blob there is a
   regression). Pausing an already-paused job keeps the FIRST reason: it explains why
-  the job actually stopped.
+  the job actually stopped — **except an operator pause landing on a still-live
+  `deploy`-origin marker, which takes OWNERSHIP of it instead** (origin flips to
+  `operator`, and the reason is replaced when one is given). Without that exception, a
+  human's incident halt placed mid-deploy would be silently lifted the instant the
+  deploy finished and released — `release()` only ever clears a marker still carrying
+  ITS OWN origin (see `dropOwnPauses` in `lib/deploy.mjs`), so flipping the origin is
+  what makes the halt survive. Every other combination — self/self, operator/operator,
+  self walked into by an operator — keeps the first reason unchanged; this is the one
+  carve-out, and it exists only because `deploy` release is the one actor that would
+  otherwise auto-clear a marker a human is actively relying on.
 - **Three-way run classification, not two.** `tick` no longer branches on `exit === 0`
   alone; it calls `classifyRun(exit, out, err)` (`lib/classify.mjs`) → `success` |
   `usage_limit` | `failure`. A Claude usage-limit or transient API overload (`429`/`529`,

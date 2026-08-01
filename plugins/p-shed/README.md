@@ -71,7 +71,7 @@ kinds of row, distinguished by which fields they carry — a consumer should bra
 | `usage` | result JSON parsed | what the run cost — see below |
 
 **Reclaim records** — one per tick that lifted an abandoned deploy pause (see
-`run/DEPLOY` below). Not a run: no job launched, so it carries neither `outcome` (never
+`run/DEPLOY` above, in the `.pshed/` layout table). Not a run: no job launched, so it carries neither `outcome` (never
 one of the four run values above) nor a real `durationMs`, and `job` is explicit `null`
 rather than an absent field:
 
