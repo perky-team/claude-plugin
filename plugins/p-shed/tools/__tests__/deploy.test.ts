@@ -228,6 +228,11 @@ describe('C1 — refusing a concurrent deploy', () => {
     expect(res.holder).toEqual({ pid: 555, reason: 'other deploy' });
     expect(res.message).toMatch(/555/);
     expect(res.message).toMatch(/other deploy/);
+    // Minor: pids get recycled (aggressively on Windows), so a killed deploy's pid can be
+    // reassigned to an unrelated live process — the refusal above then fires forever, and
+    // with cron torn down (`pshed stop`) nothing sweeps run/DEPLOY to clear it. The
+    // message must name the recovery, not just the diagnosis.
+    expect(res.message).toMatch(/\.pshed[\\/]run[\\/]DEPLOY/);
     // No wait, pause, run, or release was even attempted — this is a refusal, not a
     // dance that unwound partway through.
     expect(order).toEqual([]);
@@ -285,6 +290,11 @@ describe('I1 — an operator pause during a deploy survives the deploy release',
     const after = readGlobalPause(root);
     expect(after).not.toBeNull();
     expect(after).toMatchObject({ origin: 'operator', reason: 'incident: stop everything' });
+    // The result must say so too — this is the whole point of the fix. Before it, the
+    // takeover was silently dropped: dropOwnPauses() skipped the removal (correctly) but
+    // never reported having done so, so the caller had no way to learn the "release" it
+    // just claimed left a halt standing.
+    expect(res.takenOver).toEqual([{ scope: 'global', origin: 'operator', reason: 'incident: stop everything' }]);
   });
 
   it('group scope: writePause takes ownership mid-run, and release leaves it alone', async () => {
@@ -302,6 +312,10 @@ describe('I1 — an operator pause during a deploy survives the deploy release',
     expect(res.outcome).toBe('ok');
     expect(duringRun).toMatchObject({ alreadyPaused: true, tookOwnership: true, origin: 'operator', reason: 'incident: stop everything' });
     expect(readPauseRecord(root, 'worker')).toEqual({ origin: 'operator', reason: 'incident: stop everything' });
+    // 'chat' was placed by this deploy and never touched by anyone else, so it is released
+    // normally; only 'worker' shows up as taken over.
+    expect(res.takenOver).toEqual([{ scope: 'job', id: 'worker', origin: 'operator', reason: 'incident: stop everything' }]);
+    expect(existsSync(pausePath(root, 'chat'))).toBe(false);
   });
 });
 

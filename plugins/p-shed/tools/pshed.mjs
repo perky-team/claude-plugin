@@ -541,7 +541,30 @@ export function formatDeploy(r) {
     const pausePhrase = r.scope === 'group'
       ? (r.pausedIds.length ? `paused ${r.pausedIds.length} member(s) of ${scopeLabel}` : `found ${scopeLabel} already paused`)
       : (r.ownedGlobal ? `paused ${scopeLabel}` : `found ${scopeLabel} already paused`);
-    const releasePhrase = didPause ? ', released' : '';
+    // An operator `pause` can land on this run's OWN marker while the command is still
+    // running and take ownership of it (see lib/deploy.mjs's dropOwnPauses) — the command
+    // genuinely ran and exited, but the halt it placed is still standing, now held by the
+    // operator. Claiming "released" here would be the exact false-report shape the
+    // 'aborted' branch above exists to avoid: this run did place a pause, so `didPause` is
+    // true, but it did not release everything it placed, so it must not say it did.
+    const takenOver = r.takenOver ?? [];
+    let releasePhrase = '';
+    if (didPause) {
+      if (r.scope === 'group') {
+        const takenIds = takenOver.filter((t) => t.scope === 'job').map((t) => t.id);
+        const releasedCount = r.pausedIds.length - takenIds.length;
+        if (takenIds.length === 0) {
+          releasePhrase = ', released';
+        } else {
+          const releasedPart = releasedCount > 0 ? `released ${releasedCount}, ` : '';
+          releasePhrase = `, ${releasedPart}but an operator took over ${takenIds.join(', ')} — still paused`;
+        }
+      } else {
+        releasePhrase = takenOver.some((t) => t.scope === 'global')
+          ? ', but an operator took over the pause — still halted'
+          : ', released';
+      }
+    }
     return `deploy: waited ${Math.round(r.waitedMs / 1000)}s, ${pausePhrase}, command exited ${r.exit}${releasePhrase}${kept}`;
   }
   return `deploy: unrecognized outcome '${r.outcome}'`;

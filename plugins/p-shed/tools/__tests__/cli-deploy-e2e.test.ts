@@ -121,6 +121,41 @@ describe('formatDeploy', () => {
     expect(text).toMatch(/found group hft already paused/i);
   });
 
+  // I1: an operator `pause` can land on THIS run's own marker while the command is still
+  // running and take ownership of it (see lib/deploy.mjs's dropOwnPauses/takenOver). The
+  // command genuinely ran and exited — outcome is 'ok' — but the halt it placed is still
+  // standing, now held by the operator. Claiming "released" here would be exactly the
+  // false-report shape the 'aborted' branch exists to avoid, just reachable through 'ok'
+  // instead: measured on pre-fix HEAD, this exact report shape rendered as "...released"
+  // while run/PAUSED was still sitting on disk under operator ownership.
+  it('does not claim "released" when an operator took over the global pause mid-run', () => {
+    const report = {
+      action: 'deploy', outcome: 'ok', exit: 0, waitedMs: 0, attempts: 1,
+      scope: 'global', group: null, pausedIds: [], ownedGlobal: true, preserved: [],
+      releaseErrors: [],
+      takenOver: [{ scope: 'global', origin: 'operator', reason: 'incident: stop everything' }],
+    };
+    const text = formatDeploy(report);
+    expect(text).toMatch(/paused the scheduler/i);
+    expect(text).not.toMatch(/, released/i);
+    expect(text).toMatch(/still halted/i);
+  });
+
+  it('group scope: reports the members actually released, distinct from ones an operator took over', () => {
+    const report = {
+      action: 'deploy', outcome: 'ok', exit: 0, waitedMs: 1, attempts: 1,
+      scope: 'group', group: 'hft', pausedIds: ['worker', 'chat'], ownedGlobal: false,
+      preserved: [], releaseErrors: [],
+      takenOver: [{ scope: 'job', id: 'worker', origin: 'operator', reason: 'incident' }],
+    };
+    const text = formatDeploy(report);
+    expect(text).toMatch(/paused 2 member\(s\) of group hft/i);
+    expect(text).toMatch(/released 1,/i); // the one member nobody touched IS released
+    expect(text).not.toMatch(/released 2/i); // never the unqualified "everything released"
+    expect(text).toMatch(/operator took over worker/i);
+    expect(text).toMatch(/still paused/i);
+  });
+
   // C1: a second deploy refused outright before ever touching run/DEPLOY or a pause.
   it('reports a refusal by name — the holder pid and reason, nothing paused or run', () => {
     const report = {
@@ -423,6 +458,55 @@ describe('C1 — a second deploy refuses while a real first deploy is still runn
     } finally {
       await aExit; // let A finish and release the checkout on its own
     }
+  }, 20_000);
+});
+
+// I1: the scenario from the finding, reproduced with a real deploy process and a real
+// concurrent `pause`, exactly as an operator would trigger it — an incident lands while a
+// deploy is mid-run, so they run `pshed pause --reason "..."`. Before this fix, deploy's
+// own release cleared run/PAUSED regardless (the marker still carried origin 'deploy' as
+// far as it knew) and the report claimed "...released" while exiting 0 — a deploy script
+// keyed on that exit code would believe the loop is running when every job is halted.
+describe('I1 — an operator pause landing mid-deploy is not silently released', () => {
+  const NODE = process.execPath;
+
+  it("survives the deploy's own release, and the report says so honestly instead of claiming 'released'", async () => {
+    writeJobs(TWO_JOBS);
+    const { spawn } = await import('node:child_process');
+    const child = spawn(
+      'node', [CLI, 'deploy', '--reason', 'prompt update', '--json', '--', NODE, '-e', 'setTimeout(()=>{}, 1500)'],
+      { cwd: root, stdio: ['ignore', 'ignore', 'pipe'] },
+    );
+    let stderr = '';
+    child.stderr.on('data', (d) => { stderr += d.toString(); });
+    const exitCode = new Promise<number>((r) => child.on('exit', (code) => r(code ?? -1)));
+
+    const pausedPath = pshed('run', 'PAUSED');
+    const deadline = Date.now() + 8000;
+    while (!existsSync(pausedPath) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+    expect(existsSync(pausedPath)).toBe(true); // deploy is holding the scheduler paused
+
+    // The operator takes over mid-run, exactly the CLI call shape `pshed pause --reason
+    // ...` produces (no explicit origin — see pshed.mjs's `pause` command).
+    const pauseResult = cli(['pause', '--reason', 'incident: stop everything', '--json']);
+    expect(pauseResult.status).toBe(0);
+    expect(JSON.parse(pauseResult.stdout)).toMatchObject({ tookOwnership: true, origin: 'operator' });
+
+    const code = await exitCode;
+    expect(code).toBe(0); // the deployed command's own exit code — it genuinely ran and succeeded
+
+    // The operator's halt survives: the marker is still there, now operator-owned.
+    expect(existsSync(pausedPath)).toBe(true);
+    const marker = JSON.parse(readFileSync(pausedPath, 'utf-8'));
+    expect(marker.origin).toBe('operator');
+    expect(marker.reason).toBe('incident: stop everything');
+
+    // And the report — the one thing a deploy script would actually look at — must not
+    // claim a release that did not happen.
+    const report = JSON.parse(stderr);
+    expect(report.outcome).toBe('ok');
+    expect(report.exit).toBe(0);
+    expect(report.takenOver).toEqual([{ scope: 'global', origin: 'operator', reason: 'incident: stop everything' }]);
   }, 20_000);
 });
 

@@ -49,11 +49,19 @@ export async function runDeploy({
   const existingOwner = readDeployOwner(root);
   if (existingOwner && d.isAlive(existingOwner.pid)) {
     const reasonText = existingOwner.reason ? `"${existingOwner.reason}"` : 'unknown';
+    // Named recovery, not just a diagnosis: `isAlive` only checks that SOME process has
+    // this pid, and pids get recycled (aggressively on Windows) — a killed deploy's pid
+    // can be reassigned to an unrelated process, which then reads as "still busy" forever.
+    // The tick's own orphan reclaim normally clears a dead owner within a minute, but with
+    // cron torn down (`pshed stop`) nothing sweeps run/DEPLOY at all, and there was no
+    // lever to clear it by hand short of knowing the file's path already.
     return {
       outcome: 'busy', exit: 2, waitedMs: 0, attempts: 0,
       scope, group, pausedIds: [], ownedGlobal: false, preserved: [],
       holder: { pid: existingOwner.pid, reason: existingOwner.reason ?? null },
-      message: `another deploy is in progress (pid ${existingOwner.pid}, reason ${reasonText})`,
+      message: `another deploy is in progress (pid ${existingOwner.pid}, reason ${reasonText}); `
+        + `if pid ${existingOwner.pid} has since been reused by an unrelated process, delete `
+        + `.pshed/run/DEPLOY to clear the stale marker`,
     };
   }
 
@@ -95,25 +103,34 @@ export async function runDeploy({
   // absence of positive evidence of a takeover means "still ours" and the removal is
   // still attempted, exactly as before — a real fs error surfaces in `errors` instead of
   // being silently swallowed into "must have been taken over".
+  //
+  // A skipped marker is not an error and must not be discarded either: the caller (the
+  // 'ok' report, in particular) has no other way to learn that a pause it thinks it
+  // "released" is actually still standing, now owned by whoever took it over. So every
+  // skip is collected into `takenOver` — {scope, id?, origin, reason} — and returned
+  // alongside `errors` for release() to pass up to the final result.
   const dropOwnPauses = () => {
     const errors = [];
+    const takenOver = [];
     if (ownedGlobal) {
       try {
         const cur = readGlobalPause(root);
-        const takenOver = cur != null && cur.origin != null && cur.origin !== 'deploy';
-        if (!takenOver) removeGlobalPause(root);
+        const wasTakenOver = cur != null && cur.origin != null && cur.origin !== 'deploy';
+        if (wasTakenOver) takenOver.push({ scope: 'global', origin: cur.origin, reason: cur.reason ?? null });
+        else removeGlobalPause(root);
       } catch (err) { errors.push(`removeGlobalPause: ${err.message}`); }
     }
     for (const id of pausedIds) {
       try {
         const cur = readPauseRecord(root, id);
-        const takenOver = cur != null && cur.origin !== 'deploy';
-        if (!takenOver) removePause(root, id);
+        const wasTakenOver = cur != null && cur.origin !== 'deploy';
+        if (wasTakenOver) takenOver.push({ scope: 'job', id, origin: cur.origin, reason: cur.reason ?? null });
+        else removePause(root, id);
       } catch (err) { errors.push(`removePause(${id}): ${err.message}`); }
     }
     pausedIds = [];
     ownedGlobal = false;
-    return errors;
+    return { errors, takenOver };
   };
 
   // Unconditional: success, non-zero exit, a throw, or (on POSIX) a signal that got this
@@ -122,7 +139,7 @@ export async function runDeploy({
   // instead of raised, and the finally block below attaches it onto the result the try
   // block already produced rather than letting it replace that result.
   const release = () => {
-    const errors = dropOwnPauses();
+    const { errors, takenOver } = dropOwnPauses();
     // Only remove run/DEPLOY when it still names OUR pid. Another `deploy` can have
     // overwritten it after this run's ownership check above (the accepted race) or —
     // before the refusal check existed — two deploys could both be running at once; in
@@ -133,7 +150,7 @@ export async function runDeploy({
       const owner = readDeployOwner(root);
       if (owner && owner.pid === pid) removeDeployOwner(root);
     } catch (err) { errors.push(`removeDeployOwner: ${err.message}`); }
-    return errors;
+    return { errors, takenOver };
   };
 
   let result;
@@ -209,13 +226,22 @@ export async function runDeploy({
     return result;
   } finally {
     d.onStep('release');
-    const releaseErrors = release();
+    const { errors: releaseErrors, takenOver } = release();
     // Attach onto the object the try block already built, rather than letting release()
     // stand in for it: `return result` above already captured the reference before this
     // finally runs, and mutating it here is visible on the value the caller receives. If
     // the try block never got as far as building a result (spawn threw, or a signal cut
     // in), there is nothing to attach to — the original error/interrupt still propagates
     // once this finally exits, since release() never throws.
-    if (result) result.releaseErrors = releaseErrors;
+    //
+    // `takenOver` is what makes an operator's mid-run pause visible on the 'ok' outcome:
+    // this run genuinely placed the pause and the command genuinely ran, but if an
+    // operator took ownership of the marker while the command was running, release()
+    // left it standing on purpose (see dropOwnPauses above) — the report and its exit
+    // code must not read as "released" when a halt is still in effect.
+    if (result) {
+      result.releaseErrors = releaseErrors;
+      result.takenOver = takenOver;
+    }
   }
 }
