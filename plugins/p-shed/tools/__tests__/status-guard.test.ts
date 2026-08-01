@@ -3,10 +3,16 @@ import { collectStatus, formatHuman } from '../lib/status.mjs';
 
 const NOW = 1_753_000_000_000;
 
+// collectStatus's injectable seam is `readPauseRecord` (see lib/status.mjs) — it was
+// renamed from `readPause` when I2 introduced origin tracking. A stub keyed `readPause`
+// here is silently ignored by the `{ ...defaults, ...deps }` spread (unknown extra key,
+// real `readPauseRecord` still wins) and falls through to the real implementation against
+// root '/nowhere', which happens to have no `.pshed` dir — so every test below passed
+// without the injected pause stub ever being consulted at all.
 const deps = (state: Record<string, unknown>) => ({
   readJobs: () => ({ defaults: {}, jobs: [{ id: 'a', schedule: '* * * * *', enabled: true, prompt: 'go', guard: 'check' }] }),
   readJobState: () => state,
-  readPause: () => null,
+  readPauseRecord: () => null,
   readGlobalPause: () => null,
   readPid: () => null,
   isPidAlive: () => false,
