@@ -47,7 +47,20 @@ export function writeDeployOwner(root, { pid, scope, group = null, reason = null
   const target = deployOwnerPath(root);
   const tmp = join(dir, `.DEPLOY.${process.pid}.${now}.tmp`);
   writeFileSync(tmp, JSON.stringify(state, null, 2) + '\n', 'utf-8');
-  renameSync(tmp, target);
+  try {
+    renameSync(tmp, target);
+  } catch (err) {
+    // renameSync is the atomic step, but it is not guaranteed to succeed — EPERM/EBUSY is
+    // a live possibility on Windows (an antivirus scan, another handle briefly open on the
+    // same path). Without this cleanup a failed rename leaves the temp file sitting in
+    // run/ forever: harmless to correctness (listPidEntries/listPauseIds only look for
+    // `.pid`/`.pause` suffixes), but permanent litter every later `deploy` call repeats,
+    // and it defeats the one guarantee 'writes atomically: no leftover temp file after the
+    // call' exists to pin. rmSync({force:true}) swallows ENOENT so this is a no-op if the
+    // rename actually raced through despite throwing (paranoia, not the expected case).
+    rmSync(tmp, { force: true });
+    throw err;
+  }
   return state;
 }
 

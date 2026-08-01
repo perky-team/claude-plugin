@@ -2,8 +2,8 @@
 // SIGKILLed / rebooted deploy is reclaimed by the next tick instead of silencing the
 // loop forever. On Windows this is the ONLY recovery path: measured, a Node process
 // there receives neither SIGTERM nor SIGINT, so a signal trap cannot be the mechanism.
-import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, existsSync, writeFileSync, mkdirSync, readdirSync } from 'node:fs';
+import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
+import { mkdtempSync, rmSync, existsSync, writeFileSync, renameSync, mkdirSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -14,9 +14,25 @@ import { writePause, readPauseRecord, pausePath, listPauseIds } from '../lib/bre
 import { writeGlobalPause, readGlobalPause, globalPausePath } from '../lib/pause.mjs';
 import { paths } from '../lib/io.mjs';
 
+// writeFileSync/renameSync are wrapped (not replaced — every other call in this file still
+// delegates to the real implementation) so the two tests below can inspect the actual
+// sequence of fs calls writeDeployOwner makes, instead of only inferring it from the end
+// state on disk.
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return {
+    ...actual,
+    writeFileSync: vi.fn(actual.writeFileSync),
+    renameSync: vi.fn(actual.renameSync),
+  };
+});
+
 let root: string;
 beforeEach(() => { root = mkdtempSync(join(tmpdir(), 'pshed-owner-')); });
-afterEach(() => { rmSync(root, { recursive: true, force: true }); });
+afterEach(() => {
+  rmSync(root, { recursive: true, force: true });
+  vi.clearAllMocks(); // call history must not leak between tests
+});
 
 const dead = () => false;
 const alive = () => true;
@@ -52,18 +68,44 @@ describe('run/DEPLOY', () => {
   // (another `deploy`, or the tick) could observe a torn/partial write mid-JSON and fail to
   // parse it — reading back as "no owner", which makes a LIVE deploy's pause look like an
   // orphan. The fix writes to a temp file in the same directory and renameSync's it over
-  // the real path; renameSync is atomic, so no reader ever sees a partial write. This test
-  // can't reproduce a torn read directly (that needs real concurrency), but it pins the
-  // fix's other observable property: the temp file used to get there never survives the
-  // call — a leftover `.DEPLOY.*.tmp` would mean the rename didn't happen.
-  it('writes atomically: no leftover temp file after the call', () => {
+  // the real path; renameSync is atomic, so no reader ever sees a partial write.
+  //
+  // A prior version of this test only asserted "no leftover temp file after the call" —
+  // but a plain writeFileSync straight to the target ALSO leaves no temp litter, so that
+  // assertion passes against the unfixed code too and pins nothing about atomicity. These
+  // two tests replace it: the first inspects the actual sequence of fs calls to confirm
+  // the write genuinely goes through a distinct temp file + rename (not a direct write),
+  // and the second pins the cleanup that path requires when the rename step itself fails.
+  it('writes via a temp file distinct from the target, then renames it over the target', () => {
     writeDeployOwner(root, { pid: 4242, scope: 'global', reason: 'x', now: 1 });
-    const entries = readdirSync(paths(root).runDir);
-    expect(entries).toEqual(['DEPLOY']);
-    // A second write (overwrite) must be equally clean.
-    writeDeployOwner(root, { pid: 4343, scope: 'global', reason: 'y', now: 2 });
+    const target = deployOwnerPath(root);
+
+    const writeCalls = vi.mocked(writeFileSync).mock.calls;
+    const renameCalls = vi.mocked(renameSync).mock.calls;
+    expect(writeCalls.length).toBe(1);
+    expect(renameCalls.length).toBe(1);
+
+    const [writtenPath] = writeCalls[0];
+    const [renameFrom, renameTo] = renameCalls[0];
+    expect(writtenPath).not.toBe(target); // never written directly to the real path
+    expect(String(writtenPath)).toMatch(/\.DEPLOY\.\d+\.\d+\.tmp$/);
+    expect(renameFrom).toBe(writtenPath); // the SAME temp file is what gets renamed
+    expect(renameTo).toBe(target);
+
+    // End state is unchanged from before: only the real file remains on disk.
     expect(readdirSync(paths(root).runDir)).toEqual(['DEPLOY']);
-    expect(readDeployOwner(root)).toMatchObject({ pid: 4343, reason: 'y' });
+    expect(readDeployOwner(root)).toMatchObject({ pid: 4242, reason: 'x' });
+  });
+
+  it('cleans up the temp file when the rename step itself throws (EPERM/EBUSY are real on Windows)', () => {
+    vi.mocked(renameSync).mockImplementationOnce(() => {
+      throw Object.assign(new Error('boom'), { code: 'EPERM' });
+    });
+    expect(() => writeDeployOwner(root, { pid: 4242, scope: 'global', reason: 'x', now: 1 })).toThrow('boom');
+    // No DEPLOY file (the rename never completed) AND no leftover .tmp file either — a
+    // failed rename must not litter run/ forever.
+    expect(existsSync(deployOwnerPath(root))).toBe(false);
+    expect(readdirSync(paths(root).runDir)).toEqual([]);
   });
 });
 
