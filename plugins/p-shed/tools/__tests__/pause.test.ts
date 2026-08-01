@@ -82,11 +82,17 @@ describe('global pause', () => {
       expect(readGlobalPause(root).reason).toBe('first reason');
     });
 
-    it('surfaces origin on a plain already-paused response too (I1 fix #3)', () => {
-      writeGlobalPause(root, { reason: 'halted by hand', now: 1 }); // no origin -> operator
-      const res = writeGlobalPause(root, { reason: 'again' });
-      expect(res.origin).toBeUndefined(); // this marker never had an origin field
-      expect(res.alreadyPaused).toBe(true);
+    // The previous version of this test used a FIRST marker with no origin field at all
+    // (`writeGlobalPause(root, { reason: 'halted by hand', now: 1 })`), so `res.origin`
+    // read as undefined for two indistinguishable reasons — "the fix doesn't surface it"
+    // or simply "there was nothing on record to surface" — and it passed unchanged
+    // against the pre-fix code (which never returned an `origin` key on this branch at
+    // all). This version gives the marker an explicit origin so the assertion can only
+    // pass if writeGlobalPause actually threads `existing.origin` through.
+    it('surfaces the existing marker\'s origin on a plain already-paused response, when one is actually on record', () => {
+      writeGlobalPause(root, { reason: 'halted by hand', origin: 'operator', now: 1 });
+      const res = writeGlobalPause(root, { reason: 'again', origin: 'operator' });
+      expect(res).toMatchObject({ alreadyPaused: true, origin: 'operator', reason: 'halted by hand' });
     });
   });
 });
