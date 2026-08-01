@@ -359,10 +359,23 @@ async function main() {
         process.stderr.write(args.json ? JSON.stringify(report) + '\n' : formatDeploy(report) + '\n');
         process.exit(deployExitCode(res));
       } catch (e) {
-        if (!(e instanceof ValidationError)) throw e;
-        const err = { error: { code: 'validation', message: e.message } };
-        process.stderr.write(args.json ? JSON.stringify(err) + '\n' : `deploy: ${e.message}\n`);
-        process.exit(2);
+        if (e instanceof ValidationError) {
+          const err = { error: { code: 'validation', message: e.message } };
+          process.stderr.write(args.json ? JSON.stringify(err) + '\n' : `deploy: ${e.message}\n`);
+          process.exit(2);
+        }
+        // Anything else that escapes the block above — most reachably, readJobs()
+        // throwing on a hand-edited jobs.yml that no longer parses as YAML, before
+        // resolveTarget/runDeploy's own try/catch is ever reached — must still stay off
+        // stdout. Rethrowing here (the old behavior) let it fall to main()'s generic
+        // catch, which reports via emitJson straight onto stdout: exactly the channel
+        // this command exists to keep clean for the deployed command. So it gets the
+        // same treatment as every other deploy failure: stderr, honouring --json, exit 1
+        // (an internal/environment failure, not any of the command's own codes).
+        const message = e?.message ?? String(e);
+        const err = { error: { code: 'internal', message } };
+        process.stderr.write(args.json ? JSON.stringify(err) + '\n' : `deploy: ${message}\n`);
+        process.exit(1);
       }
     }
 

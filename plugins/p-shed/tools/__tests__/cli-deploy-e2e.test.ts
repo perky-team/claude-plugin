@@ -370,6 +370,36 @@ describe('deploy', () => {
     expect(JSON.parse(noCommand.stderr).error.code).toBe('validation');
   });
 
+  // I2: readJobs(root) — called at the very top of the deploy block, before the
+  // try/catch around runDeploy even exists — throws a plain YAMLException (not a
+  // ValidationError) on a hand-edited jobs.yml that no longer parses. The old catch here
+  // only recognized ValidationError and rethrew everything else, which escaped to
+  // main()'s generic handler and reported via emitJson — straight onto stdout, the exact
+  // channel this whole command exists to keep clean for the deployed command. Reachable
+  // by an operator who edits jobs.yml by hand and then runs `deploy` to apply it.
+  it('a malformed jobs.yml is reported on stderr as an internal error, not thrown onto stdout', () => {
+    mkdirSync(pshed(), { recursive: true });
+    writeFileSync(pshed('jobs.yml'), 'jobs: [\n  - id: a\n', 'utf-8'); // unterminated flow collection
+    const r = cli(['deploy', '--reason', 'x', '--json', '--', NODE, '-e', 'console.log("MUST-NOT-RUN")']);
+    expect(r.status).toBe(1);
+    expect(r.stdout).toBe(''); // nothing reaches stdout — not even a stray newline
+    expect(r.stdout).not.toContain('MUST-NOT-RUN'); // the command never even ran
+    const report = JSON.parse(r.stderr);
+    expect(report.error.code).toBe('internal');
+    expect(existsSync(pshed('run', 'PAUSED'))).toBe(false);
+    expect(existsSync(pshed('run', 'DEPLOY'))).toBe(false);
+  });
+
+  it('the same malformed-jobs.yml failure without --json is human text on stderr, still not stdout', () => {
+    mkdirSync(pshed(), { recursive: true });
+    writeFileSync(pshed('jobs.yml'), 'jobs: [\n  - id: a\n', 'utf-8');
+    const r = cli(['deploy', '--reason', 'x', '--', NODE, '-e', '0']);
+    expect(r.status).toBe(1);
+    expect(r.stdout).toBe('');
+    expect(() => JSON.parse(r.stderr)).toThrow();
+    expect(r.stderr).toMatch(/deploy:/);
+  });
+
   it('exits 1 on timeout: nothing paused, nothing run', () => {
     writeJobs(TWO_JOBS);
     claimPid('worker');
