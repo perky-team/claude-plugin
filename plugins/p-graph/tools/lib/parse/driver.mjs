@@ -249,6 +249,41 @@ function goCallTarget(c, { pkg, importPkgs, hasDotImport }, namesAVar = () => fa
 // can be bound to them.
 const OWNER_KINDS = new Set(['class', 'struct', 'interface']);
 
+// The node a call's name sits under when the source wrote the call ON something
+// — `x.end()` rather than `end()`. Checked against the vendored grammars: TS and
+// JS put the property in a `member_expression`, Python in an `attribute`, C++ in
+// a `field_expression`, Go in a `selector_expression`. A plain call's parent is
+// the call node itself, and `new Service()`'s parent is a `new_expression`, so
+// neither counts as a member access.
+const MEMBER_PARENTS = new Set([
+  'member_expression', 'attribute', 'field_expression', 'selector_expression',
+]);
+
+// The names a Python file binds to a MODULE. A call written on one of them is
+// qualified by that module, not made on a value whose type we do not know.
+//
+// Only a plain `import` states outright that a name is a module:
+//   `import x`        binds x
+//   `import x.y`      binds x — the top segment is the name in scope
+//   `import x as y`   binds y
+//   `import x.y as z` binds z
+// `from x import y` (with or without `as`) and `from . import y` are left out on
+// purpose: `y` there can be a submodule or an ordinary value, and the source
+// does not say which. We refuse rather than guess, so such a call stays a
+// reported gap. `from x import *` binds no name we can see at all.
+function pyModuleNames(caps) {
+  const names = new Set();
+  for (const c of caps) {
+    if (c.name === 'import.alias') { names.add(c.text); continue; }
+    // A `from x import y` capture points at the module x, which this file does
+    // NOT bind — only a plain import_statement does.
+    if (c.name === 'reference.import' && c.node?.parent?.type === 'import_statement') {
+      names.add(c.text.split('.')[0]);
+    }
+  }
+  return names;
+}
+
 // The type a `this.m()` / `this->m()` / `self.m()` call belongs to, for languages
 // where qname comes from lexical nesting (TS/JS, Python, C++). The owning type is
 // the enclosing method's container, so no type inference is needed — but a bare
@@ -275,6 +310,7 @@ export async function extract({ file, lang, langId, scm, source }) {
   const language = await loadLanguage(langId);
   const caps = await parseAndQuery(language, scm, source);
   const goCtx = lang === 'go' ? goContext(caps) : null;
+  const pyModules = lang === 'py' ? pyModuleNames(caps) : null;
 
   const defKinds = ['function', 'method', 'class', 'struct', 'interface', 'type', 'enum'];
   const defs = [];
@@ -579,9 +615,23 @@ export async function extract({ file, lang, langId, scm, source }) {
     // to keep a Go word list in SQL.
     const external = lang === 'go' && c.node?.type !== 'field_identifier' &&
       (GO_BUILTINS.has(c.text) || GO_PREDECLARED_TYPES.has(c.text)) ? 1 : 0;
+    // Was the call written on something? Recorded for every language, because the
+    // resolver then refuses a target that is not a member of a type — `end`
+    // declared inside one method body can never answer `response.end()`.
+    let member = kind === 'call' && MEMBER_PARENTS.has(c.node?.parent?.type ?? '') ? 1 : 0;
+    // A Python call whose object names an imported module is qualified by that
+    // module; it is not made on a value. Python qnames carry no module prefix, so
+    // the bare function name stays the target and the member flag is cleared —
+    // `requests.get(...)` still resolves while `s.get(...)` does not. The object
+    // must be a plain name: in `os.environ.get(...)` it is another attribute, so
+    // that call keeps its member flag and stays refused.
+    if (member === 1 && pyModules?.size) {
+      const obj = c.node.parent.childForFieldName?.('object');
+      if (obj?.type === 'identifier' && pyModules.has(obj.text)) member = 0;
+    }
     edges.push({
       src_id: enclosing ? enclosing.id : null,
-      dst_id: null, dst_name, dst_bare: bareSegment(dst_name), lang, external,
+      dst_id: null, dst_name, dst_bare: bareSegment(dst_name), lang, external, member,
       field_key, method, kind, file, line: c.startLine,
     });
   }

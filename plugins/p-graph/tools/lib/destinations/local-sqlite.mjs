@@ -71,6 +71,36 @@ CREATE INDEX IF NOT EXISTS field_types_key ON field_types(key);
 CREATE INDEX IF NOT EXISTS field_types_file ON field_types(file);
 `;
 
+// Kinds a value can be a member of. A method of a class, struct or interface is
+// reachable as `x.m()`; a function declared inside another function body is a
+// local and is reachable only by the plain name written next to it.
+const OWNER_KINDS_SQL = `('class','struct','interface')`;
+
+// The rule for a call the source wrote ON something (`x.end()`): its target must
+// be a member of a type. `edges.member` says the call was a member access, and
+// the target's own owner says whether it can be reached that way.
+//
+// This is what stops one ten-line arrow function named `end`, declared inside a
+// single method body, from answering all 825 `.end()` calls in a repo: its owner
+// is that method, not a type, so no member call can reach it.
+//
+// Go is exempt. Go writes a package call as a member access too (`fmt.Println`),
+// and a Go method node is declared at file top level, so it has no owner in the
+// graph — it carries the package and the receiver type in its qname instead.
+// A Go member call is therefore already narrowed by the qname itself, and
+// asking for an owner here would refuse every Go call.
+//
+// `n` is the candidate node the surrounding statement is testing.
+//
+// Every pass applies this ON TOP of its own uniqueness guard, never inside it.
+// Filtering a candidate count would let this rule CREATE links: a bare name
+// shared by two symbols is ambiguous today, and dropping one of them for failing
+// the owner rule would leave a single "unique" match. On flask that turned 0
+// edges into 36 false ones — every `dict.setdefault(...)` call in the repo landed
+// on the one class method named setdefault. This rule may only remove a link.
+const MEMBER_TARGET_OK = `(edges.member = 0 OR edges.lang = 'go' OR EXISTS (
+        SELECT 1 FROM nodes own WHERE own.id = n.container_id AND own.kind IN ${OWNER_KINDS_SQL}))`;
+
 export function openStore(dbPath, opts = {}) {
   const DatabaseSync = loadDatabaseSync();
   if (opts.readOnly) return openReadOnly(DatabaseSync, dbPath);
@@ -121,8 +151,8 @@ export function openStore(dbPath, opts = {}) {
   const delNodesByFile = db.prepare('DELETE FROM nodes WHERE file = ?');
   const delEdgesByFile = db.prepare('DELETE FROM edges WHERE file = ?');
   const insEdge = db.prepare(
-    `INSERT INTO edges (src_id,dst_id,dst_name,kind,file,line,field_key,method,dst_bare,lang,external)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?)`);
+    `INSERT INTO edges (src_id,dst_id,dst_name,kind,file,line,field_key,method,dst_bare,lang,external,member)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`);
   const insFieldType = db.prepare('INSERT INTO field_types (key,type,file) VALUES (?,?,?)');
   const delFieldTypesByFile = db.prepare('DELETE FROM field_types WHERE file = ?');
   const insFile = db.prepare(`INSERT INTO files (path,hash,lang,indexed_at)
@@ -171,7 +201,7 @@ export function openStore(dbPath, opts = {}) {
       }
       for (const e of edges) insEdge.run(e.src_id, e.dst_id ?? null, e.dst_name ?? null,
         e.kind, e.file, e.line, e.field_key ?? null, e.method ?? null,
-        e.dst_bare ?? null, e.lang ?? null, e.external ?? 0);
+        e.dst_bare ?? null, e.lang ?? null, e.external ?? 0, e.member ?? 0);
       for (const f of fieldTypes) insFieldType.run(f.key, f.type, f.file ?? file);
       db.prepare('COMMIT').run();
     } catch (err) { db.prepare('ROLLBACK').run(); throw err; }
@@ -190,7 +220,7 @@ export function openStore(dbPath, opts = {}) {
   // what links Python's `self._find_error_handler` to the base class.
   const resolveOwnReceiverFallback = () => {
     const candidates = db.prepare(`
-      SELECT rowid, dst_name, dst_bare, lang FROM edges
+      SELECT rowid, dst_name, dst_bare, lang, member FROM edges
       WHERE kind = 'call' AND dst_id IS NULL AND external = 0
         AND method IS NOT NULL AND field_key IS NULL AND dst_bare IS NOT NULL`).all();
     if (!candidates.length) return;
@@ -200,8 +230,15 @@ export function openStore(dbPath, opts = {}) {
     const embedsRepoType = db.prepare(`
       SELECT 1 FROM field_types ft JOIN nodes n ON n.qname = ft.type
       WHERE ft.key = ? AND n.kind <> 'interface' LIMIT 1`);
+    // `owned` says whether the candidate is a member of a type, which is what a
+    // call written on something can reach. Selected next to the hit rather than
+    // filtered in the WHERE, so it can only reject the one hit this pass found —
+    // never turn two ambiguous hits into one (see MEMBER_TARGET_OK).
     const byBareName = db.prepare(`
-      SELECT n.id FROM nodes n
+      SELECT n.id, EXISTS (
+        SELECT 1 FROM nodes own WHERE own.id = n.container_id AND own.kind IN ${OWNER_KINDS_SQL}
+      ) AS owned
+      FROM nodes n
       WHERE n.name = ? AND n.lang = ? AND n.kind IN ('function','method','class') LIMIT 2`);
     // Promotion is real (Go lets an embedded type's method answer for the
     // outer one), but WHICH bare-name node it lands on is still a guess: the
@@ -212,7 +249,12 @@ export function openStore(dbPath, opts = {}) {
       const owner = e.dst_name.slice(0, Math.max(0, e.dst_name.length - e.dst_bare.length - 1));
       if (e.lang === 'go' && !(owner && embedsRepoType.get(`${owner}#embed`))) continue;
       const hits = byBareName.all(e.dst_bare, e.lang);
-      if (hits.length === 1) setDst.run(hits[0].id, e.rowid);
+      if (hits.length !== 1) continue;
+      // `this.m()` / `self.m()` is written on something, so its target must be a
+      // member of a type — not a module-level function that happens to share the
+      // name. Go is exempt for the reason given on MEMBER_TARGET_OK.
+      if (e.member === 1 && e.lang !== 'go' && !hits[0].owned) continue;
+      setDst.run(hits[0].id, e.rowid);
     }
   };
 
@@ -243,7 +285,10 @@ export function openStore(dbPath, opts = {}) {
       ), guess = 0
       WHERE kind = 'call' AND dst_id IS NULL AND dst_name IS NOT NULL AND external = 0
         AND (SELECT count(*) FROM nodes n
-             WHERE n.qname = edges.dst_name AND n.lang = edges.lang AND n.kind IN ${CALLABLE}) = 1`).run();
+             WHERE n.qname = edges.dst_name AND n.lang = edges.lang AND n.kind IN ${CALLABLE}) = 1
+        AND EXISTS (SELECT 1 FROM nodes n
+             WHERE n.qname = edges.dst_name AND n.lang = edges.lang AND n.kind IN ${CALLABLE}
+               AND ${MEMBER_TARGET_OK})`).run();
 
     // Pass F — Go recv.field.Method() through the field-type table. Runs before
     // the bare-name fallback so an ambiguous method name links to the RIGHT type.
@@ -290,6 +335,9 @@ export function openStore(dbPath, opts = {}) {
         AND (SELECT count(*) FROM nodes n WHERE n.qname = edges.dst_name AND n.lang = edges.lang) = 0
         AND (SELECT count(*) FROM nodes n
              WHERE n.name = edges.dst_name AND n.lang = edges.lang AND n.kind IN ${CALLABLE}) = 1
+        AND EXISTS (SELECT 1 FROM nodes n
+             WHERE n.name = edges.dst_name AND n.lang = edges.lang AND n.kind IN ${CALLABLE}
+               AND ${MEMBER_TARGET_OK})
         AND NOT EXISTS (
           SELECT 1 FROM field_types ft
           WHERE ft.key = edges.field_key
