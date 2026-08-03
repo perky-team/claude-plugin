@@ -21,18 +21,22 @@ describe('incremental resolution matches a full rebuild', () => {
   it('drops an edge that a newly added same-named symbol made ambiguous', async () => {
     write('pkga/a.go', `package pkga
 type A struct{}
+func New() *A { return &A{} }
 func (a *A) Frobnicate() {}
 `);
+    // `a` takes its type from a function's return value, which the graph does not
+    // read, so this call can only ever resolve by its unique bare name. That is
+    // the resolution an added namesake has to invalidate.
     write('caller/c.go', `package caller
 import "x/pkga"
-func Do(a *pkga.A) { a.Frobnicate() }
+func Do() { a := pkga.New(); a.Frobnicate() }
 `);
     const store = openStore(':memory:');
     await indexFull({ root: dir, store, ignorePatterns: [] });
     expect(store.callers('pkga.A.Frobnicate').map((n) => n.qname)).toEqual(['caller.Do']);
 
-    // A second Frobnicate appears. `a` is a parameter, so the graph cannot tell
-    // which one caller.Do calls any more — the edge must go, not linger.
+    // A second Frobnicate appears. The bare name is no longer unique, so the graph
+    // cannot tell which one caller.Do calls — the edge must go, not linger.
     write('pkgb/b.go', `package pkgb
 type B struct{}
 func (b *B) Frobnicate() {}

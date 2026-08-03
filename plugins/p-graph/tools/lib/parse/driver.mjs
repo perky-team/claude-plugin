@@ -90,6 +90,65 @@ function goFieldTypeName(typeNode, pkg) {
   return null;
 }
 
+// The type node a Go initializer names, for the shapes that write the type right
+// there: `T{}`, `&T{}` and `new(T)`. Anything else — a function call, a
+// conversion, a channel receive — needs real type inference, so this returns null
+// and the variable stays untyped.
+function goInitTypeNode(expr) {
+  let n = expr;
+  // `&T{}`. A composite literal is the only operand shape that names a type, so
+  // there is no need to check the operator.
+  if (n?.type === 'unary_expression') n = n.childForFieldName?.('operand');
+  if (n?.type === 'composite_literal') return n.childForFieldName?.('type') ?? null;
+  if (n?.type === 'call_expression' && n.childForFieldName?.('function')?.text === 'new') {
+    return n.childForFieldName?.('arguments')?.namedChild(0) ?? null;
+  }
+  return null;
+}
+
+// The names a Go declaration introduces, each paired with the type node that
+// gives its type. Pairing runs through the node's own fields, never by position:
+// `a, b *store.Postgres` has two names and one type and both must get a row, and
+// a nested declaration would break any positional guess.
+function goVarDeclNames(decl) {
+  const out = [];
+  // A short declaration is the one shape where each name has its own value, and
+  // Go itself pairs `a, b := x, y` by index — so index pairing is the language
+  // rule here, not a guess. `a, b := f()` has one value for two names, so there is
+  // no per-name type to read. The names still come back with no type: they ARE
+  // declared here, and saying so is what stops a package-level namesake from
+  // answering a call on them.
+  if (decl.type === 'short_var_declaration') {
+    const left = decl.childForFieldName?.('left');
+    const right = decl.childForFieldName?.('right');
+    if (!left) return out;
+    const paired = right && left.namedChildCount === right.namedChildCount;
+    for (let i = 0; i < left.namedChildCount; i++) {
+      const name = left.namedChild(i);
+      if (name.type !== 'identifier') continue;
+      out.push({ name: name.text, typeNode: paired ? goInitTypeNode(right.namedChild(i)) : null });
+    }
+    return out;
+  }
+  // `var_spec` marks its comma tokens with the `name` field as well, so filter on
+  // the node type — otherwise a row keyed on "," gets recorded.
+  const names = [];
+  for (let i = 0; i < decl.childCount; i++) {
+    if (decl.fieldNameForChild(i) !== 'name') continue;
+    const child = decl.child(i);
+    if (child.type === 'identifier') names.push(child.text);
+  }
+  const declared = decl.childForFieldName?.('type');
+  // `var x = &T{}` states the type in the initializer instead. One value per name,
+  // same rule as a short declaration.
+  const value = declared ? null : decl.childForFieldName?.('value');
+  const perName = value && value.namedChildCount === names.length;
+  for (let i = 0; i < names.length; i++) {
+    out.push({ name: names[i], typeNode: declared ?? (perName ? goInitTypeNode(value.namedChild(i)) : null) });
+  }
+  return out;
+}
+
 // Resolve the qualified call target for a Go reference.call capture. Carries the
 // qualifier the call site syntactically provides so the conservative resolver
 // can match a qualified qname without guessing; leaves the bare name when the
@@ -103,15 +162,23 @@ function goFieldTypeName(typeNode, pkg) {
 //   `recvVar.Method()`       -> {bare, recvVar, method} — no field, so the
 //      receiver's own type names the target directly.
 // `bare` stays as the fallback dst_name when neither can be bound.
-function goCallTarget(c, { pkg, importPkgs, hasDotImport }) {
+//
+// `namesAVar` answers whether an identifier names a variable in scope rather than
+// a package. It is asked BEFORE the import table on purpose: a variable shadows a
+// package of the same name, and reading it as the package qualifies the call to
+// the wrong package. hugo does this — a local `config` hides the imported package
+// `config`, so `config.ToKeywords()` was recorded as a call into that package.
+function goCallTarget(c, { pkg, importPkgs, hasDotImport }, namesAVar = () => false) {
   const node = c.node;
   if (node?.type === 'field_identifier') {
     const operand = node.parent?.childForFieldName?.('operand');
     if (operand?.type === 'identifier') {
-      // An imported package, under whatever name this file calls it.
-      const importedAs = importPkgs.get(operand.text);
-      if (importedAs) return `${importedAs}.${c.text}`;
-      if (operand.text === pkg) return `${pkg}.${c.text}`;
+      if (!namesAVar(operand.text)) {
+        // An imported package, under whatever name this file calls it.
+        const importedAs = importPkgs.get(operand.text);
+        if (importedAs) return `${importedAs}.${c.text}`;
+        if (operand.text === pkg) return `${pkg}.${c.text}`;
+      }
       return { bare: c.text, recvVar: operand.text, method: c.text };
     }
     if (operand?.type === 'selector_expression') {
@@ -285,6 +352,56 @@ export async function extract({ file, lang, langId, scm, source }) {
     }
   }
 
+  // Parameter and variable types, keyed "<enclosing def qname>#var:<name>", or
+  // "<pkg>#pkgvar:<name>" for a package-level var. They go in the same table as
+  // struct fields so the same resolver passes and the same guards apply, with no
+  // new resolver code: Pass F resolves "<type>.<method>", and Pass B refuses the
+  // bare-name fallback when the type is known but is not a repo type.
+  // `goFieldTypeName` returns null for shapes we do not resolve through (slice,
+  // map, func, inline interface), so an unnameable type records nothing and that
+  // call keeps today's behaviour. Two rows for one key mean the name holds more
+  // than one type, and Pass F's "exactly one known type" guard refuses it. Neither
+  // key can collide with a field key — `#` is not legal in a Go identifier.
+  //
+  // `declaredIn` also records names we could NOT type. A call on such a name must
+  // stay a guess, and knowing the name is taken is what stops it from being
+  // answered with a package-level type that happens to share it.
+  const pkgVarKey = (name) => `${goCtx.pkg}#pkgvar:${name}`;
+  const declaredIn = new Map(); // def qname -> Set of names declared inside it
+  const pkgVarNames = new Set(); // package-level names this FILE declares
+  // key -> the one type recorded for it in THIS file, or null when this file
+  // recorded two. Used for `x.f.M()`, where the field key needs the type that owns
+  // the field spelled out at extraction time.
+  const varTypes = new Map();
+  if (goCtx) {
+    const ownerOf = (cap) =>
+      defs.filter((d) => within(cap, d)).sort((a, b) => b.startLine - a.startLine)[0];
+    const claim = (owner, name) => {
+      if (!owner) { pkgVarNames.add(name); return; }
+      if (!declaredIn.has(owner.qname)) declaredIn.set(owner.qname, new Set());
+      declaredIn.get(owner.qname).add(name);
+    };
+    for (const vd of caps.filter((c) => c.name === 'var.decl')) {
+      const owner = ownerOf(vd);
+      for (const { name, typeNode } of goVarDeclNames(vd.node)) {
+        claim(owner, name);
+        const typeName = typeNode ? goFieldTypeName(typeNode, goCtx.pkg) : null;
+        if (!typeName) continue;
+        // A package-level var has no definition to key on, so the package names it
+        // — which is the scope Go gives it. Keyed that way, a file that only USES
+        // it resolves through the file that declares it, the same cross-file lookup
+        // a struct field type already relies on.
+        if (!owner && !goCtx.pkg) continue;
+        const key = owner ? `${owner.qname}#var:${name}` : pkgVarKey(name);
+        fieldTypes.push({ key, type: typeName, file });
+        // A second, different type for one name means this file cannot say what the
+        // name holds, so `x.f.M()` must not be pinned to either.
+        varTypes.set(key, varTypes.has(key) && varTypes.get(key) !== typeName ? null : typeName);
+      }
+    }
+    for (const vl of caps.filter((c) => c.name === 'var.local')) claim(ownerOf(vl), vl.text);
+  }
+
   const refMap = { 'reference.call': 'call', 'reference.import': 'import', 'reference.include': 'include' };
   const edges = [];
   for (const c of caps) {
@@ -292,7 +409,20 @@ export async function extract({ file, lang, langId, scm, source }) {
     if (!kind) continue;
     const enclosing = defs.filter((d) => within(c, d)).sort((a, b) => b.startLine - a.startLine)[0];
     let dst_name, field_key = null, method = null;
-    const target = goCtx && kind === 'call' ? goCallTarget(c, goCtx) : c.text;
+    const isLocalName = (name) => Boolean(enclosing && declaredIn.get(enclosing.qname)?.has(name));
+    // An identifier names a variable, not a package, when this definition declares
+    // it or this file declares it at package level. Both facts are file-local, and
+    // that is exactly right: an import is file-scoped in Go, so a package-level
+    // name declared in ANOTHER file cannot shadow this file's import.
+    const namesAVar = (name) => isLocalName(name) || pkgVarNames.has(name);
+    // The key to look a call on a plain identifier up under. Go resolves the
+    // innermost scope first, so a name this definition declares wins over a
+    // package-level one that shares it.
+    const varKeyFor = (name) => {
+      if (!isLocalName(name) && goCtx?.pkg) return pkgVarKey(name);
+      return enclosing ? `${enclosing.qname}#var:${name}` : null;
+    };
+    const target = goCtx && kind === 'call' ? goCallTarget(c, goCtx, namesAVar) : c.text;
     if (target && typeof target === 'object') {
       dst_name = target.bare; // bare method name — the fallback if we can't infer the type
       // Bind only when the call's receiver var IS the enclosing method's own
@@ -309,6 +439,25 @@ export async function extract({ file, lang, langId, scm, source }) {
         // `<recvType>.M` node exists) still falls back instead of vanishing.
         dst_name = `${enclosing.recvType}.${target.method}`;
         method = target.method;
+      } else if (target.field) {
+        // `x.f.M()` where `x` is a variable this file typed. The field key is the
+        // same one the own-receiver branch above builds, so the resolver needs
+        // nothing new — we only have to name the type that owns the field. Without
+        // a single known type for `x` there is nothing to key on, so the bare name
+        // keeps falling back, as before.
+        const recvType = varTypes.get(varKeyFor(target.recvVar));
+        if (recvType) {
+          field_key = `${recvType}.${target.field}`;
+          method = target.method;
+        }
+      } else if (target.recvVar) {
+        // `x.M()` on a parameter or a variable. Keyed exactly like a field call,
+        // so Pass F resolves it when we recorded one type for `x`, and Pass B
+        // refuses the bare-name fallback when that type is not a repo type. With
+        // no row for the key nothing changes: the bare name still falls back,
+        // which is right for a variable whose type we cannot read.
+        field_key = varKeyFor(target.recvVar);
+        if (field_key) method = target.method;
       }
     } else {
       dst_name = target;

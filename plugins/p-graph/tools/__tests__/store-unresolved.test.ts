@@ -16,9 +16,11 @@ function write(rel, src) {
 }
 
 // Fixture in the shape that made the graph lie: one method name on two types,
-// reached through an interface field, a function parameter and a local variable.
-// None of those three shapes can be typed, so each call site stays unresolved —
-// and the graph must SAY so instead of answering "no callers".
+// reached through an interface field, an interface parameter and a local variable.
+// The local variable states its type, so that call site resolves. The two
+// interface shapes cannot supply a target — which implementation runs is a
+// runtime decision — so those call sites stay unresolved, and the graph must SAY
+// so instead of answering "no callers".
 function writeAmbiguousFixture() {
   write('internal/store/store.go', `package store
 type Store interface {
@@ -69,10 +71,11 @@ describe('unresolved call-site reporting', () => {
     await indexFull({ root: dir, store, ignorePatterns: [] });
 
     const st = store.status();
-    // 4 ListGroups call sites + 1 HandleTyped call site; only the
-    // concrete-field one (s.pg.ListGroups) can be typed.
+    // 4 ListGroups call sites + 1 HandleTyped call site. Two can be typed: the
+    // concrete field (s.pg.ListGroups) and the local variable (p.ListGroups).
+    // The two interface receivers cannot.
     expect(st.call_edges).toBe(5);
-    expect(st.unresolved_calls).toBe(4);
+    expect(st.unresolved_calls).toBe(3);
 
     store.close();
   }, 30000);
@@ -85,15 +88,16 @@ describe('unresolved call-site reporting', () => {
     // Asking by qname must still surface the call sites left bare: they carry
     // the target's bare name, which is exactly why they could not be attributed.
     const rows = store.gapsFor('store.Postgres.ListGroups');
+    // Line 12 (the local variable) is absent: it resolves now, so it is an answer
+    // rather than a gap. Lines 7 and 9 are the two interface receivers.
     expect(rows.map((r) => `${r.file}:${r.line}`)).toEqual([
       'internal/api/server.go:7',
       'internal/api/server.go:9',
-      'internal/api/server.go:12',
     ]);
     expect(rows[0].src_qname).toBe('api.Server.HandleList');
     expect(rows[0].dst_name).toBe('ListGroups');
     // The bare name works too — that is what a user usually types.
-    expect(store.gapsFor('ListGroups')).toHaveLength(3);
+    expect(store.gapsFor('ListGroups')).toHaveLength(2);
     // A symbol nothing calls ambiguously reports nothing.
     expect(store.gapsFor('api.Serve')).toEqual([]);
 
@@ -120,17 +124,17 @@ describe('unresolved call-site reporting', () => {
     const store = openStore(':memory:');
     await indexFull({ root: dir, store, ignorePatterns: [] });
 
-    // impact() walks resolved edges only: it reaches api.Server.HandleTyped and
-    // stops, because HandleTyped's own caller is an unresolved interface call.
-    expect(store.impact('store.Postgres.ListGroups').map((n) => n.qname))
-      .toEqual(['api.Server.HandleTyped']);
+    // impact() walks resolved edges only: it reaches the two call sites it can
+    // type and stops at HandleTyped, whose own caller is an unresolved interface
+    // call.
+    expect(store.impact('store.Postgres.ListGroups').map((n) => n.qname).sort())
+      .toEqual(['api.ServeLocal', 'api.Server.HandleTyped']);
     // The frontier report must include BOTH the target's own bare call sites and
     // the one where the walk stopped one level up.
     const rows = store.gapsAround('store.Postgres.ListGroups');
     expect(rows.map((r) => `${r.file}:${r.line}`)).toEqual([
       'internal/api/server.go:7',
       'internal/api/server.go:9',
-      'internal/api/server.go:12',
       'internal/http/router.go:8',
     ]);
 
@@ -138,9 +142,10 @@ describe('unresolved call-site reporting', () => {
   }, 30000);
 });
 
-// Fixture with the three shapes that hide from a name-keyed report: a local
-// variable that shadows an imported package, a failed own-receiver guess, and a
-// call site outside any indexed symbol.
+// Fixture with the shapes that hide from a name-keyed report: a failed
+// own-receiver guess, and a call site outside any indexed symbol. It also holds a
+// local variable that shadows an imported package — that one used to hide here
+// too, and the first test below pins down that it no longer has to.
 function writeHidingFixture() {
   write('internal/config/config.go', `package config
 func Load() {}
@@ -178,18 +183,18 @@ export class Motor { spin() {} }
 }
 
 describe('the gap report finds gaps recorded under another name', () => {
-  it('reports a call recorded under a shadowed package name', async () => {
+  it('answers a call on a local that shadows a package instead of reporting a gap', async () => {
     writeHidingFixture();
     const store = openStore(':memory:');
     await indexFull({ root: dir, store, ignorePatterns: [] });
 
-    // The call is recorded as "config.ToKeywords" because a local variable shadows
-    // the imported package. Asking about the method by qname must still find it.
+    // This call used to be recorded as "config.ToKeywords" — the local variable
+    // `config` was read as the imported package of the same name, so the method
+    // got no caller and the gap report had to carry it. The variable's own type is
+    // read first now, so it is a real answer and there is nothing left to report.
+    expect(store.callers('related.IndexConfig.ToKeywords').map((n) => n.qname)).toEqual(['related.Do']);
     const rows = store.gapsFor('related.IndexConfig.ToKeywords');
-    const row = rows.find((r) => r.file === 'internal/related/related.go');
-    expect(row).toBeTruthy();
-    expect(row.dst_name).toBe('config.ToKeywords');
-    expect(row.reason).toBe('ambiguous');
+    expect(rows.filter((r) => r.file === 'internal/related/related.go')).toEqual([]);
     store.close();
   }, 30000);
 

@@ -90,7 +90,7 @@ class App(Base):
     store.close();
   }, 30000);
 
-  it('leaves a Go call on a non-receiver variable alone', async () => {
+  it('binds a Go call on a non-receiver variable to that variable\'s declared type', async () => {
     write('api/api.go', `package api
 type Server struct{}
 func (s *Server) helper() {}
@@ -101,9 +101,13 @@ func Free(x *Server) { x.helper() }
     const store = await indexed();
 
     // `x` is a parameter, not the enclosing receiver (Free is not a method), so
-    // the call stays unattributed rather than being guessed at.
-    expect(store.callers('api.Server.helper')).toEqual([]);
-    expect(store.gapsFor('api.Server.helper')).toHaveLength(1);
+    // none of the own-receiver rules above apply. Its declared type names the
+    // target outright, so the call is known rather than guessed — and the
+    // same-named method on Worker must stay out of it.
+    expect(store.callers('api.Server.helper').map((n) => n.qname)).toEqual(['api.Free']);
+    expect(store.callers('api.Worker.helper')).toEqual([]);
+    // Nothing is left over: a known call is not also reported as a gap.
+    expect(store.gapsFor('api.Server.helper')).toEqual([]);
 
     store.close();
   }, 30000);

@@ -49,7 +49,7 @@ func Render() []byte { return bufferpool.GetBuffer() }
     store.close();
   }, 30000);
 
-  it('leaves a call on a local variable that shadows an imported package unresolved', async () => {
+  it('reads a local variable that shadows an imported package as the variable', async () => {
     write('config/config.go', `package config
 func Load() {}
 `);
@@ -64,15 +64,18 @@ func Do() {
 `);
     const store = await indexed();
 
-    // `config` is a local variable here, but the graph cannot know that — it sees
-    // an identifier that names an imported package. Recording the call as
-    // config.ToKeywords is wrong-but-honest: no edge is created, and Task 5's gap
-    // report finds it by the bare name instead.
-    expect(store.callers('related.IndexConfig.ToKeywords')).toEqual([]);
+    // A variable hides a package of the same name, so the variable's type is asked
+    // about first. Reading `config` as the imported package instead sent this call
+    // to the wrong package and left the real one with no caller at all.
+    expect(store.callers('related.IndexConfig.ToKeywords').map((n) => n.qname)).toEqual(['related.Do']);
+    // The stored row must not carry the wrong qualifier any more.
     const edge = store.db.prepare(
-      `SELECT dst_name, dst_bare FROM edges WHERE kind = 'call' AND line = 7`).get();
-    expect(edge.dst_name).toBe('config.ToKeywords');
+      `SELECT dst_name, dst_bare, field_key FROM edges WHERE kind = 'call' AND line = 7`).get();
+    expect(edge.dst_name).toBe('ToKeywords');
     expect(edge.dst_bare).toBe('ToKeywords');
+    expect(edge.field_key).toBe('related.Do#var:config');
+    // The package it shadows keeps its own symbols — nothing was moved onto it.
+    expect(store.callers('config.Load')).toEqual([]);
     store.close();
   }, 30000);
 });

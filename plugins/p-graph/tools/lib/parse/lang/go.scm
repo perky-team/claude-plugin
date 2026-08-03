@@ -25,6 +25,25 @@
 (type_spec name: (type_identifier) @name) @definition.type
 (type_alias name: (type_identifier) @name) @definition.type
 
+; Declared types of the things a call can be made on. A call like `db.Get(...)`
+; only resolves if we know what `db` is, and for a parameter or a var the source
+; says so outright. Without this the resolver falls back to matching the bare
+; method name, which is how a sync.Pool.Put became a caller of a repo method.
+; Capture the whole declaration, not its names: this grammar gives the comma
+; tokens of `var a, b T` the `name` field too, so a `name: (identifier) @x`
+; pattern matches only the first name and silently drops the rest. The driver
+; reads the names and the shared type off the node instead.
+(parameter_declaration) @var.decl
+(var_spec) @var.decl
+(short_var_declaration) @var.decl
+; Names bound by shapes whose type we cannot read: a range variable, a type-switch
+; alias, a channel receive. We record only that the name is taken. Without that, a
+; call on one of them would be answered with the type of a package-level variable
+; that happens to share the name — a wrong answer instead of a missing one.
+(range_clause left: (expression_list (identifier) @var.local))
+(type_switch_statement alias: (expression_list (identifier) @var.local))
+(receive_statement left: (expression_list (identifier) @var.local))
+
 (call_expression function: (identifier) @reference.call)
 (call_expression function: (selector_expression field: (field_identifier) @reference.call))
 (import_spec path: (interpreted_string_literal) @reference.import)

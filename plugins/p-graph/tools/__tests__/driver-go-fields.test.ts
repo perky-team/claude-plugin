@@ -69,14 +69,39 @@ type S struct {
     expect(fieldTypes.some((f) => f.key === 'outer.S.Name')).toBe(false);
   }, 20000);
 
-  it('does NOT tag field-selector info when the receiver var is not the method receiver', async () => {
+  it('tags field-selector info on a parameter from that parameter\'s declared type', async () => {
     const { edges, nodes } = await run(SRC);
-    // Loose is a plain function; `s` is a parameter, not a method receiver.
+    // Loose is a plain function, so `s` is a parameter rather than a method
+    // receiver. Its declared type still says which struct owns `dimpleCore`, so the
+    // call gets the same field key a call through the receiver would get.
+    const loose = nodes.find((n) => n.qname === 'events.Loose');
+    const call = edges.find((e) => e.kind === 'call' && e.src_id === loose.id && e.dst_name === 'Action');
+    expect(call).toBeTruthy();
+    expect(call.field_key).toBe('events.Server.dimpleCore');
+    expect(call.method).toBe('Action');
+    // bare method name is still preserved as the fallback dst_name
+    expect(call.dst_name).toBe('Action');
+  }, 20000);
+
+  it('leaves field-selector info off when the variable\'s type is unknown', async () => {
+    // `s` takes its type from a function's return value, which extraction does not
+    // read. With no type for `s` there is nothing to say about `s.dimpleCore`, so
+    // the call must keep the bare name instead of being pinned to a guess.
+    const src = `package events
+type Server struct {
+	dimpleCore *core.Core
+}
+func Make() *Server { return nil }
+func Loose() {
+	s := Make()
+	s.dimpleCore.Action()
+}
+`;
+    const { edges, nodes } = await run(src);
     const loose = nodes.find((n) => n.qname === 'events.Loose');
     const call = edges.find((e) => e.kind === 'call' && e.src_id === loose.id && e.dst_name === 'Action');
     expect(call).toBeTruthy();
     expect(call.field_key ?? null).toBeNull();
-    // still falls back to the bare method name
     expect(call.dst_name).toBe('Action');
   }, 20000);
 });
