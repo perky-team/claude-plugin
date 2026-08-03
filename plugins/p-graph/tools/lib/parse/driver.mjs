@@ -246,6 +246,90 @@ function goCallTarget(c, { pkg, importPkgs, hasDotImport }, namesAVar = () => fa
   return c.text;
 }
 
+// The declarator that names a C++ function, found by walking past the wrappers a
+// return type adds: `char* Buf::Data()` puts the function_declarator under a
+// pointer_declarator, and `char*& Buf::Ref()` under a pointer_declarator holding
+// a reference_declarator. Returns null when there is no function_declarator at
+// all — which is what a macro before a class name does. Tree-sitter reads
+// `class LEVELDB_EXPORT DB { … };` as a function definition whose declarator is
+// the plain identifier `DB`, and indexing that would give the whole class body a
+// function's name.
+function cppFunctionDeclarator(node) {
+  let n = node;
+  while (n && (n.type === 'pointer_declarator' || n.type === 'reference_declarator')) {
+    // A reference_declarator holds its child in no field, a pointer_declarator in
+    // `declarator`, so try the field first and fall back to the first child.
+    n = n.childForFieldName?.('declarator') ?? n.namedChild(0);
+  }
+  return n?.type === 'function_declarator' ? n : null;
+}
+
+// The name path a C++ declarator writes, outermost scope first:
+//   `Get`            -> ['Get']
+//   `PgStore::Get`   -> ['PgStore', 'Get']      an out-of-class definition
+//   `a::b::f`        -> ['a', 'b', 'f']
+//   `Vec<T>::At`     -> ['Vec', 'At']           the template arguments name no scope
+//   `Buf::~Buf`      -> ['Buf', '~Buf']         a destructor
+//   `Buf::operator==`-> ['Buf', 'operator==']   an operator overload
+//   `::foo`          -> ['foo']                 global scope, so no scope to add
+// Returns null for a shape we cannot name (a function pointer declarator), so
+// the definition is skipped instead of indexed as "(anon)".
+const CPP_NAME_NODES = ['identifier', 'field_identifier', 'destructor_name', 'operator_name'];
+function cppNamePath(declarator) {
+  const path = [];
+  let n = declarator;
+  while (n?.type === 'qualified_identifier') {
+    const scope = n.childForFieldName?.('scope');
+    // `Vec<T>::At` — the scope is the template, and the class is its `name`.
+    if (scope) path.push(scope.type === 'template_type'
+      ? (scope.childForFieldName?.('name')?.text ?? scope.text) : scope.text);
+    n = n.childForFieldName?.('name');
+  }
+  // `template <> void f<int>() {}` — the name sits under the specialization.
+  if (n?.type === 'template_function') n = n.childForFieldName?.('name');
+  if (!n || !CPP_NAME_NODES.includes(n.type)) return null;
+  path.push(n.text);
+  return path;
+}
+
+// What a C++ call site names, and the bare method name to fall back on.
+//
+// `scope` is the qname of the class or namespace the call is written inside;
+// `ns` is the qname of the nearest enclosing namespace only. C++ looks a name up
+// in the innermost scope first, so recording the call that way is what lets the
+// exact-qname pass answer it instead of a bare-name guess.
+//
+// `method` is set only when the bare name is still a legitimate fallback. An
+// unqualified `TableFileName(...)` inside a member function may well be a free
+// function rather than a member, so the fallback must stay open. A call the
+// source qualified itself (`std::max(...)`) gets no fallback: the qualifier said
+// where to look, and a repo symbol that merely shares the bare name is not it.
+function cppCallTarget(c, scope, ns) {
+  const node = c.node;
+  if (node.type === 'qualified_identifier') {
+    const path = cppNamePath(node);
+    if (!path) return { dst_name: c.text, method: null };
+    // Prefix the enclosing namespace, because C++ searches it before the global
+    // scope: `Status::OK()` written inside `namespace leveldb` means
+    // `leveldb::Status::OK`. Two cases must not be prefixed — a leading `::`,
+    // which starts at global scope (no `scope` field), and a path that already
+    // spells a namespace we are inside (`leveldb::Status::OK()`).
+    const rooted = !node.childForFieldName?.('scope');
+    const alreadyQualified = ns ? ns.split('.').includes(path[0]) : false;
+    const prefix = ns && !rooted && !alreadyQualified ? `${ns}.` : '';
+    return { dst_name: prefix + path.join('.'), method: null };
+  }
+  // `x.m()` or `x->m()`. The receiver's type is unknown, so only `this` says
+  // which type the call belongs to; any other receiver keeps the bare name.
+  if (node.type === 'field_identifier') {
+    const recv = node.parent?.childForFieldName?.('argument');
+    if (recv?.type === 'this' && scope) return { dst_name: `${scope}.${c.text}`, method: c.text };
+    return { dst_name: c.text, method: null };
+  }
+  if (scope) return { dst_name: `${scope}.${c.text}`, method: c.text };
+  return { dst_name: c.text, method: null };
+}
+
 // The node a call's name sits under when the source wrote the call ON something
 // — `x.end()` rather than `end()`. Checked against the vendored grammars: TS and
 // JS put the property in a `member_expression`, Python in an `attribute`, C++ in
@@ -373,8 +457,10 @@ function pyObjectPath(obj) {
   return parts;
 }
 
-// The type a `this.m()` / `this->m()` / `self.m()` call belongs to, for languages
-// where qname comes from lexical nesting (TS/JS, Python, C++). The owning type is
+// The type a `this.m()` / `self.m()` call belongs to, for languages where qname
+// comes from lexical nesting (TS/JS, Python). C++ has its own path — see
+// cppCallTarget — because a C++ method is often defined outside its class, so
+// lexical nesting cannot say which type owns it. The owning type is
 // the enclosing method's container, so no type inference is needed — but a bare
 // `m` would collide with every same-named method in the repo and get dropped as
 // ambiguous. Returns the owner def, or null when the receiver isn't the enclosing
@@ -418,16 +504,33 @@ export async function extract({ file, lang, langId, scm, source, pyRepoModules =
   for (const d of defCaps) {
     const kind = d.name.split('.')[1];
     if (!defKinds.includes(kind)) continue;
+    // A C++ function definition carries its own name path in its declarator, so
+    // it needs no `@name` capture: `PgStore::Get` says which class owns it even
+    // though the class itself is declared in another file.
+    let localPath = null;
+    if (lang === 'cpp' && kind === 'function') {
+      const fd = cppFunctionDeclarator(d.node.childForFieldName?.('declarator'));
+      const path = fd ? cppNamePath(fd.childForFieldName?.('declarator')) : null;
+      if (!path) continue; // a shape we cannot name — see cppFunctionDeclarator
+      localPath = path.join('.');
+    }
     // The outermost name inside this definition is its own. The column has to
     // break a line tie or the pick is left to capture order: in
     // `const Widget = class { render() {} };` both `Widget` and `render` are
     // `@name` captures on line 1 inside the same span, and the leftmost is the
     // one the definition is called.
-    const nameCap = nameCaps
+    const nameCap = localPath ? null : nameCaps
       .filter((n) => within(n, d))
       .sort((a, b) => (a.startLine - b.startLine) || (a.startCol - b.startCol))[0];
+    // `namespace a::b { … }` is one node that names two namespaces. Split it so
+    // a function inside gets the qname `a.b.f`, which is what a call written
+    // `a::b::f()` records.
+    if (lang === 'cpp' && kind === 'namespace' && nameCap?.text.includes('::')) {
+      localPath = nameCap.text.split('::').join('.');
+    }
     defs.push({
-      kind, name: nameCap?.text ?? '(anon)',
+      kind, localPath,
+      name: localPath ? localPath.slice(localPath.lastIndexOf('.') + 1) : (nameCap?.text ?? '(anon)'),
       startLine: d.startLine, endLine: d.endLine,
       startCol: d.startCol, endCol: d.endCol,
       signature: source.split('\n')[d.startLine - 1]?.trim() ?? '',
@@ -456,9 +559,12 @@ export async function extract({ file, lang, langId, scm, source, pyRepoModules =
   const ordSeen = new Map();
   for (const def of defs) {
     const parent = defs.filter((p) => within(def, p)).sort((a, b) => b.startLine - a.startLine)[0];
+    // C++ writes the owner into the declarator (`PgStore::Get`), so the
+    // definition names its own path and nesting only adds what encloses it.
+    const local = def.localPath ?? def.name;
     if (parent) {
       // Nesting already carries any package prefix through the parent's qname.
-      def.qname = `${parent.qname}.${def.name}`;
+      def.qname = `${parent.qname}.${local}`;
     } else if (goCtx) {
       // Go: package-qualify top-level symbols, receiver-qualify methods, so the
       // resolver can distinguish e.g. filesink.New from udpsink.New. `name`
@@ -479,7 +585,26 @@ export async function extract({ file, lang, langId, scm, source, pyRepoModules =
       }
       def.qname = goCtx.pkg ? `${goCtx.pkg}.${local}` : local;
     } else {
-      def.qname = def.name;
+      def.qname = local;
+    }
+    if (lang === 'cpp') {
+      // The scope a name written inside this definition is looked up in first,
+      // and the nearest enclosing namespace on its own. A definition that is
+      // itself a scope (a class, a struct, a namespace) is its own answer;
+      // anything else hands over whatever owns it.
+      def.cppScope = OWNER_KINDS.has(def.kind)
+        ? def.qname
+        : (def.qname.includes('.') ? def.qname.slice(0, def.qname.lastIndexOf('.')) : null);
+      def.cppNs = def.kind === 'namespace' ? def.qname : (parent?.cppNs ?? null);
+      // A definition whose declarator names a class (`PgStore::Get`), or that
+      // sits in a class body, is a method. A namespace-qualified out-of-line
+      // definition (`a::b::f`) is labelled a method too — the source alone does
+      // not say whether `a::b` is a class or a namespace, and a member is by far
+      // the common case.
+      if (def.kind === 'function' &&
+          (def.localPath?.includes('.') || parent?.kind === 'class' || parent?.kind === 'struct')) {
+        def.kind = 'method';
+      }
     }
     const key = `${def.qname}|${def.kind}`;
     const ord = ordSeen.get(key) ?? 0; ordSeen.set(key, ord + 1);
@@ -734,6 +859,15 @@ export async function extract({ file, lang, langId, scm, source, pyRepoModules =
         field_key = varKeyFor(target.recvVar, target.recvNode);
         if (field_key) method = target.method;
       }
+    } else if (kind === 'call' && lang === 'cpp') {
+      // C++ looks a name up in the enclosing class and namespace before the
+      // global scope, and it writes an out-of-class definition as
+      // `PgStore::Get`. Recording the call the same way is what lets the exact
+      // qname pass answer it instead of a bare-name guess.
+      const t = cppCallTarget(c, enclosing?.cppScope ?? null,
+        (enclosing?.kind === 'namespace' ? enclosing.qname : enclosing?.cppNs) ?? null);
+      dst_name = t.dst_name;
+      method = t.method;
     } else {
       dst_name = target;
       // Same idea for lexically-nested languages: `this.m()` / `self.m()` belongs

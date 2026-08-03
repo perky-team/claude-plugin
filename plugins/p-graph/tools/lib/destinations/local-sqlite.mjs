@@ -94,8 +94,36 @@ CREATE INDEX IF NOT EXISTS field_types_file ON field_types(file);
 // the owner rule would leave a single "unique" match. On flask that turned 0
 // edges into 36 false ones — every `dict.setdefault(...)` call in the repo landed
 // on the one class method named setdefault. This rule may only remove a link.
-const MEMBER_TARGET_OK = `(edges.member = 0 OR edges.lang = 'go' OR EXISTS (
-        SELECT 1 FROM nodes own WHERE own.id = n.container_id AND own.kind IN ${OWNER_KINDS_SQL}))`;
+//
+// "Is this candidate a member a dot or an arrow can reach?" Two ways to be one:
+//
+//  1. the node sits inside an owner in its own file — the normal case, and the
+//     only one for a language whose qname comes from lexical nesting;
+//  2. the node's own qname names the owner. C++ defines a method outside its
+//     class (`std::string PgStore::Get(int)` in the .cpp, `class PgStore` in the
+//     .h), so it has no owner in its own file and rule 1 can never see one. The
+//     qname says `PgStore.Get` because the source wrote `PgStore::`, and the
+//     owner is checked against a class this repo really indexed — so this is a
+//     recorded fact, not a guess. It changes nothing for the other languages:
+//     there, the qname prefix IS the container, so rule 1 already answered.
+//
+// A C++ namespace is excluded, unlike a TypeScript one. `namespace X { void f(); }`
+// is reached by writing `X::f()`, never `x.f()`, so a dot in C++ can only mean a
+// call on a value — and letting it match every free function in a repo that wraps
+// its code in one namespace is exactly the kind of false edge this rule removes.
+//
+// `langCol` names the column holding the call's language, because the two readers
+// below have different rows in scope.
+const memberOwnerSql = (langCol) => `(
+  EXISTS (SELECT 1 FROM nodes own WHERE own.id = n.container_id
+            AND own.kind IN ${OWNER_KINDS_SQL}
+            AND (own.kind <> 'namespace' OR ${langCol} <> 'cpp'))
+  OR EXISTS (SELECT 1 FROM nodes own WHERE own.lang = n.lang
+            AND own.qname = substr(n.qname, 1, length(n.qname) - length(n.name) - 1)
+            AND own.kind IN ${OWNER_KINDS_SQL}
+            AND (own.kind <> 'namespace' OR ${langCol} <> 'cpp')))`;
+const MEMBER_TARGET_OK =
+  `(edges.member = 0 OR edges.lang = 'go' OR ${memberOwnerSql('edges.lang')})`;
 
 export function openStore(dbPath, opts = {}) {
   const DatabaseSync = loadDatabaseSync();
@@ -231,9 +259,7 @@ export function openStore(dbPath, opts = {}) {
     // filtered in the WHERE, so it can only reject the one hit this pass found —
     // never turn two ambiguous hits into one (see MEMBER_TARGET_OK).
     const byBareName = db.prepare(`
-      SELECT n.id, EXISTS (
-        SELECT 1 FROM nodes own WHERE own.id = n.container_id AND own.kind IN ${OWNER_KINDS_SQL}
-      ) AS owned
+      SELECT n.id, ${memberOwnerSql('n.lang')} AS owned
       FROM nodes n
       WHERE n.name = ? AND n.lang = ? AND n.kind IN ('function','method','class') LIMIT 2`);
     // Promotion is real (Go lets an embedded type's method answer for the
