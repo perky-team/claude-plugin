@@ -51,7 +51,13 @@ function goContext(caps) {
   for (const c of caps) {
     if (c.name !== 'reference.import') continue;
     const path = c.text.replace(/^["'`]|["'`]$/g, '');
-    const seg = path.split('/').pop();
+    // A module path may end in a major-version segment (`…/caddy/v2`). The
+    // package is named by the segment before it, so taking the last segment
+    // registers a package called "v2" — after which no call through that import
+    // resolves, and the gap report's reachability check can never match either.
+    const parts = path.split('/').filter(Boolean);
+    let seg = parts.pop();
+    if (/^v[0-9]+$/.test(seg) && parts.length) seg = parts.pop();
     const nameChild = c.node?.parent?.childForFieldName?.('name');
     if (nameChild) {
       if (nameChild.type === 'dot') { hasDotImport = true; continue; }

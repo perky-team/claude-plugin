@@ -25,7 +25,14 @@ function loadDatabaseSync() {
 // These are new columns, which CREATE TABLE IF NOT EXISTS can never add to an
 // existing table, so openStore now drops the graph tables when the stored version
 // is older. The DB is a rebuildable cache; dropping it costs one reindex.
-export const SCHEMA_VERSION = 6;
+// 7: a Go method on a generic type is now receiver-qualified (`cache.Partition.Clear`,
+// previously `cache.Clear`), and an import path ending in `/vN` now registers the
+// right package name. Both change stored qnames and dst_name values, so an older
+// graph must be rebuilt rather than patched. This bump also adds edges.guess (set
+// when a target was found only by a unique bare name) and edges.member (set when
+// the call was written as a member access) — later tasks fill them, and a column
+// added after this bump would be missing on an already-migrated graph.
+export const SCHEMA_VERSION = 7;
 
 const META_DDL = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
@@ -45,7 +52,8 @@ CREATE INDEX IF NOT EXISTS nodes_name ON nodes(name);
 CREATE INDEX IF NOT EXISTS nodes_qname ON nodes(qname);
 CREATE TABLE IF NOT EXISTS edges (
   src_id TEXT, dst_id TEXT, dst_name TEXT, kind TEXT, file TEXT, line INTEGER,
-  field_key TEXT, method TEXT, dst_bare TEXT, lang TEXT, external INTEGER DEFAULT 0
+  field_key TEXT, method TEXT, dst_bare TEXT, lang TEXT, external INTEGER DEFAULT 0,
+  guess INTEGER DEFAULT 0, member INTEGER DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS edges_src ON edges(src_id);
 CREATE INDEX IF NOT EXISTS edges_dst ON edges(dst_id);

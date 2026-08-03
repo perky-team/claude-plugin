@@ -14,4 +14,16 @@ describe('store open', () => {
     expect(typeof s.hasFts).toBe('boolean');
     s.close();
   });
+  // Schema 7 adds these two columns for later tasks (guess: Task 5, member:
+  // Task 6) in the same bump that changes qnames — so a graph that already
+  // migrated to 7 never opens with one of them missing.
+  it('gives edges a guess and a member column, both defaulting to 0', () => {
+    const s = openStore(':memory:');
+    s.replaceFileSymbols('f.go', [], [{
+      src_id: 'a', dst_id: null, dst_name: 'x', kind: 'call', file: 'f.go', line: 1,
+    }]);
+    const row = s.db.prepare('SELECT guess, member FROM edges LIMIT 1').get();
+    expect(row).toEqual({ guess: 0, member: 0 });
+    s.close();
+  });
 });
