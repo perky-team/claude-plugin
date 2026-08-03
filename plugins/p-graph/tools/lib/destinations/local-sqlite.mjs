@@ -312,6 +312,15 @@ function attachReadHelpers(store, db, hasFts) {
   };
   store.node = (idOrQname) =>
     db.prepare('SELECT * FROM nodes WHERE id = ? OR qname = ? LIMIT 1').get(idOrQname, idOrQname) ?? null;
+  // callers() matches a target by id, qname OR bare name, so the gap report
+  // (gapsFor/gapsAround) has to resolve the same way. Going through store.node()
+  // (id or qname only) meant a bare-name query silently dropped the whole
+  // no-caller report — 184 rows on a real repo — while the rows above it kept
+  // printing. Returns every matching node, so a name shared by several symbols
+  // (e.g. two unrelated classes with the same method name) makes all of them
+  // contribute their gap rows, not just whichever the caller finds first.
+  const targetsFor = (nameOrId) => db.prepare(
+    'SELECT * FROM nodes WHERE id = ? OR qname = ? OR name = ?').all(nameOrId, nameOrId, nameOrId);
   store.callers = (name) => db.prepare(`
     SELECT DISTINCT s.* FROM edges e JOIN nodes s ON s.id = e.src_id
     JOIN nodes d ON d.id = e.dst_id WHERE d.name = ? OR d.qname = ?`).all(name, name);
@@ -452,24 +461,29 @@ function attachReadHelpers(store, db, hasFts) {
   const collectGaps = (symbols, callerCheckIds = []) => {
     const seen = new Set(), out = [];
 
-    // The old code ran one query per (symbol, name) pair; the first symbol
-    // whose query surfaced a given row locked in that symbol's pkg for the
-    // `reachable` check, because later symbols found the row already in
-    // `seen` and skipped it. To batch the query while keeping that same
-    // per-row pkg choice, record which symbol (by position) first offers each
-    // name variant, then for a returned row pick whichever of its dst_name /
-    // dst_bare owners comes first.
-    const owner = new Map(); // name -> { pkg, idx }
+    // Record every symbol (by position) that offers each name variant — not
+    // just the first, the way a single-owner map would. A bare name can now
+    // come from several matched symbols (targetsFor in gapsFor/gapsAround),
+    // and a row that matched more than one of them must not be scored against
+    // just one: a possible real miss must not be demoted just because an
+    // unrelated namesake in another package also matched the same name.
+    const ownersByName = new Map(); // name -> [{ pkg, idx }, ...]
     const allNames = [];
     symbols.forEach(({ names, pkg }, idx) => {
       for (const name of new Set(names.filter(Boolean).map(String))) {
-        if (!owner.has(name)) { owner.set(name, { pkg, idx }); allNames.push(name); }
+        if (!ownersByName.has(name)) { ownersByName.set(name, []); allNames.push(name); }
+        ownersByName.get(name).push({ pkg, idx });
       }
     });
+    // A row's dst_name and dst_bare can each carry their own owners; pool them
+    // and score against that pkg only when every owner is the SAME symbol.
+    // More than one distinct symbol involved means the row is ambiguous as to
+    // which one actually matched — returning no pkg makes reachableIn() below
+    // answer 1, which is exactly "keep it reachable".
     const pkgForRow = (r) => {
-      const byName = owner.get(r.dst_name), byBare = owner.get(r.dst_bare);
-      if (byName && byBare) return (byName.idx <= byBare.idx ? byName : byBare).pkg;
-      return (byName ?? byBare)?.pkg ?? null;
+      const owners = [...(ownersByName.get(r.dst_name) ?? []), ...(ownersByName.get(r.dst_bare) ?? [])];
+      const idxs = new Set(owners.map((o) => o.idx));
+      return idxs.size === 1 ? owners[0].pkg : null;
     };
     for (const names of chunk(allNames, 400)) {
       const stmt = db.prepare(gapRowsByNameSql(names.length));
@@ -510,9 +524,16 @@ function attachReadHelpers(store, db, hasFts) {
   // A call site records whatever the source wrote, so match the target's bare
   // name as well as its qname — that is what finds a call made through an import
   // alias, a shadowed package name, or a receiver-qualified guess that missed.
+  //
+  // The target itself is resolved with targetsFor, not store.node: a bare name
+  // (the natural thing to type after `search`) can match several symbols, and
+  // every one of them may have its own no-caller call sites. Matching only by
+  // id/qname (store.node) silently dropped the whole no-caller report for a
+  // bare-name query — see the comment on targetsFor above.
   store.gapsFor = (name) => {
-    const target = store.node(name);
-    return collectGaps([symbolOf(name, target)], target ? [target.id] : []);
+    const targets = targetsFor(name);
+    if (!targets.length) return collectGaps([symbolOf(name, null)], []);
+    return collectGaps(targets.map((t) => symbolOf(name, t)), targets.map((t) => t.id));
   };
   store.gapsFrom = (name) => {
     const n = store.node(name);
@@ -534,13 +555,27 @@ function attachReadHelpers(store, db, hasFts) {
       }));
   };
   // The frontier of an impact walk: gaps naming the target AND gaps naming
-  // anything the walk already reached, which is where it stopped. impact() runs
-  // once here and its result feeds both the name list and the no-caller check.
+  // anything the walk already reached, which is where it stopped.
+  //
+  // Resolved with targetsFor, same reasoning as gapsFor: a bare name can match
+  // several symbols. impact() itself still walks from one id at a time (a
+  // frontier is a per-symbol call graph, blending several would confuse the
+  // walk), so run it once per matched target and merge the frontiers. A node
+  // already counted as a target is dropped from the merged "reached" set so it
+  // does not also show up as its own reached neighbour.
   store.gapsAround = (name) => {
-    const target = store.node(name);
-    const reached = store.impact(name);
-    const symbols = [symbolOf(name, target), ...reached.map((n) => symbolOf(n.qname, n))];
-    const callerCheckIds = [...(target ? [target.id] : []), ...reached.map((n) => n.id)];
+    const targets = targetsFor(name);
+    if (!targets.length) return collectGaps([symbolOf(name, null)], []);
+    const targetIds = new Set(targets.map((t) => t.id));
+    const reachedById = new Map();
+    for (const t of targets) {
+      for (const n of store.impact(t.qname)) {
+        if (!targetIds.has(n.id)) reachedById.set(n.id, n);
+      }
+    }
+    const reached = [...reachedById.values()];
+    const symbols = [...targets.map((t) => symbolOf(name, t)), ...reached.map((n) => symbolOf(n.qname, n))];
+    const callerCheckIds = [...targets.map((t) => t.id), ...reached.map((n) => n.id)];
     return collectGaps(symbols, callerCheckIds);
   };
   const MAX_DEPTH = 50;
