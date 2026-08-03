@@ -57,6 +57,35 @@ return, as `p-chat` does. `tests/cli-exit-safety.test.ts` enforces one of the tw
 | `/p-tasks:list` | Lists ALL items in document order with their status and fields (the whole plan); with a task id — that task's sub-tasks. Fills the gap between `next` (open only) and `summary` (done only). |
 | `/p-tasks:sync` | Pushes primary state to all mirrors. Idempotent. |
 
+## `ptasks guard` — a p-shed guard over the backlog
+
+Not a skill: a CLI command meant for the `guard:` field of a [p-shed](../p-shed/) job, in
+front of an expensive `claude -p` launch.
+
+| exit | meaning |
+|---|---|
+| `0` | there is actionable work — launch |
+| `75` | deliberately quiet, no work this slot (not a failure, no history row) |
+| other | guard error, counted toward the job's circuit breaker |
+
+It answers with `pickNext` — the same code path as `/p-tasks:next`, so the guard and
+`next` can never disagree about what counts as actionable.
+
+```bash
+ptasks guard                                   # ready: st-206 (2 actionable of 7 open)   → 0
+ptasks guard --exclude-origin human:           # no work: 3 open, 3 excluded by origin    → 75
+ptasks guard --json                            # same exit codes, JSON envelope on stdout
+```
+
+`--exclude-origin <prefix>` (repeatable) skips items whose `origin` starts with the
+prefix. The case it exists for: `origin: human:<something>` marks an item parked on a
+person — a question the loop asked and cannot answer itself. Such items are legitimately
+open and `pickNext` legitimately returns them, but a worker launched for one can only
+re-read the question and stop. Excluded items still count as blockers for other items.
+
+The single stdout line is the reason p-shed records as `lastGuard.reason` and prints in
+`pshed status`, so it is what an operator reads when asking "why did the worker not run?".
+
 ## Item fields
 
 Each `task` / `sub-task` carries the required `id`, `title`, `description`, `status`, and `blockedBy`. Sub-tasks may also carry these **optional** work-item fields (all default to empty/absent, so existing `tasks.yml` files stay valid):

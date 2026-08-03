@@ -13,6 +13,7 @@ import { resolveDestination, makeTransport } from './lib/destination.mjs';
 import { findCycle } from './lib/cycles.mjs';
 import { STATUSES, KINDS } from './lib/schema.mjs';
 import { pickNext } from './lib/next.mjs';
+import { evaluateGuard } from './lib/guard.mjs';
 import { summarize } from './lib/summary.mjs';
 import { listAll } from './lib/list.mjs';
 import { syncAll } from './lib/sync.mjs';
@@ -257,6 +258,46 @@ export async function nextCommand({ root, args, transport }) {
   return emitJson({ next: one ?? null }, 0);
 }
 
+// A p-shed guard: cheap "is there work?" answer in front of an expensive launch.
+// p-tasks owns the backlog, so it answers the question itself instead of every
+// consumer hand-rolling a shell wrapper around `next --json` and re-deriving the
+// selection rules slightly differently.
+export async function guardCommand({ root, args, transport }) {
+  const excludeOrigin = args['exclude-origin'] === undefined
+    ? []
+    : (Array.isArray(args['exclude-origin']) ? args['exclude-origin'] : [args['exclude-origin']]);
+  // `--exclude-origin` with no value parses as `true`. Ignoring it silently would make
+  // the guard answer "there is work" for a backlog the operator meant to filter out —
+  // in a cron job that is an expensive run every hour, so refuse instead.
+  if (excludeOrigin.some(p => typeof p !== 'string' || p.length === 0)) {
+    return die('--exclude-origin requires a prefix', 1);
+  }
+
+  const { primary } = loadResolved({ root, transport });
+  await primary.ensureStructure();
+  const items = await primary.listItems();
+  const warns = [];
+  const g = evaluateGuard(items, { excludeOrigin, onWarn: (m) => warns.push(m) });
+  for (const w of warns) process.stderr.write(`warning: ${w}\n`);
+
+  if (args.json) {
+    return emitJson({
+      action: 'guard',
+      result: g.result,
+      reason: g.reason,
+      next: g.next,
+      open: g.open,
+      actionable: g.actionable,
+      excluded: g.excluded,
+      blocked: g.blocked,
+    }, g.exit);
+  }
+  // One short line, because p-shed records the LAST line of a guard's stdout as
+  // `lastGuard.reason` and shows it in `pshed status`.
+  process.stdout.write(`${g.reason}\n`);
+  process.exit(g.exit);
+}
+
 export async function summaryCommand({ root, args, transport }) {
   const { primary } = loadResolved({ root, transport });
   await primary.ensureStructure();
@@ -358,7 +399,7 @@ if (isMain) {
     }
     const command = process.argv[2];
     const args = parseArgs(process.argv.slice(3));
-    const KNOWN = ['init', 'add', 'set', 'next', 'summary', 'list', 'sync'];
+    const KNOWN = ['init', 'add', 'set', 'next', 'guard', 'summary', 'list', 'sync'];
     if (!KNOWN.includes(command)) die(`unknown command: ${command}`, 1);
     if (command === 'init') {
       const root = findRoot(process.cwd());
@@ -378,6 +419,11 @@ if (isMain) {
     if (command === 'next') {
       const root = findRoot(process.cwd());
       await nextCommand({ root, args });
+      return;
+    }
+    if (command === 'guard') {
+      const root = findRoot(process.cwd());
+      await guardCommand({ root, args });
       return;
     }
     if (command === 'summary') {
