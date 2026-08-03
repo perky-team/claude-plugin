@@ -36,27 +36,44 @@ func UseGuessed() {
     store.close();
   }, 30000);
 
-  it('does not let a guessed edge seed the impact set', async () => {
-    write('pool/pool.go', `package pool
-type Factory struct{}
-func (f *Factory) Put(v any) {}
-`);
-    write('app/app.go', `package app
-import "sync"
-type Deep struct{}
-func (d *Deep) Top() { d.mid() }
-func (d *Deep) mid() {
-	var p sync.Pool
-	p.Put(1)
+  it('does not let a guessed edge seed or extend the impact walk, and still walks a certain chain in full', async () => {
+    write('svc2/svc2.go', `package svc2
+type A struct{}
+func (a *A) Guessed() {}
+func Make() *A { return &A{} }
+func Reached() {
+	x := Make()
+	x.Guessed()
 }
+func Caller() { Reached() }
+
+func Target() {}
+func M1() { Target() }
+func M2() { M1() }
+func M3() { M2() }
 `);
     const store = openStore(':memory:');
     await indexFull({ root: dir, store, ignorePatterns: [] });
 
-    // sync.Pool is typed after Task 4, so nothing links at all here. The point of
-    // this test is the walk: even if a guess DID link, it must not drag Top in.
-    const impacted = store.impact('pool.Factory.Put').map((n) => n.qname);
-    expect(impacted).not.toContain('app.Deep.Top');
+    // A local's type from a call's return value is not tracked (that is a
+    // separate gap from the field/param/var typing Task 4 covers), so this
+    // call links only through Pass B's unique-bare-name guess. Confirm the
+    // edge is real — linked (dst_id set) AND marked a guess — before trusting
+    // anything below: without a resolved edge here, the rest of this test
+    // would prove nothing.
+    expect(store.callers('svc2.A.Guessed')).toMatchObject([{ qname: 'svc2.Reached', guess: 1 }]);
+
+    const guessedImpact = store.impact('svc2.A.Guessed').map((n) => n.qname);
+    // 1. cannot seed: Reached only reaches the target through a guess.
+    expect(guessedImpact).not.toContain('svc2.Reached');
+    // 2. cannot extend: Caller reaches the target only by continuing past
+    // that same guess, one hop further out — it must not appear either.
+    expect(guessedImpact).not.toContain('svc2.Caller');
+
+    // 3. a chain of certain edges (Target <- M1 <- M2 <- M3, each an exact
+    // qualified-name match) is unaffected and walked in full.
+    const certainImpact = store.impact('svc2.Target').map((n) => n.qname).sort();
+    expect(certainImpact).toEqual(['svc2.M1', 'svc2.M2', 'svc2.M3']);
 
     store.close();
   }, 30000);
