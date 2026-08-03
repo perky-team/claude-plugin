@@ -5,6 +5,12 @@
 (field_definition (property_identifier) @name (arrow_function)) @definition.method
 (lexical_declaration (variable_declarator name: (identifier) @name (arrow_function))) @definition.function
 
+;; `const Widget = class { render() {} }`. The class has no declaration of its
+;; own, so without this its methods have no owner and no member call reaches
+;; them. Anchored on the declarator, not on the declaration, so
+;; `const A = class{}, B = class{}` gives two definitions instead of one.
+(variable_declarator name: (identifier) @name (class)) @definition.class
+
 ;; references
 (call_expression function: (identifier) @reference.call)
 (call_expression function: (member_expression property: (property_identifier) @reference.call))

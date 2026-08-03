@@ -62,6 +62,36 @@ export function boot() { return new Service(); }
     store.close();
   }, 30000);
 
+  it('resolves a call to a member of a TypeScript namespace', async () => {
+    write('util.ts', `export namespace Util {
+  export function slug(s: string) { return s; }
+}
+export function use() { return Util.slug('X'); }
+`);
+    const store = await indexed();
+
+    // A namespace owns its members, so `Util.slug(...)` is a member call with a
+    // real owner. Without the namespace indexed, `slug` has no owner at all and
+    // the member rule refuses the call.
+    expect(store.callers('Util.slug').map((n) => n.qname)).toEqual(['use']);
+
+    store.close();
+  }, 30000);
+
+  it('resolves a call to a method of a class expression', async () => {
+    write('widget.ts', `export const Widget = class { render() { return 1; } };
+export function draw(w: any) { return w.render(); }
+`);
+    const store = await indexed();
+
+    // The class has no declaration of its own — the variable names it. Index it
+    // anyway, or every method it holds loses its owner and no member call can
+    // reach it.
+    expect(store.callers('Widget.render').map((n) => n.qname)).toEqual(['draw']);
+
+    store.close();
+  }, 30000);
+
   it('resolves a Python call through an imported module but not through a value', async () => {
     write('api.py', `def get(url):
     return url

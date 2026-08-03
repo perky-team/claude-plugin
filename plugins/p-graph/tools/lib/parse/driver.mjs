@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { loadLanguage, parseAndQuery } from './engine.mjs';
+import { OWNER_KINDS } from '../owner-kinds.mjs';
 
 const nodeId = (file, qname, kind, ord) =>
   createHash('sha1').update(`${file}|${qname}|${kind}|${ord}`).digest('hex').slice(0, 16);
@@ -245,10 +246,6 @@ function goCallTarget(c, { pkg, importPkgs, hasDotImport }, namesAVar = () => fa
   return c.text;
 }
 
-// Kinds that own methods, so a `this`/`self` call inside one of their methods
-// can be bound to them.
-const OWNER_KINDS = new Set(['class', 'struct', 'interface']);
-
 // The node a call's name sits under when the source wrote the call ON something
 // — `x.end()` rather than `end()`. Checked against the vendored grammars: TS and
 // JS put the property in a `member_expression`, Python in an `attribute`, C++ in
@@ -259,29 +256,121 @@ const MEMBER_PARENTS = new Set([
   'member_expression', 'attribute', 'field_expression', 'selector_expression',
 ]);
 
-// The names a Python file binds to a MODULE. A call written on one of them is
-// qualified by that module, not made on a value whose type we do not know.
-//
-// Only a plain `import` states outright that a name is a module:
-//   `import x`        binds x
-//   `import x.y`      binds x — the top segment is the name in scope
-//   `import x as y`   binds y
-//   `import x.y as z` binds z
-// `from x import y` (with or without `as`) and `from . import y` are left out on
-// purpose: `y` there can be a submodule or an ordinary value, and the source
-// does not say which. We refuse rather than guess, so such a call stays a
-// reported gap. `from x import *` binds no name we can see at all.
-function pyModuleNames(caps) {
-  const names = new Set();
-  for (const c of caps) {
-    if (c.name === 'import.alias') { names.add(c.text); continue; }
-    // A `from x import y` capture points at the module x, which this file does
-    // NOT bind — only a plain import_statement does.
-    if (c.name === 'reference.import' && c.node?.parent?.type === 'import_statement') {
-      names.add(c.text.split('.')[0]);
-    }
+// The package a Python file's own relative imports count from. For `a/b.py` the
+// package is `a`; for `a/__init__.py` the file IS the package `a`, so its own
+// module path is the answer.
+function pyOwnPackage(file, ownModule) {
+  if (!ownModule) return null;
+  if (file.endsWith('/__init__.py') || file === '__init__.py') return ownModule;
+  const dot = ownModule.lastIndexOf('.');
+  return dot < 0 ? '' : ownModule.slice(0, dot);
+}
+
+// The module path a `from ... import` statement counts from. An absolute
+// `from x.y import z` gives "x.y". A relative one counts dots the way Python
+// does: one dot is this file's own package, each extra dot climbs one level, and
+// a suffix (`from .sub import z`) is appended. Returns null when the climb runs
+// past the top, so nothing is invented.
+function pyFromBase(stmt, ownPackage) {
+  const mod = stmt?.childForFieldName?.('module_name');
+  if (!mod) return null;
+  if (mod.type === 'dotted_name') return mod.text;
+  if (mod.type !== 'relative_import') return null;
+  if (ownPackage === null) return null;
+  let dots = 0, suffix = '';
+  for (let i = 0; i < mod.childCount; i++) {
+    const ch = mod.child(i);
+    if (ch.type === 'import_prefix') dots = ch.text.length;
+    else if (ch.type === 'dotted_name') suffix = ch.text;
   }
-  return names;
+  if (dots === 0) return null;
+  const parts = ownPackage ? ownPackage.split('.') : [];
+  // One dot means "this package", so only the dots after the first climb.
+  if (dots - 1 > parts.length) return null;
+  const base = parts.slice(0, parts.length - (dots - 1)).join('.');
+  if (!base) return suffix || null;
+  return suffix ? `${base}.${suffix}` : base;
+}
+
+// What each name a Python file binds to a MODULE points at: bound name -> module
+// path. A call written on one of these names is qualified by that module, not
+// made on a value whose type we do not know.
+//
+// `repoModules` is every module path this repo can import. When it is given, a
+// name is recorded only if the MODULE PATH it points at is one of them — the
+// alias never decides. That is what stops `import json` plus `json.dumps()` from
+// linking to a repo function called `dumps`: `json` is the standard library, so
+// the call is on something we do not index and must stay a reported gap.
+//
+// Forms handled:
+//   `import x`             binds x     -> x        (only the top segment is in scope)
+//   `import x.y`           binds x     -> x
+//   `import x as y`        binds y     -> x
+//   `import x.y as z`      binds z     -> x.y
+//   `from x import y`      binds y     -> x.y      only when x.y is a repo module
+//   `from x import y as z` binds z     -> x.y      same
+//   `from . import y`      binds y     -> <pkg>.y  same
+// `from x import y` may bind a module OR an ordinary value, and the source does
+// not say which. The repo-module check is what makes it safe to accept: a value
+// re-exported from `__init__.py` has no module path of its own, so it is never
+// recorded. Without `repoModules` (a direct `extract()` call with no index run
+// behind it) the `from` forms are all refused, which is the older behaviour.
+// `from x import *` binds no name we can see at all.
+function pyModuleNames(caps, repoModules, ownPackage) {
+  const bound = new Map();
+  const record = (name, path) => {
+    if (!name || !path) return;
+    if (repoModules && !repoModules.has(path)) return;
+    bound.set(name, path);
+  };
+  for (const c of caps) {
+    if (c.name === 'import.from') {
+      if (!repoModules) continue;
+      const aliased = c.node?.parent?.type === 'aliased_import' ? c.node.parent : null;
+      const stmt = aliased ? aliased.parent : c.node?.parent;
+      if (stmt?.type !== 'import_from_statement') continue;
+      const base = pyFromBase(stmt, ownPackage);
+      if (!base) continue;
+      record(aliased?.childForFieldName?.('alias')?.text ?? c.text, `${base}.${c.text}`);
+      continue;
+    }
+    if (c.name !== 'reference.import') continue;
+    const parent = c.node?.parent;
+    // `import x.y as z` — the alias is the bound name, the whole path is the module.
+    if (parent?.type === 'aliased_import' && parent.parent?.type === 'import_statement') {
+      record(parent.childForFieldName?.('alias')?.text, c.text);
+      continue;
+    }
+    // A plain `import x.y`. Only the top segment is a name in scope.
+    // Any other parent (`import_from_statement`, `relative_import`) points at the
+    // module a `from` statement reads FROM, which this file does not bind.
+    if (parent?.type === 'import_statement') record(c.text.split('.')[0], c.text.split('.')[0]);
+  }
+  return bound;
+}
+
+// The Python nodes that open a scope. A name assigned anywhere inside a function
+// is local to that WHOLE function — Python has no block scope — so the function's
+// own span is the right span for the binding. A class body is its own scope too;
+// using it (rather than the module) keeps an over-refusal inside that one class.
+const PY_SCOPE_NODES = new Set(['function_definition', 'class_definition', 'lambda', 'module']);
+
+// The dotted object path a Python call was written on, head first:
+// `requests.cookies.RequestsCookieJar()` -> ['requests', 'cookies']. Returns null
+// as soon as the chain holds anything but plain names (a subscript, a call, a
+// string), because then the head no longer decides what the object is.
+function pyObjectPath(obj) {
+  const parts = [];
+  let n = obj;
+  while (n?.type === 'attribute') {
+    const attr = n.childForFieldName?.('attribute');
+    if (attr?.type !== 'identifier') return null;
+    parts.unshift(attr.text);
+    n = n.childForFieldName?.('object');
+  }
+  if (n?.type !== 'identifier') return null;
+  parts.unshift(n.text);
+  return parts;
 }
 
 // The type a `this.m()` / `this->m()` / `self.m()` call belongs to, for languages
@@ -306,13 +395,21 @@ function selfCallOwner(c, lang, defs, enclosing) {
   return owner && OWNER_KINDS.has(owner.kind) ? owner : null;
 }
 
-export async function extract({ file, lang, langId, scm, source }) {
+// `pyRepoModules` is what an index run knows and a single file cannot: every
+// Python module path the repo can import ({ paths, byFile }, see pyModuleIndex in
+// index/build.mjs). Without it the Python import rules fall back to the older,
+// narrower behaviour — a plain `import x` only, and no repo check — so calling
+// extract() directly still works.
+export async function extract({ file, lang, langId, scm, source, pyRepoModules = null }) {
   const language = await loadLanguage(langId);
   const caps = await parseAndQuery(language, scm, source);
   const goCtx = lang === 'go' ? goContext(caps) : null;
-  const pyModules = lang === 'py' ? pyModuleNames(caps) : null;
+  const pyOwnPkg = lang === 'py' && pyRepoModules
+    ? pyOwnPackage(file, pyRepoModules.byFile.get(file) ?? null) : null;
+  const pyModules = lang === 'py'
+    ? pyModuleNames(caps, pyRepoModules?.paths ?? null, pyOwnPkg) : null;
 
-  const defKinds = ['function', 'method', 'class', 'struct', 'interface', 'type', 'enum'];
+  const defKinds = ['function', 'method', 'class', 'struct', 'interface', 'type', 'enum', 'namespace'];
   const defs = [];
   const defCaps = caps.filter((c) => c.name.startsWith('definition.'));
   const nameCaps = caps.filter((c) => c.name === 'name');
@@ -321,9 +418,14 @@ export async function extract({ file, lang, langId, scm, source }) {
   for (const d of defCaps) {
     const kind = d.name.split('.')[1];
     if (!defKinds.includes(kind)) continue;
+    // The outermost name inside this definition is its own. The column has to
+    // break a line tie or the pick is left to capture order: in
+    // `const Widget = class { render() {} };` both `Widget` and `render` are
+    // `@name` captures on line 1 inside the same span, and the leftmost is the
+    // one the definition is called.
     const nameCap = nameCaps
       .filter((n) => within(n, d))
-      .sort((a, b) => (a.startLine - d.startLine) - (b.startLine - d.startLine))[0];
+      .sort((a, b) => (a.startLine - b.startLine) || (a.startCol - b.startCol))[0];
     defs.push({
       kind, name: nameCap?.text ?? '(anon)',
       startLine: d.startLine, endLine: d.endLine,
@@ -339,7 +441,7 @@ export async function extract({ file, lang, langId, scm, source }) {
   // is captured twice; without this the two identical-span defs would look like
   // parent/child to `within()` and produce a bogus `X.X` qname (and an undefined
   // container_id that then fails the DB insert, dropping the whole file).
-  const KIND_SPECIFICITY = { struct: 3, interface: 3, enum: 3, class: 3, type: 2, function: 1, method: 1 };
+  const KIND_SPECIFICITY = { struct: 3, interface: 3, enum: 3, class: 3, namespace: 3, type: 2, function: 1, method: 1 };
   const bySpan = new Map();
   for (const d of defs) {
     const span = `${d.startLine}:${d.startCol}:${d.endLine}:${d.endCol}`;
@@ -547,6 +649,37 @@ export async function extract({ file, lang, langId, scm, source }) {
     return found;
   };
 
+  // Every name a Python scope in this file binds to a VALUE, with the span that
+  // binding covers. An imported module name can be shadowed by a local or a
+  // parameter — `import api` at the top and `def run(rows): api = rows[0]` below
+  // — and then `api.load(...)` is a call on a row, not on the module. Go already
+  // refuses that case (the hugo `config` bug); this is Python's version of it.
+  //
+  // Python needs no position check, unlike Go: a name assigned anywhere in a
+  // function is local to the whole function, so reading it before the assignment
+  // is an error, not a reference to the module.
+  const pyValueNames = new Map(); // name -> [span, ...]
+  if (lang === 'py') {
+    for (const c of caps) {
+      if (c.name !== 'var.local') continue;
+      let scope = c.node?.parent;
+      while (scope && !PY_SCOPE_NODES.has(scope.type)) scope = scope.parent;
+      if (!scope) continue;
+      if (!pyValueNames.has(c.text)) pyValueNames.set(c.text, []);
+      pyValueNames.get(c.text).push({
+        startLine: scope.startPosition.row + 1, startCol: scope.startPosition.column,
+        endLine: scope.endPosition.row + 1, endCol: scope.endPosition.column,
+      });
+    }
+  }
+  const pyNamesAValue = (name, node) => {
+    const line = node.startPosition.row + 1, col = node.startPosition.column;
+    for (const s of pyValueNames.get(name) ?? []) {
+      if (posLE(s.startLine, s.startCol, line, col) && posLE(line, col, s.endLine, s.endCol)) return true;
+    }
+    return false;
+  };
+
   const refMap = { 'reference.call': 'call', 'reference.import': 'import', 'reference.include': 'include' };
   const edges = [];
   for (const c of caps) {
@@ -619,15 +752,28 @@ export async function extract({ file, lang, langId, scm, source }) {
     // resolver then refuses a target that is not a member of a type — `end`
     // declared inside one method body can never answer `response.end()`.
     let member = kind === 'call' && MEMBER_PARENTS.has(c.node?.parent?.type ?? '') ? 1 : 0;
-    // A Python call whose object names an imported module is qualified by that
-    // module; it is not made on a value. Python qnames carry no module prefix, so
-    // the bare function name stays the target and the member flag is cleared —
-    // `requests.get(...)` still resolves while `s.get(...)` does not. The object
-    // must be a plain name: in `os.environ.get(...)` it is another attribute, so
-    // that call keeps its member flag and stays refused.
-    if (member === 1 && pyModules?.size) {
-      const obj = c.node.parent.childForFieldName?.('object');
-      if (obj?.type === 'identifier' && pyModules.has(obj.text)) member = 0;
+    // A Python call whose object names a module is qualified by that module; it is
+    // not made on a value. Python qnames carry no module prefix, so the bare
+    // function name stays the target and the member flag is cleared —
+    // `requests.get(...)` still resolves while `s.get(...)` does not.
+    //
+    // The object may be a dotted path: `requests.cookies.RequestsCookieJar()` is
+    // written on the module `requests.cookies`. So the head name is translated
+    // through the file's imports and the remaining segments are appended, and the
+    // WHOLE path must be a module the repo can import. That is what separates
+    // `requests.cookies` (a real submodule) from `requests.codes` (a lookup table
+    // object) and from `os.environ` — both of which stay refused.
+    //
+    // With no repo module list (a direct extract() call) only a plain name can
+    // clear the flag, which is the older behaviour.
+    if (member === 1 && lang === 'py') {
+      const path = pyObjectPath(c.node.parent.childForFieldName?.('object'));
+      const head = path?.[0];
+      const modulePath = head ? pyModules.get(head) : null;
+      if (modulePath && !pyNamesAValue(head, c.node)) {
+        const full = [modulePath, ...path.slice(1)].join('.');
+        if (pyRepoModules ? pyRepoModules.paths.has(full) : path.length === 1) member = 0;
+      }
     }
     edges.push({
       src_id: enclosing ? enclosing.id : null,

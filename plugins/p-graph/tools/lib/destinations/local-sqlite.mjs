@@ -1,4 +1,5 @@
 import { createRequire } from 'node:module';
+import { OWNER_KINDS_SQL } from '../owner-kinds.mjs';
 const require = createRequire(import.meta.url);
 function loadDatabaseSync() {
   try { return require('node:sqlite').DatabaseSync; }
@@ -70,11 +71,6 @@ CREATE TABLE IF NOT EXISTS field_types (
 CREATE INDEX IF NOT EXISTS field_types_key ON field_types(key);
 CREATE INDEX IF NOT EXISTS field_types_file ON field_types(file);
 `;
-
-// Kinds a value can be a member of. A method of a class, struct or interface is
-// reachable as `x.m()`; a function declared inside another function body is a
-// local and is reachable only by the plain name written next to it.
-const OWNER_KINDS_SQL = `('class','struct','interface')`;
 
 // The rule for a call the source wrote ON something (`x.end()`): its target must
 // be a member of a type. `edges.member` says the call was a member access, and
@@ -277,10 +273,15 @@ export function openStore(dbPath, opts = {}) {
     // qname is "filesink.New", in the same language, and only when it is unique.
     // A qualified name is not a guess: the call site itself named the package
     // or type, so this is as certain as a resolver gets.
+    // The SET picks the same row the WHERE guard vouched for, owner rule
+    // included. Today the count guard below already pins the candidate set to one
+    // row, so this changes nothing — but if that guard is ever loosened, a SET
+    // without the condition would happily store a node the WHERE just refused.
     db.prepare(`
       UPDATE edges SET dst_id = (
         SELECT n.id FROM nodes n
         WHERE n.qname = edges.dst_name AND n.lang = edges.lang AND n.kind IN ${CALLABLE}
+          AND ${MEMBER_TARGET_OK}
         LIMIT 1
       ), guess = 0
       WHERE kind = 'call' AND dst_id IS NULL AND dst_name IS NOT NULL AND external = 0
@@ -329,6 +330,7 @@ export function openStore(dbPath, opts = {}) {
       UPDATE edges SET dst_id = (
         SELECT n.id FROM nodes n
         WHERE n.name = edges.dst_name AND n.lang = edges.lang AND n.kind IN ${CALLABLE}
+          AND ${MEMBER_TARGET_OK}
         LIMIT 1
       ), guess = 1
       WHERE kind = 'call' AND dst_id IS NULL AND dst_name IS NOT NULL AND external = 0
