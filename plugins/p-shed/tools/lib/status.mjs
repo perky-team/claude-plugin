@@ -84,8 +84,13 @@ export function formatHuman(status, now = Date.now()) {
     const skip = j.lastSkipReason
       ? (j.lastSkipResetAt ? `${j.lastSkipReason} (resets ${j.lastSkipResetAt})` : j.lastSkipReason)
       : '-';
+    // Guard freshness, plus the guard's own reason when it printed one — a quiet slot
+    // leaves no history row, so this column is the only place an operator can read why
+    // the worker did not run. Newlines are collapsed for the same reason as pauseReason
+    // below: a newline in a cell splits this tab-separated table into a fake row.
+    const guardReasonText = j.lastGuard?.reason ? String(j.lastGuard.reason).replace(/\s+/g, ' ').trim() : '';
     const guard = j.lastGuard
-      ? `${j.lastGuard.outcome} ${Math.max(0, Math.round((now - j.lastGuard.at) / 1000))}s ago`
+      ? `${j.lastGuard.outcome} ${Math.max(0, Math.round((now - j.lastGuard.at) / 1000))}s ago${guardReasonText ? ` (${guardReasonText})` : ''}`
       : '-';
     // Show WHY a job is paused, like the global `paused:` line above — a bare `true`
     // makes a job that stopped itself look identical to one an operator halted. Newlines

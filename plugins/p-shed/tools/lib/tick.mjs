@@ -1,7 +1,7 @@
 import { readJobs, readConfig, readJobState, writeJobState, removeJobState, listStateIds } from './io.mjs';
 import { parseCron, isDue } from './cron.mjs';
 import { runJob as realRunJob } from './launch.mjs';
-import { runGuard as realRunGuard } from './guard.mjs';
+import { runGuard as realRunGuard, guardReason } from './guard.mjs';
 import { appendLog as realAppendLog, rotateLogs as realRotateLogs } from './logs.mjs';
 import { readPause } from './breaker.mjs';
 import { readGlobalPause } from './pause.mjs';
@@ -97,7 +97,14 @@ export async function tick({ root, now = Date.now(), deps = {} }) {
     let guarded;
     if (job.guard) {
       const g = await d.runGuard(job, defaults);
-      const lastGuard = { at: now, outcome: g.outcome, exit: g.exit };
+      // Keep the guard's own explanation of its decision. A quiet slot writes no history
+      // row (log-noise policy, below) and `status` used to show only `quiet 40s ago`, so
+      // "why did the worker not run at 14:00?" had no answer anywhere — and with composed
+      // guards (`a && b`) no way to tell which link said no. Recorded for all three
+      // outcomes: a pass can usefully say why, and an error usually printed the failure.
+      // Absent rather than '' when the guard printed nothing.
+      const reason = guardReason(g.out);
+      const lastGuard = { at: now, outcome: g.outcome, exit: g.exit, ...(reason ? { reason } : {}) };
       const prevG = d.readJobState(root, job.id) ?? {};
       if (g.outcome === 'quiet') {
         // Log-noise policy: quiet is state-only (lastGuard) — no history line. A

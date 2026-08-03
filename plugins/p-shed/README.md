@@ -43,7 +43,7 @@ Tool: `node tools/pshed.mjs <command>` (all support `--json`; exit `0` ok / `1` 
 |---|---|---|
 | `jobs.yml` | git | `version`, `defaults`, `jobs[]{ id, schedule, enabled, cwd?, prompt, timeoutSec?, permissionMode?, allowedTools?, model?, effort?, maxConsecutiveFailures?, guard?, guardTimeoutSec?, concurrencyGroup? }` |
 | `config.json` | gitignore | `{ nodeBin, claudeBin }` (resolved at init) |
-| `state/<id>.json` | gitignore | per-job `{ lastRun, lastExit, pid, consecutiveFailures, consecutiveGuardFailures?, lastGuard?, breakerTripped?, breakerReason?, breakerAt?, lastSkipReason?, lastSkipAt?, lastSkipResetAt? }` — one file per job (no shared state file). `lastSkip*` records the most recent skip (`lastSkipReason` is `usage-limit` or `api-overload`) and is cleared once the job runs for real again; `lastGuard` records the most recent guard check (`{ at, outcome, exit }`) |
+| `state/<id>.json` | gitignore | per-job `{ lastRun, lastExit, pid, consecutiveFailures, consecutiveGuardFailures?, lastGuard?, breakerTripped?, breakerReason?, breakerAt?, lastSkipReason?, lastSkipAt?, lastSkipResetAt? }` — one file per job (no shared state file). `lastSkip*` records the most recent skip (`lastSkipReason` is `usage-limit` or `api-overload`) and is cleared once the job runs for real again; `lastGuard` records the most recent guard check (`{ at, outcome, exit, reason? }` — `reason` is the last non-empty line of the guard's stdout, collapsed to one line and capped at 120 chars; absent when the guard printed nothing) |
 | `logs/<date>.jsonl` | gitignore | one record per run (see below); auto-rotated (7-day retention) |
 | `run/<id>.pid` | gitignore | duplicate-guard pidfile |
 | `run/<id>.pause` | gitignore | per-job pause marker (contents = a human-readable reason). A job's own run writes it to stop being scheduled; `pause --id/--group` writes the same file with a leading `#pshed origin=operator` line. Presence pauses, so a bare `touch` works and an empty marker is a valid self-pause |
@@ -183,7 +183,8 @@ A **guard** is an optional cheap shell command in front of a job's Claude launch
 each due tick — after every other gate (global pause, self-pause, breaker, live pid) —
 p-shed runs `guard` (`shell: true`, cwd = the job's `cwd` else `defaults.cwd` else the
 repo root, env + `PSHED_JOB_ID` / `PSHED_ROOT`, killed after `guardTimeoutSec`,
-default 30 s) and reads only its exit code:
+default 30 s). The **exit code** is the whole scheduling contract; stdout is kept only
+as a human-readable reason (below):
 
 | Exit | Meaning | Effect |
 |---|---|---|
@@ -207,6 +208,13 @@ Semantics worth knowing:
 - **Quiet is silent**: no history-log line (a minutely job must not write 1440
   lines/day) — freshness is visible in `status` (`lastGuard`, e.g. `quiet 40s ago`).
   `guard-error` and launches do log.
+- **The guard can say why, on stdout.** The last non-empty line of a guard's stdout is
+  kept as `lastGuard.reason` (whitespace collapsed, capped at 120 chars) and shown in
+  `status`: `quiet 40s ago (no work: 3 open, 3 excluded by origin)`. Recorded for all
+  three outcomes. *Last* line, not first: `guard: a && b` prints in order, so the last
+  line comes from the link that actually decided. A guard that prints nothing stores no
+  field and reads exactly as before. This is the only place a quiet slot is explained —
+  by design it has no history row.
 - `run <id>` respects the guard; `--no-guard` bypasses it. Manual runs stay stateless.
 - Windows: the guard runs via `cmd.exe`, where `~` does not expand — use real paths in
   guard commands.

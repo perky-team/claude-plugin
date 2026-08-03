@@ -38,6 +38,35 @@ describe('status + guard', () => {
     expect(text).toContain('quiet 40s ago');
   });
 
+  it('shows the guard reason next to the freshness when one was recorded', () => {
+    const s = collectStatus('/nowhere', {
+      installed: false,
+      deps: deps({ lastRun: NOW - 40_000, lastGuard: { at: NOW - 40_000, outcome: 'quiet', exit: 75, reason: 'no work: 3 open' } }),
+    });
+    expect(s.jobs[0].lastGuard).toMatchObject({ reason: 'no work: 3 open' });
+    expect(formatHuman(s, NOW)).toContain('quiet 40s ago (no work: 3 open)');
+  });
+
+  it('a reason with a newline in it cannot split the table into a fake row', () => {
+    const s = collectStatus('/nowhere', {
+      installed: false,
+      deps: deps({ lastRun: NOW - 40_000, lastGuard: { at: NOW - 40_000, outcome: 'error', exit: 2, reason: 'boom\nsecond line' } }),
+    });
+    const text = formatHuman(s, NOW);
+    const header = text.split('\n').findIndex((l) => l.startsWith('id\t'));
+    expect(text.split('\n').length - header - 1).toBe(1); // exactly one job row
+    expect(text).toContain('boom second line');
+  });
+
+  it('output is unchanged from today when no reason was recorded', () => {
+    const s = collectStatus('/nowhere', {
+      installed: false,
+      deps: deps({ lastRun: NOW - 40_000, lastGuard: { at: NOW - 40_000, outcome: 'quiet', exit: 75 } }),
+    });
+    const line = formatHuman(s, NOW).split('\n').at(-1)!;
+    expect(line.endsWith('quiet 40s ago')).toBe(true);
+  });
+
   it('a guardless job shows "-" and zero guard failures', () => {
     const s = collectStatus('/nowhere', { installed: false, deps: deps({ lastRun: 1 }) });
     expect(s.jobs[0].consecutiveGuardFailures).toBe(0);

@@ -172,6 +172,63 @@ describe('tick + guard', () => {
     expect(runGuard).not.toHaveBeenCalled();
   });
 
+  // lastGuard.reason — the guard's own explanation of its decision. A quiet slot writes
+  // no history row (deliberate), so without this the question "why did the worker not run
+  // at 14:00?" has no answer anywhere.
+  it('records the guard stdout line as lastGuard.reason on a quiet slot', async () => {
+    guardJob();
+    seed();
+    const deps = fakeDeps({ runGuard: vi.fn(async () => gr('quiet', { out: 'no work: 3 open, 3 excluded by origin\n' })) });
+    await tick({ root, now: NOW, deps });
+    expect(deps.appendLog).not.toHaveBeenCalled(); // still no history row
+    expect(readState(root).jobs.a.lastGuard).toMatchObject({
+      outcome: 'quiet', exit: 75, reason: 'no work: 3 open, 3 excluded by origin',
+    });
+  });
+
+  it('records the reason on a pass too', async () => {
+    guardJob();
+    seed();
+    const deps = fakeDeps({ runGuard: vi.fn(async () => gr('pass', { out: 'ready: st-206\n' })) });
+    await tick({ root, now: NOW, deps });
+    expect(readState(root).jobs.a.lastGuard).toMatchObject({ outcome: 'pass', reason: 'ready: st-206' });
+  });
+
+  it('records the reason on an error too', async () => {
+    guardJob();
+    seed();
+    const deps = fakeDeps({ runGuard: vi.fn(async () => gr('error', { exit: 2, out: 'ptasks: config invalid\n' })) });
+    await tick({ root, now: NOW, deps });
+    expect(readState(root).jobs.a.lastGuard).toMatchObject({ outcome: 'error', reason: 'ptasks: config invalid' });
+  });
+
+  it('keeps the LAST non-empty line — the link of `a && b` that actually decided', async () => {
+    guardJob();
+    seed();
+    const out = 'first said yes\nsecond said no\n\n';
+    const deps = fakeDeps({ runGuard: vi.fn(async () => gr('quiet', { out })) });
+    await tick({ root, now: NOW, deps });
+    expect(readState(root).jobs.a.lastGuard.reason).toBe('second said no');
+  });
+
+  it('omits the field entirely when stdout is empty or whitespace only', async () => {
+    guardJob();
+    seed();
+    const deps = fakeDeps({ runGuard: vi.fn(async () => gr('quiet', { out: '  \n\n' })) });
+    await tick({ root, now: NOW, deps });
+    const lastGuard = readState(root).jobs.a.lastGuard;
+    expect(lastGuard.reason).toBeUndefined();
+    expect('reason' in lastGuard).toBe(false); // not stored as ""
+  });
+
+  it('truncates a huge single line instead of growing the per-tick state write', async () => {
+    guardJob();
+    seed();
+    const deps = fakeDeps({ runGuard: vi.fn(async () => gr('quiet', { out: 'z'.repeat(5000) })) });
+    await tick({ root, now: NOW, deps });
+    expect(readState(root).jobs.a.lastGuard.reason.length).toBeLessThanOrEqual(120);
+  });
+
   it('reset-breaker clears the guard counter and a guard-tripped breaker', async () => {
     guardJob();
     seed({ consecutiveGuardFailures: 3, breakerTripped: true, breakerReason: 'guard exit 1', breakerAt: NOW });
