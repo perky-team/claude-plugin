@@ -385,23 +385,36 @@ function attachReadHelpers(store, db, hasFts) {
   // asked for, which breaks the read-only fallback on any pre-6 database (the
   // fallback exists precisely for a filesystem that can never be migrated).
   //
-  // Both are built with an `IN (...)` list sized to the batch instead of a
-  // fixed `= ?`, so collectGaps can look up every name (or every id) it needs
-  // in one round trip instead of one round trip per name/id. SQLite bounds the
+  // All are built with an `IN (...)` list sized to the batch instead of a
+  // fixed `= ?`, so a caller can look up every name (or id) it needs in one
+  // round trip instead of one round trip per name/id. SQLite bounds the
   // number of parameters a statement can bind, so a caller with a big batch
   // must split it — see `chunk` below.
   const gapRowsByNameSql = (n) => `
     SELECT e.dst_name, e.dst_bare, e.file, e.line, e.external, e.lang,
-           s.qname AS src_qname,
-           CASE WHEN e.external = 1 THEN 0 ELSE (
-             SELECT count(*) FROM nodes n
-             WHERE n.name = e.dst_bare AND n.lang = e.lang
-               AND n.kind IN ('function','method','class')) END AS candidates,
-           ${QUALIFIER_KNOWN_SQL('e.dst_name', 'nq', 'e.lang')} AS qualifier_known
+           s.qname AS src_qname
     FROM edges e LEFT JOIN nodes s ON s.id = e.src_id
     WHERE e.kind = 'call' AND e.dst_id IS NULL
       AND (e.dst_name IN (${Array(n).fill('?').join(',')})
         OR e.dst_bare IN (${Array(n).fill('?').join(',')}))`;
+  // "How many repo symbols share this bare name" and "does this written
+  // qualifier name a repo package" used to be correlated subqueries on
+  // gapRowsByNameSql itself, so SQLite answered them once per MATCHED ROW.
+  // For a common bare name that is thousands of repeats of the same handful
+  // of questions — on prometheus/prometheus, 1,139 rows for "New" turned a
+  // ~9ms base query into a 3.3s one. Both answers depend only on (bare name,
+  // lang) or (qualifier, lang), never on the row itself, so collectGaps below
+  // asks each question once per distinct pair instead: candidateCountsSql
+  // batches every distinct bare name for one language into one grouped
+  // count; qualifierExistsSql is asked once per distinct qualifier, and the
+  // number of distinct qualifiers among matched rows is always small next to
+  // the row count.
+  const candidateCountsSql = (n) => `
+    SELECT name, count(*) AS c FROM nodes
+    WHERE lang = ? AND name IN (${Array(n).fill('?').join(',')})
+      AND kind IN ('function','method','class')
+    GROUP BY name`;
+  const qualifierExistsSql = `SELECT 1 FROM nodes WHERE lang = ? AND qname LIKE ? LIMIT 1`;
   const noCallerRowsByIdSql = (n) => `
     SELECT e.dst_name, e.file, e.line FROM edges e
     WHERE e.kind = 'call' AND e.src_id IS NULL
@@ -458,6 +471,47 @@ function attachReadHelpers(store, db, hasFts) {
   // list and looked up in one (possibly chunked) query; the no-caller ids get
   // the same treatment. The row shape and the `seen`-based dedupe are exactly
   // as before — only the number of trips to SQLite changes.
+  //
+  // Candidate count per (bare name, lang), external rows excluded: an
+  // external edge's candidate count is forced to 0 regardless of what nodes
+  // exist (see the reason calc in collectGaps below), so there is nothing to
+  // look up for it.
+  const candidatesByLangBare = (rows) => {
+    const byLang = new Map(); // lang -> Set(dst_bare)
+    for (const r of rows) {
+      if (r.external === 1 || r.lang == null || r.dst_bare == null) continue;
+      (byLang.get(r.lang) ?? byLang.set(r.lang, new Set()).get(r.lang)).add(r.dst_bare);
+    }
+    const out = new Map(); // "lang|bare" -> count
+    for (const [lang, bares] of byLang) {
+      for (const names of chunk([...bares], 400)) {
+        for (const row of db.prepare(candidateCountsSql(names.length)).all(lang, ...names)) {
+          out.set(`${lang}|${row.name}`, row.c);
+        }
+      }
+    }
+    return out;
+  };
+  // Qualifier-exists answer per (qualifier, lang), for every dst_name that
+  // actually has a qualifier written (a bare dst_name is always "known" — no
+  // lookup needed, same as the old CASE's WHEN branch). External rows are
+  // excluded for the same reason as above.
+  const qualifiersByLangQualifier = (rows) => {
+    const byLang = new Map(); // lang -> Set(qualifier)
+    for (const r of rows) {
+      if (r.external === 1 || r.lang == null) continue;
+      const dot = r.dst_name.indexOf('.');
+      if (dot === -1) continue;
+      (byLang.get(r.lang) ?? byLang.set(r.lang, new Set()).get(r.lang)).add(r.dst_name.slice(0, dot));
+    }
+    const stmt = db.prepare(qualifierExistsSql);
+    const out = new Map(); // "lang|qualifier" -> 0 | 1
+    for (const [lang, quals] of byLang) {
+      for (const q of quals) out.set(`${lang}|${q}`, stmt.get(lang, `${q}.%`) ? 1 : 0);
+    }
+    return out;
+  };
+
   const collectGaps = (symbols, callerCheckIds = []) => {
     const seen = new Set(), out = [];
 
@@ -485,19 +539,33 @@ function attachReadHelpers(store, db, hasFts) {
       const idxs = new Set(owners.map((o) => o.idx));
       return idxs.size === 1 ? owners[0].pkg : null;
     };
+
+    // Pass 1: gather every matched row (still batched/chunked, unchanged).
+    // Reason and reachable need the lookup maps built below, which need to
+    // see every row's (bare, lang) and (qualifier, lang) pair first.
+    const matched = [];
     for (const names of chunk(allNames, 400)) {
       const stmt = db.prepare(gapRowsByNameSql(names.length));
-      for (const r of stmt.all(...names, ...names)) {
-        const key = `${r.file}|${r.line}|${r.dst_name}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        const reason = r.candidates > 0 && r.qualifier_known ? 'ambiguous' : 'external';
-        out.push({
-          file: r.file, line: r.line, dst_name: r.dst_name, src_qname: r.src_qname,
-          reason,
-          reachable: reason === 'ambiguous' && r.lang === 'go' ? reachableIn(r.file, pkgForRow(r)) : 1,
-        });
-      }
+      matched.push(...stmt.all(...names, ...names));
+    }
+    const candidates = candidatesByLangBare(matched);
+    const qualifierKnown = qualifiersByLangQualifier(matched);
+
+    // Pass 2: classify each row from the two lookup maps instead of a
+    // per-row correlated subquery.
+    for (const r of matched) {
+      const key = `${r.file}|${r.line}|${r.dst_name}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const candidateCount = r.external === 1 ? 0 : (candidates.get(`${r.lang}|${r.dst_bare}`) ?? 0);
+      const dot = r.dst_name.indexOf('.');
+      const known = dot === -1 ? 1 : (qualifierKnown.get(`${r.lang}|${r.dst_name.slice(0, dot)}`) ?? 0);
+      const reason = candidateCount > 0 && known ? 'ambiguous' : 'external';
+      out.push({
+        file: r.file, line: r.line, dst_name: r.dst_name, src_qname: r.src_qname,
+        reason,
+        reachable: reason === 'ambiguous' && r.lang === 'go' ? reachableIn(r.file, pkgForRow(r)) : 1,
+      });
     }
     if (callerCheckIds.length) {
       for (const ids of chunk([...new Set(callerCheckIds)], 400)) {
