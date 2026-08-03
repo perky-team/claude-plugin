@@ -701,6 +701,28 @@ function attachReadHelpers(store, db, hasFts) {
       )
       SELECT DISTINCT n.* FROM nodes n JOIN up ON n.id = up.id WHERE n.id != ?`).all(target.id, target.id);
   };
+  // How many guessed edges the walk above refused to follow, for this one
+  // target. `impact` returning [] means one of two very different things:
+  // nothing depends on this symbol, or the only paths in were guesses the
+  // walk would not take. A caller cannot tell which from an empty array
+  // alone, so count it: same walk, same set of certainly-reached nodes (the
+  // target plus everything store.impact returns), and this counts every
+  // guessed edge landing on one of them — the exact set of edges the filter
+  // in store.impact turned away.
+  store.impactSkippedGuesses = (name) => {
+    if (!hasGuess) return 0; // no column, so nothing on this DB is a guess
+    const target = store.node(name);
+    if (!target) return 0;
+    return db.prepare(`
+      WITH RECURSIVE up(id, depth) AS (
+        SELECT ?, 0
+        UNION
+        SELECT e.src_id, up.depth + 1 FROM edges e
+        JOIN up ON e.dst_id = up.id
+        WHERE up.depth < ${MAX_DEPTH} AND e.src_id IS NOT NULL ${GUESS_FILTER}
+      )
+      SELECT count(*) AS c FROM edges e JOIN up ON up.id = e.dst_id WHERE e.guess = 1`).get(target.id).c;
+  };
   store.trace = (fromName, toName) => {
     const from = store.node(fromName), to = store.node(toName);
     if (!from || !to) return null;

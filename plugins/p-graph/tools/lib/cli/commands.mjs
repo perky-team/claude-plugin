@@ -49,17 +49,25 @@ export async function runCommand(ctx) {
   // call might belong to a different type that happens to have a method with
   // the same name. Print certain rows as the answer; print guessed rows apart,
   // under a heading that says why they are unsure.
-  const printCertainThenGuessed = (rows, noun) => {
+  // `indent` lets context reuse this exact split under its own "callers:" /
+  // "callees:" headers, so callers and context can never disagree about the
+  // same symbol — they run the same code, not two copies of the same rule.
+  const printCertainThenGuessed = (rows, noun, indent = '') => {
     const certain = rows.filter((r) => !r.guess);
     const guessed = rows.filter((r) => r.guess);
-    certain.forEach((r) => out(fmtNode(r)));
+    certain.forEach((r) => out(indent + fmtNode(r)));
     if (guessed.length) {
       const s = guessed.length === 1 ? '' : 's';
       // "more" only makes sense on top of a certain list above it — with none,
       // say what these rows ARE, not that there is "more" of nothing.
       const lead = certain.length ? `${guessed.length} more ${noun}${s}` : `${guessed.length} ${noun}${s}`;
-      out(`⚠ ${lead}, matched by name only (guess) — the graph could not see the receiver's type, so ${guessed.length === 1 ? 'this one' : 'these'} may be a different symbol with the same method name:`);
-      guessed.forEach((r) => out('    ' + fmtNode(r)));
+      // "UNVERIFIED", not ⚠: this row is present but may name the wrong
+      // symbol, a different claim from ⚠'s meaning everywhere else in this
+      // tool (a drift banner, the unattributed-call banner, the gap heading
+      // below) — rows that are missing or incomplete, not rows that might be
+      // wrong. Two different claims should not share one glyph.
+      out(`${indent}UNVERIFIED: ${lead}, matched by name only (guess) — the graph could not see the receiver's type, so ${guessed.length === 1 ? 'this one' : 'these'} may be a different symbol with the same method name:`);
+      guessed.forEach((r) => out(indent + '    ' + fmtNode(r)));
     }
   };
 
@@ -133,11 +141,22 @@ export async function runCommand(ctx) {
     // The frontier, not just the target: an impact walk also stops at an
     // unattributed call to something it already reached.
     const rows = store.impact(target), gaps = store.gapsAround(target);
-    if (opts.json) return emitJson({ impact: rows, gaps });
+    // How many guessed edges the walk refused to follow for THIS target. An
+    // empty `impact` means one of two different things: nothing depends on
+    // this symbol, or the only paths in were guesses. skipped_guesses is what
+    // tells them apart — a count, not a flag, so a caller can also tell
+    // "one near-miss" from "several refused".
+    const skippedGuesses = store.impactSkippedGuesses(target);
+    if (opts.json) return emitJson({ impact: rows, gaps, skipped_guesses: skippedGuesses });
     rows.length ? rows.forEach((r) => out(fmtNode(r))) : out('(no impact)');
-    // The walk never crosses a guessed edge (receiver type unknown), so a real
-    // impact through one is missing here, not just unlisted.
-    out('Guessed edges (receiver type unknown) were not followed, so a real impact through one may be missing.');
+    // Only say this when it is actually true for this query — with no guess
+    // anywhere near the target, the line would always print and never mean
+    // anything.
+    if (skippedGuesses) {
+      const s = skippedGuesses === 1 ? '' : 's';
+      const be = skippedGuesses === 1 ? 'was' : 'were';
+      out(`${skippedGuesses} guessed edge${s} (receiver type unknown) near this target ${be} not followed, so a real impact through one may be missing.`);
+    }
     return emitGaps(gaps);
   }
   if (command === 'trace') {
@@ -172,8 +191,11 @@ export async function runCommand(ctx) {
     };
     if (opts.json) return emitJson(ctxObj);
     out(fmtNode(n));
-    out('callers:'); ctxObj.callers.forEach((r) => out('  ' + fmtNode(r)));
-    out('callees:'); ctxObj.callees.forEach((r) => out('  ' + fmtNode(r)));
+    // Same split as `callers`/`callees`, run through the same function, so a
+    // possibly-wrong row can never show up here unmarked and mixed in with
+    // certain ones while `callers` on the same symbol keeps it apart.
+    out('callers:'); printCertainThenGuessed(ctxObj.callers, 'caller', '  ');
+    out('callees:'); printCertainThenGuessed(ctxObj.callees, 'callee', '  ');
     return emitGaps(gaps);
   }
   if (command === 'explore') {

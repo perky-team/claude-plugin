@@ -100,6 +100,9 @@ func UseIt(a *A) { a.Certain() }
     // in a DB from before the column existed certain, not a guess.
     expect(ro.callers('svc.A.Certain')).toMatchObject([{ qname: 'svc.UseIt', guess: 0 }]);
     expect(ro.impact('svc.A.Certain').map((n) => n.qname)).toEqual(['svc.UseIt']);
+    // impactSkippedGuesses reads the same missing column through the same
+    // guard; a DB with no notion of "guess" has none to report as skipped.
+    expect(ro.impactSkippedGuesses('svc.A.Certain')).toBe(0);
     ro.close();
   }, 30000);
 });
