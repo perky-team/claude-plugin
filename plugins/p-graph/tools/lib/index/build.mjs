@@ -22,10 +22,50 @@ function walk(root, dir, ignorePatterns, acc) {
   return acc;
 }
 
+// Every Python module path this repo can import, and the module path each .py
+// file provides. Returned as `{ paths, byFile }` and handed to the parser, which
+// needs it to tell a module-qualified call (`requests.get(...)`) from a call on
+// something we do not index (`json.dumps(...)`, the standard library).
+//
+// A source root is the repo root plus any directory that HOLDS a package and is
+// not itself one (no `__init__.py`). That is the part a simpler check gets wrong
+// in both directions:
+//   - looking for `<root>/requests.py` refuses requests entirely, because the
+//     package lives at `src/requests/__init__.py`;
+//   - matching the bare directory name accepts flask's `json`, because
+//     `src/flask/json/__init__.py` exists — and then `import json` plus
+//     `json.dumps()` links to flask's own `dumps`.
+// Counting from the source root gives `requests` and `flask.json`, so the first
+// resolves and the second never answers for the standard library.
+export function pyModuleIndex(files) {
+  const pyFiles = files.filter((f) => f.endsWith('.py'));
+  const dirOf = (p) => (p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : '');
+  const packages = new Set();
+  for (const f of pyFiles) {
+    if (f === '__init__.py' || f.endsWith('/__init__.py')) packages.add(dirOf(f));
+  }
+  const roots = new Set(['']);
+  for (const p of packages) if (!packages.has(dirOf(p))) roots.add(dirOf(p));
+  // Longest root first: a file under `src/` is `requests.utils`, not
+  // `src.requests.utils`.
+  const sorted = [...roots].sort((a, b) => b.length - a.length);
+  const byFile = new Map();
+  for (const f of pyFiles) {
+    const root = sorted.find((r) => r === '' || f.startsWith(`${r}/`));
+    if (root === undefined) continue;
+    let rel = (root === '' ? f : f.slice(root.length + 1)).slice(0, -'.py'.length);
+    // A source root that is itself a package has no importable name of its own.
+    if (rel === '__init__') continue;
+    if (rel.endsWith('/__init__')) rel = rel.slice(0, -'/__init__'.length);
+    byFile.set(f, rel.split('/').join('.'));
+  }
+  return { paths: new Set(byFile.values()), byFile };
+}
+
 // Parse and store one file. Returns the number of nodes indexed (>= 0), or
 // `null` when the file is unsupported or unchanged since the last index (so a
 // caller can tell "indexed, produced nothing" from "not indexed at all").
-export async function indexFile(root, store, rel) {
+export async function indexFile(root, store, rel, pyRepoModules = null) {
   const cfg = resolveLang(rel);
   if (!cfg) return null;
   const source = readFileSync(join(root, rel), 'utf-8');
@@ -34,7 +74,8 @@ export async function indexFile(root, store, rel) {
   // calls store.clear() first (files table truncated), so fileHash is null there
   // and every file is fully parsed; only incremental runs skip.
   if (store.fileHash?.(rel) === hash) return null;
-  const { nodes, edges, fieldTypes } = await extract({ file: rel, lang: cfg.lang, langId: cfg.langId, scm: cfg.query, source });
+  const { nodes, edges, fieldTypes } = await extract({
+    file: rel, lang: cfg.lang, langId: cfg.langId, scm: cfg.query, source, pyRepoModules });
   store.upsertFile(rel, hash, cfg.lang);
   store.replaceFileSymbols(rel, nodes, edges, fieldTypes);
   return nodes.length;
@@ -49,9 +90,10 @@ export async function indexFull({ root, store, ignorePatterns, onError }) {
   // empty file, or a whole-file extraction gap worth surfacing (see index cmd).
   const errored = [];
   const zeroNode = [];
+  const pyRepoModules = pyModuleIndex(files);
   for (const rel of files) {
     try {
-      const nodeCount = await indexFile(root, store, rel);
+      const nodeCount = await indexFile(root, store, rel, pyRepoModules);
       if (nodeCount === 0) zeroNode.push(rel);
     } catch (err) {
       skipped++;
@@ -111,10 +153,19 @@ export async function indexChanged({ root, store, ignorePatterns, changedFiles, 
   let n = 0, skipped = 0;
   const errored = [];
   const zeroNode = [];
+  // The Python module list is repo-wide, so it cannot be built from the changed
+  // files alone: the already-indexed files are what say where the packages are.
+  // Take them from the files table and add this run's changes on top.
+  const known = store.db
+    ? store.db.prepare(`SELECT path FROM files WHERE lang = 'py'`).all().map((r) => r.path)
+    : [];
+  const deleted = new Set(change.deleted);
+  const pyRepoModules = pyModuleIndex([...new Set([...known, ...change.modified])]
+    .filter((p) => !deleted.has(p)));
   for (const rel of change.modified) {
     if (isIgnored(rel, ignorePatterns) || !resolveLang(rel)) continue;
     try {
-      const nodeCount = await indexFile(root, store, rel);
+      const nodeCount = await indexFile(root, store, rel, pyRepoModules);
       if (nodeCount !== null) n++;
       if (nodeCount === 0) zeroNode.push(rel);
     } catch (err) {

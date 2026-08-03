@@ -145,8 +145,9 @@ def run():
 `);
     const store = await indexed();
 
-    // `from helpers import api` may bind a module or a value — the source does
-    // not say. We refuse rather than guess, so this stays a reported gap.
+    // `from helpers import api` binds `helpers.api`, and this repo has no such
+    // module — `api.py` sits at the top level. So the name is never taken for a
+    // module and the call stays a reported gap.
     expect(store.callers('load')).toEqual([]);
     expect(store.gapsFor('load').length).toBeGreaterThan(0);
 
