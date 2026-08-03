@@ -150,13 +150,19 @@ function writeHidingFixture() {
   write('internal/config/config.go', `package config
 func Load() {}
 `);
+  // `Do` shadows the imported package inside a block and calls the real package
+  // outside it, so "the shadow took nothing from the package" is a claim with
+  // something to prove.
   write('internal/related/related.go', `package related
 import "x/internal/config"
 type IndexConfig struct{}
 func (c IndexConfig) ToKeywords() {}
 func Do() {
-	config := IndexConfig{}
-	config.ToKeywords()
+	if true {
+		config := IndexConfig{}
+		config.ToKeywords()
+	}
+	config.Load()
 }
 `);
   write('internal/emb/emb.go', `package emb
@@ -195,6 +201,10 @@ describe('the gap report finds gaps recorded under another name', () => {
     expect(store.callers('related.IndexConfig.ToKeywords').map((n) => n.qname)).toEqual(['related.Do']);
     const rows = store.gapsFor('related.IndexConfig.ToKeywords');
     expect(rows.filter((r) => r.file === 'internal/related/related.go')).toEqual([]);
+    // The shadow ends with its block, so the call below it still reaches the
+    // package. Without this the assertion above would pass even if the shadow had
+    // swallowed every call on that name in the function.
+    expect(store.callers('config.Load').map((n) => n.qname)).toEqual(['related.Do']);
     store.close();
   }, 30000);
 

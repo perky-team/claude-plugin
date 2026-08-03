@@ -53,13 +53,18 @@ func Render() []byte { return bufferpool.GetBuffer() }
     write('config/config.go', `package config
 func Load() {}
 `);
+    // The same function shadows the package inside a block AND calls the real
+    // package outside it. Both call sites must land where the source says.
     write('related/related.go', `package related
 import "x/config"
 type IndexConfig struct{}
 func (c IndexConfig) ToKeywords() {}
 func Do() {
-	config := IndexConfig{}
-	config.ToKeywords()
+	if true {
+		config := IndexConfig{}
+		config.ToKeywords()
+	}
+	config.Load()
 }
 `);
     const store = await indexed();
@@ -68,14 +73,16 @@ func Do() {
     // about first. Reading `config` as the imported package instead sent this call
     // to the wrong package and left the real one with no caller at all.
     expect(store.callers('related.IndexConfig.ToKeywords').map((n) => n.qname)).toEqual(['related.Do']);
+    // And the shadow ends with its block: the call on line 10 is a real call into
+    // the imported package, so that package keeps its own caller.
+    expect(store.callers('config.Load').map((n) => n.qname)).toEqual(['related.Do']);
     // The stored row must not carry the wrong qualifier any more.
     const edge = store.db.prepare(
-      `SELECT dst_name, dst_bare, field_key FROM edges WHERE kind = 'call' AND line = 7`).get();
+      `SELECT dst_name, dst_bare, field_key FROM edges WHERE kind = 'call' AND line = 8`).get();
     expect(edge.dst_name).toBe('ToKeywords');
     expect(edge.dst_bare).toBe('ToKeywords');
-    expect(edge.field_key).toBe('related.Do#var:config');
-    // The package it shadows keeps its own symbols — nothing was moved onto it.
-    expect(store.callers('config.Load')).toEqual([]);
+    // Keyed on the binding — the definition it lives in plus where it is written.
+    expect(edge.field_key).toMatch(/#var:config@7:2$/);
     store.close();
   }, 30000);
 });
