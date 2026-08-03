@@ -255,6 +255,157 @@ func init() {
   }, 30000);
 });
 
+// `ownerOf` finds an enclosing NAMED definition (function, method, type). A
+// `func_literal` is not one. A name declared inside a closure that itself
+// sits at package level (a closure stored in a package-level var) has no
+// such owner, but it is still a local — the scope node says so. Keying it as
+// a package variable merges it with the real one of the same name.
+describe('Go closures at package level', () => {
+  it('does not let a local inside a package-level closure answer for the package variable', async () => {
+    write('core/core.go', `package core
+type Config struct{}
+func (c *Config) Do() {}
+type Other struct{}
+func (o *Other) Do() {}
+func MakeConfig() *Config { return nil }
+`);
+    // `conf`'s type comes from a function's return value, which extraction does
+    // not read, so the package variable itself stays untyped here — exactly
+    // the shape the reviewer's reproducer uses.
+    write('app/a.go', `package app
+import "x/core"
+var conf = core.MakeConfig()
+func UseA() {
+	conf.Do()
+}
+`);
+    // A LOCAL of the same name, inside a closure with no owning function.
+    write('app/b.go', `package app
+import "x/core"
+var handlers = map[string]func(){
+	"x": func() {
+		conf := &core.Other{}
+		conf.Do()
+	},
+}
+`);
+    const store = await indexed();
+
+    // The closure's local must never answer for UseA's call.
+    expect(store.callers('core.Other.Do').map((n) => n.qname)).not.toContain('app.UseA');
+    // UseA's own call is either answered correctly or reported as a gap — never
+    // silently pointed at core.Other.Do.
+    const call = callAt(store, 'app/a.go', 5);
+    if (call.dst_qname !== null) {
+      expect(call.dst_qname).toBe('core.Config.Do');
+    } else {
+      expect(store.gapsFor('core.Config.Do').some((g) => g.file === 'app/a.go' && g.line === 5)).toBe(true);
+    }
+
+    store.close();
+  }, 30000);
+
+  it('does not let an untyped local silently steal the package variable\'s type', async () => {
+    write('core/core.go', `package core
+type Config struct{}
+func (c *Config) Do() {}
+type Other struct{}
+func (o *Other) Do() {}
+func MakeOther() *Other { return nil }
+`);
+    // The package var IS typed this time (a composite literal, readable).
+    write('app/a.go', `package app
+import "x/core"
+var conf = &core.Config{}
+func UseA() {
+	conf.Do()
+}
+`);
+    // The LOCAL is untyped this time (a function's return value). Before the
+    // fix, this local shared the package var's key, so the ONE readable type
+    // (core.Config, from a.go) answered for this call too — resolved, and
+    // wrong, with the call site's src_id NULL (no owning function), so neither
+    // `callers` nor `gapsFor` could ever show the mistake.
+    write('app/b.go', `package app
+import "x/core"
+var handlers = map[string]func(){
+	"x": func() {
+		conf := core.MakeOther()
+		conf.Do()
+	},
+}
+`);
+    const store = await indexed();
+
+    // The legitimate call still resolves, and only to itself.
+    expect(store.callers('core.Config.Do').map((n) => n.qname)).toEqual(['app.UseA']);
+    // The closure's own call must not be silently resolved to core.Config.Do.
+    const closureCall = callAt(store, 'app/b.go', 6);
+    expect(closureCall.dst_qname).not.toBe('core.Config.Do');
+    // And if it is left unresolved, gapsFor must be able to find it — the
+    // failure mode this finding is about is a resolved-but-wrong edge that
+    // hides from every report, not merely an unresolved one.
+    if (closureCall.dst_qname === null) {
+      expect(store.gapsFor('core.Other.Do').some((g) => g.file === 'app/b.go' && g.line === 6)).toBe(true);
+    }
+
+    store.close();
+  }, 30000);
+
+  it('still types a call through a genuine package variable declared in a sibling file', async () => {
+    write('core/core.go', `package core
+type Config struct{}
+func (c *Config) Do() {}
+`);
+    write('pkgx/a.go', `package pkgx
+import "x/core"
+var shared = &core.Config{}
+`);
+    write('pkgx/b.go', `package pkgx
+func UseB() string {
+	shared.Do()
+	return ""
+}
+`);
+    const store = await indexed();
+
+    // A real package-level variable, declared in one file, must still type a
+    // call made on it from a different file of the same directory — the fix
+    // for the closure case must not touch this path.
+    expect(store.callers('core.Config.Do').map((n) => n.qname)).toEqual(['pkgx.UseB']);
+
+    store.close();
+  }, 30000);
+});
+
+describe('Go parenthesized initializers', () => {
+  it('reads the type inside a parenthesized initializer', async () => {
+    write('core/core.go', `package core
+type A struct{}
+func (a *A) Do() {}
+`);
+    // A decoy so a bare-name guess on "Do" cannot succeed by luck — the call
+    // only resolves if the parens are unwrapped and the type is actually read.
+    write('other/other.go', `package other
+type B struct{}
+func (b *B) Do() {}
+`);
+    write('app/app.go', `package app
+import "x/core"
+func Use() {
+	x := (&core.A{})
+	x.Do()
+}
+`);
+    const store = await indexed();
+
+    expect(store.callers('core.A.Do').map((n) => n.qname)).toEqual(['app.Use']);
+    expect(store.callers('other.B.Do')).toEqual([]);
+
+    store.close();
+  }, 30000);
+});
+
 describe('Go const declarations', () => {
   it('types a const of a named type instead of leaving the call to the bare name', async () => {
     write('color/color.go', `package color

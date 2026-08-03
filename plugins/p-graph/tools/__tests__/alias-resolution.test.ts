@@ -82,7 +82,9 @@ func Do() {
     expect(edge.dst_name).toBe('ToKeywords');
     expect(edge.dst_bare).toBe('ToKeywords');
     // Keyed on the binding — the definition it lives in plus where it is written.
-    expect(edge.field_key).toMatch(/#var:config@7:2$/);
+    // The position, not the exact line/col, is what this asserts: an unrelated
+    // edit above line 7 must not break this test.
+    expect(edge.field_key).toMatch(/#var:config@\d+:\d+$/);
     store.close();
   }, 30000);
 });

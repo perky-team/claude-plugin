@@ -138,6 +138,9 @@ function goFieldTypeName(typeNode, pkg) {
 // and the variable stays untyped.
 function goInitTypeNode(expr) {
   let n = expr;
+  // `(&T{})`. Parens change nothing about the type, only how far the operator
+  // reaches, so unwrap them before looking at the shape underneath.
+  while (n?.type === 'parenthesized_expression') n = n.namedChild(0);
   // `&T{}`. A composite literal is the only operand shape that names a type, so
   // there is no need to check the operator.
   if (n?.type === 'unary_expression') n = n.childForFieldName?.('operand');
@@ -447,17 +450,28 @@ export async function extract({ file, lang, langId, scm, source }) {
       const owner = ownerOf(cap);
       const scope = goScopeNode(nameNode);
       if (!scope) return;
+      // `ownerOf` only finds a NAMED function, method or type. A closure that
+      // sits at package level (`var handlers = map[string]func(){ "x": func()
+      // { conf := ... } }`) has none — but its body is still a local scope, not
+      // the whole file. The scope node is what tells the two apart: only a
+      // `source_file` scope with no owner is really package level; anything
+      // narrower is a local, wherever it sits. Getting this wrong merges the
+      // local with a real package variable of the same name.
+      const pkgLevel = !owner && scope.type === 'source_file';
       const key = owner
         ? `${owner.id}#var:${nameNode.text}@${nameNode.startPosition.row + 1}:${nameNode.startPosition.column}`
-        : pkgVarKey(nameNode.text);
+        : pkgLevel
+          ? pkgVarKey(nameNode.text)
+          : `${file}#var:${nameNode.text}@${nameNode.startPosition.row + 1}:${nameNode.startPosition.column}`;
       if (!key) return; // a package-level name in a file with no package clause
       if (!bindings.has(nameNode.text)) bindings.set(nameNode.text, []);
       bindings.get(nameNode.text).push({
         key,
         // A package-level name is visible in the whole file wherever it is
-        // written, so it has no "from" position; a name bound in a function does.
-        fromLine: owner ? fromNode.endPosition.row + 1 : 0,
-        fromCol: owner ? fromNode.endPosition.column : 0,
+        // written, so it has no "from" position; any local does, even one
+        // whose owning function or method could not be found.
+        fromLine: pkgLevel ? 0 : fromNode.endPosition.row + 1,
+        fromCol: pkgLevel ? 0 : fromNode.endPosition.column,
         startLine: scope.startPosition.row + 1, startCol: scope.startPosition.column,
         endLine: scope.endPosition.row + 1, endCol: scope.endPosition.column,
       });

@@ -41,6 +41,12 @@
 ; field holds the ELEMENT type, and the parameter itself is a slice — recording the
 ; element type would state a type the name never has. A slice has no methods, so no
 ; valid call is made on such a name, and nothing is lost by leaving it out.
+; `(parameter_declaration)` also matches a generic type-parameter list: in
+; `func Gen[T any](t T)` the grammar gives `T any` the same node shape as a real
+; parameter, so `T` gets a row too (typed as the package-qualified "any").
+; Harmless — a call on `T` itself makes no sense — unless a package also
+; declares a real type named the same as one of its type parameters, which
+; this leaves unhandled.
 ; Names bound by shapes whose type we cannot read: a range variable, a type-switch
 ; alias, a channel receive. We record only that the name is taken. Without that, a
 ; call on one of them would be answered with the type of a package-level variable
