@@ -43,6 +43,26 @@ export async function runCommand(ctx) {
 
   const fmtNode = (n) => `${n.kind} ${n.qname}  ${n.file}:${n.start_line}  ${n.signature}`;
 
+  // A guessed row is not wrong, just unverified: the graph could not see the
+  // receiver's real type, so it fell back to the one repo symbol that shares
+  // the call's bare method name. That symbol might be the right one, or the
+  // call might belong to a different type that happens to have a method with
+  // the same name. Print certain rows as the answer; print guessed rows apart,
+  // under a heading that says why they are unsure.
+  const printCertainThenGuessed = (rows, noun) => {
+    const certain = rows.filter((r) => !r.guess);
+    const guessed = rows.filter((r) => r.guess);
+    certain.forEach((r) => out(fmtNode(r)));
+    if (guessed.length) {
+      const s = guessed.length === 1 ? '' : 's';
+      // "more" only makes sense on top of a certain list above it — with none,
+      // say what these rows ARE, not that there is "more" of nothing.
+      const lead = certain.length ? `${guessed.length} more ${noun}${s}` : `${guessed.length} ${noun}${s}`;
+      out(`⚠ ${lead}, matched by name only (guess) — the graph could not see the receiver's type, so ${guessed.length === 1 ? 'this one' : 'these'} may be a different symbol with the same method name:`);
+      guessed.forEach((r) => out('    ' + fmtNode(r)));
+    }
+  };
+
   // Name the call sites this answer is missing, without burying them. A gap that
   // shares a name with the target but sits in a file that cannot even see the
   // target's package is almost always a coincidence, and a call that leaves the
@@ -98,14 +118,14 @@ export async function runCommand(ctx) {
     const target = opts._[0];
     const rows = store.callers(target), gaps = store.gapsFor(target);
     if (opts.json) return emitJson({ callers: rows, gaps });
-    rows.forEach((r) => out(fmtNode(r)));
+    printCertainThenGuessed(rows, 'caller');
     return emitGaps(gaps);
   }
   if (command === 'callees') {
     const target = opts._[0];
     const rows = store.callees(target), gaps = store.gapsFrom(target);
     if (opts.json) return emitJson({ callees: rows, gaps });
-    rows.forEach((r) => out(fmtNode(r)));
+    printCertainThenGuessed(rows, 'callee');
     return emitGaps(gaps);
   }
   if (command === 'impact') {
@@ -115,6 +135,9 @@ export async function runCommand(ctx) {
     const rows = store.impact(target), gaps = store.gapsAround(target);
     if (opts.json) return emitJson({ impact: rows, gaps });
     rows.length ? rows.forEach((r) => out(fmtNode(r))) : out('(no impact)');
+    // The walk never crosses a guessed edge (receiver type unknown), so a real
+    // impact through one is missing here, not just unlisted.
+    out('Guessed edges (receiver type unknown) were not followed, so a real impact through one may be missing.');
     return emitGaps(gaps);
   }
   if (command === 'trace') {

@@ -203,7 +203,11 @@ export function openStore(dbPath, opts = {}) {
     const byBareName = db.prepare(`
       SELECT n.id FROM nodes n
       WHERE n.name = ? AND n.lang = ? AND n.kind IN ('function','method','class') LIMIT 2`);
-    const setDst = db.prepare('UPDATE edges SET dst_id = ? WHERE rowid = ?');
+    // Promotion is real (Go lets an embedded type's method answer for the
+    // outer one), but WHICH bare-name node it lands on is still a guess: the
+    // receiver-qualified name missed, and the fallback picks the one repo
+    // symbol that happens to share the bare method name.
+    const setDst = db.prepare('UPDATE edges SET dst_id = ?, guess = 1 WHERE rowid = ?');
     for (const e of candidates) {
       const owner = e.dst_name.slice(0, Math.max(0, e.dst_name.length - e.dst_bare.length - 1));
       if (e.lang === 'go' && !(owner && embedsRepoType.get(`${owner}#embed`))) continue;
@@ -223,16 +227,20 @@ export function openStore(dbPath, opts = {}) {
     // become ambiguous when a new same-named symbol appears, so keeping it would
     // make an incremental index answer differently from a full rebuild —
     // silently, and in the direction of false confidence.
-    db.prepare(`UPDATE edges SET dst_id = NULL WHERE kind = 'call'`).run();
+    // guess is cleared with dst_id: a re-resolve must not let a stale 1 from a
+    // previous index survive on an edge that this pass now resolves for real.
+    db.prepare(`UPDATE edges SET dst_id = NULL, guess = 0 WHERE kind = 'call'`).run();
 
     // Pass A — exact qualified match. "filesink.New" links to the node whose
     // qname is "filesink.New", in the same language, and only when it is unique.
+    // A qualified name is not a guess: the call site itself named the package
+    // or type, so this is as certain as a resolver gets.
     db.prepare(`
       UPDATE edges SET dst_id = (
         SELECT n.id FROM nodes n
         WHERE n.qname = edges.dst_name AND n.lang = edges.lang AND n.kind IN ${CALLABLE}
         LIMIT 1
-      )
+      ), guess = 0
       WHERE kind = 'call' AND dst_id IS NULL AND dst_name IS NOT NULL AND external = 0
         AND (SELECT count(*) FROM nodes n
              WHERE n.qname = edges.dst_name AND n.lang = edges.lang AND n.kind IN ${CALLABLE}) = 1`).run();
@@ -240,14 +248,16 @@ export function openStore(dbPath, opts = {}) {
     // Pass F — Go recv.field.Method() through the field-type table. Runs before
     // the bare-name fallback so an ambiguous method name links to the RIGHT type.
     // Guarded twice: exactly one known field type for the key, and exactly one
-    // node with the target qname.
+    // node with the target qname. The receiver's type was read from the source
+    // (a struct field, a parameter, or a variable declaration), so this is a
+    // recorded fact, not a guess.
     db.prepare(`
       UPDATE edges SET dst_id = (
         SELECT n.id FROM nodes n
         WHERE n.qname = (SELECT ft.type FROM field_types ft WHERE ft.key = edges.field_key LIMIT 1) || '.' || edges.method
           AND n.lang = edges.lang AND n.kind IN ${CALLABLE}
         LIMIT 1
-      )
+      ), guess = 0
       WHERE kind = 'call' AND dst_id IS NULL AND field_key IS NOT NULL AND method IS NOT NULL
         AND (SELECT count(DISTINCT ft.type) FROM field_types ft WHERE ft.key = edges.field_key) = 1
         AND (SELECT count(*) FROM nodes n
@@ -268,12 +278,14 @@ export function openStore(dbPath, opts = {}) {
     // own, so it can never supply a legitimate target. Linking the bare name to
     // the one repo method that shares it produced 13 false callers for a single
     // symbol in hugo.
+    // A bare name is not a fact about the receiver's type — it is a guess that
+    // the one repo symbol with this name is the one the call site meant.
     db.prepare(`
       UPDATE edges SET dst_id = (
         SELECT n.id FROM nodes n
         WHERE n.name = edges.dst_name AND n.lang = edges.lang AND n.kind IN ${CALLABLE}
         LIMIT 1
-      )
+      ), guess = 1
       WHERE kind = 'call' AND dst_id IS NULL AND dst_name IS NOT NULL AND external = 0
         AND (SELECT count(*) FROM nodes n WHERE n.qname = edges.dst_name AND n.lang = edges.lang) = 0
         AND (SELECT count(*) FROM nodes n
@@ -301,6 +313,19 @@ export function openStore(dbPath, opts = {}) {
 
 // Read/query helpers shared by the read-write and read-only stores.
 function attachReadHelpers(store, db, hasFts) {
+  // A writable open always has edges.guess by the time this runs: either the
+  // table was just recreated by the DDL (fresh column) or the stored schema
+  // was already 7+ (guess already there). The one way to reach this function
+  // WITHOUT that column is the read-only fallback on a pre-7 DB that a
+  // writable open never got the chance to migrate (e.g. a read-only
+  // filesystem). Detect that once, the same way hasFts is detected, and treat
+  // every edge in such a DB as certain — the honest reading of "guess" on
+  // data written before this column had any meaning.
+  let hasGuess = true;
+  try { db.prepare('SELECT guess FROM edges LIMIT 1').get(); } catch { hasGuess = false; }
+  const GUESS_COL = hasGuess ? 'MIN(e.guess)' : '0';
+  const GUESS_FILTER = hasGuess ? 'AND e.guess = 0' : '';
+
   store.search = (query, { kind, lang } = {}) => {
     const q = String(query);
     let rows = [];
@@ -329,12 +354,20 @@ function attachReadHelpers(store, db, hasFts) {
   // contribute their gap rows, not just whichever the caller finds first.
   const targetsFor = (nameOrId) => db.prepare(
     'SELECT * FROM nodes WHERE id = ? OR qname = ? OR name = ?').all(nameOrId, nameOrId, nameOrId);
+  // Grouped by the reported node's id, not SELECT DISTINCT on every column:
+  // two edges can reach the same caller/callee, one certain and one a guess,
+  // and a plain DISTINCT would then print that node twice — once per guess
+  // value — instead of once. MIN(e.guess) folds the group to 0 (certain) as
+  // soon as any edge into that node is certain; only a node reached by
+  // nothing but guesses reports guess = 1. A caller/callee that is certain by
+  // ANY path should not be buried under the "uncertain" heading just because
+  // some other, unrelated call site also guessed its way there.
   store.callers = (name) => db.prepare(`
-    SELECT DISTINCT s.* FROM edges e JOIN nodes s ON s.id = e.src_id
-    JOIN nodes d ON d.id = e.dst_id WHERE d.name = ? OR d.qname = ?`).all(name, name);
+    SELECT s.*, ${GUESS_COL} AS guess FROM edges e JOIN nodes s ON s.id = e.src_id
+    JOIN nodes d ON d.id = e.dst_id WHERE d.name = ? OR d.qname = ? GROUP BY s.id`).all(name, name);
   store.callees = (name) => db.prepare(`
-    SELECT DISTINCT d.* FROM edges e JOIN nodes s ON s.id = e.src_id
-    JOIN nodes d ON d.id = e.dst_id WHERE s.name = ? OR s.qname = ?`).all(name, name);
+    SELECT d.*, ${GUESS_COL} AS guess FROM edges e JOIN nodes s ON s.id = e.src_id
+    JOIN nodes d ON d.id = e.dst_id WHERE s.name = ? OR s.qname = ? GROUP BY d.id`).all(name, name);
   store.files = (prefix) => {
     let p = prefix == null ? '' : String(prefix);
     if (p === '.' || p === './') p = '';
@@ -664,7 +697,7 @@ function attachReadHelpers(store, db, hasFts) {
         UNION
         SELECT e.src_id, up.depth + 1 FROM edges e
         JOIN up ON e.dst_id = up.id
-        WHERE up.depth < ${MAX_DEPTH} AND e.src_id IS NOT NULL
+        WHERE up.depth < ${MAX_DEPTH} AND e.src_id IS NOT NULL ${GUESS_FILTER}
       )
       SELECT DISTINCT n.* FROM nodes n JOIN up ON n.id = up.id WHERE n.id != ?`).all(target.id, target.id);
   };
