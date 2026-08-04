@@ -415,6 +415,42 @@ plus `installedTaskIds` — the `pshed-*` ids actually registered — so a cwd m
 obvious. The crontab is only rewritten when a line is genuinely removed, so a wrong-dir
 run never mutates it.
 
+### The cron line does not pin a plugin version (POSIX)
+
+A plugin is installed into a **versioned** cache directory
+(`~/.claude/plugins/cache/perky-team/p-shed/0.10.0/tools/pshed.mjs`), and the plugin
+system treats those directories as disposable. Measured on the live Pi on 2026-08-03: the
+exact directory the crontab invoked every minute carried an `.orphaned_at` marker, while
+the registry listed a *different* version as installed. (Honest scope: orphan markers from
+twelve days earlier were still on disk, so no sweep has actually deleted anything. This
+removes a dependency that buys nothing; it was never an observed outage.)
+
+So `install-cron` now writes a line that resolves the tool at call time:
+
+```cron
+* * * * * cd "/home/me/work" && P=$(ls -d /home/me/.claude/plugins/cache/perky-team/p-shed/*/tools/pshed.mjs 2>/dev/null | sort -V | tail -n 1); "/usr/bin/node" "${P:-/home/me/.claude/plugins/cache/perky-team/p-shed/0.10.0/tools/pshed.mjs}" tick > "/home/me/work/.pshed/logs/cron.log" 2>&1 # pshed-1a2b3c4d
+```
+
+- `sort -V` is load-bearing: as plain strings `0.9.0` sorts **after** `0.10.0`, so a bare
+  glob would confidently pick the older install.
+- `${P:-…}` falls back to the literal path, so the line can only gain a way to work, never
+  lose one — including when coreutils are missing from cron's stripped `PATH`.
+- A **dev checkout** (`plugins/p-shed/tools/pshed.mjs`, no version segment) gets the old
+  literal line, byte for byte. Only the directory directly above `tools/` is treated as a
+  version.
+- The `# pshed-<sha1>` marker keeps its position and format, so `remove-cron` / `stop`
+  still find and remove lines written by **older** p-shed versions.
+
+Ruled out on evidence, not by omission: resolving through
+`~/.claude/plugins/installed_plugins.json` is the most "correct"-sounding option, but that
+is the file that was *wrong* in the measured case — it named 0.9.0 while 0.10.0 was the
+one actually running.
+
+**Windows keeps the pinned path**, deliberately: the incident is Linux-only, batch has no
+version-aware sort (`dir /o-n` would pick 0.9.0 over 0.10.0 — a confidently wrong answer is
+worse than a pinned one), and a `node -e` resolver inside `schtasks /TR` inside `cmd /c` is
+three layers of quoting plus schtasks' own `%` handling for a risk never observed there.
+
 ## Known limitations
 
 - A job runs in its `cwd`; only that folder's `.claude/rules` load. To target another
