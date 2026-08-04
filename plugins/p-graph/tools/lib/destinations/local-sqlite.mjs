@@ -418,6 +418,58 @@ export function openStore(dbPath, opts = {}) {
     }
   };
 
+  // Pass R — a receiver typed by a function's RETURN VALUE. `b := hugolib.Test(t)`
+  // then `b.AssertFileContent(...)`: nothing at the call site names a type, and the
+  // bare-name fallback used to answer it — the largest single source of false rows
+  // on a real repo. Two facts read from the source close it: extraction records the
+  // callee under the variable's key ("#ret:hugolib.Test") and the callee's own
+  // declared result type under "<qname>#ret". Following one to the other is
+  // knowledge, not a guess, so these rows are certain.
+  //
+  // Guarded like Pass F: exactly one type recorded for the variable, exactly one
+  // result type for that callee, and exactly one node with the target qname. When
+  // the callee is outside the repo (`x := reflect.ValueOf(v)`) there is no result
+  // row at all, so nothing resolves here — and Pass B then refuses to guess,
+  // because a "#ret:" row means the type is decided somewhere we cannot read.
+  const resolveReturnTypes = () => {
+    const pending = db.prepare(`
+      SELECT rowid, field_key, method, lang FROM edges
+      WHERE kind = 'call' AND dst_id IS NULL AND lang = 'go'
+        AND field_key IS NOT NULL AND method IS NOT NULL`).all();
+    if (!pending.length) return;
+    // One row per key, and only when that key has exactly one recorded type: two
+    // types for one name is a conflict, and picking would be a guess.
+    const typeOfKey = new Map();
+    for (const r of db.prepare('SELECT key, type FROM field_types').all()) {
+      typeOfKey.set(r.key, typeOfKey.has(r.key) && typeOfKey.get(r.key) !== r.type ? null : r.type);
+    }
+    const nodeByQname = db.prepare(
+      `SELECT id FROM nodes WHERE qname = ? AND lang = ? AND kind IN ${CALLABLE} LIMIT 2`);
+    const setDst = db.prepare('UPDATE edges SET dst_id = ?, guess = 0 WHERE rowid = ?');
+    const idCache = new Map();
+    db.prepare('BEGIN').run();
+    try {
+      for (const e of pending) {
+        const marker = typeOfKey.get(e.field_key);
+        if (!marker || !marker.startsWith('#ret:')) continue;
+        const retType = typeOfKey.get(`${marker.slice(5)}#ret`);
+        if (!retType) continue; // callee outside the repo, or several result types
+        const qname = `${retType}.${e.method}`;
+        const key = `${qname}|${e.lang}`;
+        if (!idCache.has(key)) {
+          const hits = nodeByQname.all(qname, e.lang);
+          idCache.set(key, hits.length === 1 ? hits[0].id : null);
+        }
+        const id = idCache.get(key);
+        if (id) setDst.run(id, e.rowid);
+      }
+      db.prepare('COMMIT').run();
+    } catch (err) {
+      db.prepare('ROLLBACK').run();
+      throw err;
+    }
+  };
+
   store.resolvePending = () => {
     // Invalidate every call edge and resolve from scratch. A resolved edge can
     // become ambiguous when a new same-named symbol appears, so keeping it would
@@ -476,6 +528,10 @@ export function openStore(dbPath, opts = {}) {
         AND (SELECT count(*) FROM nodes n
              WHERE n.qname = (SELECT ft.type FROM field_types ft WHERE ft.key = edges.field_key LIMIT 1) || '.' || edges.method
                AND n.lang = edges.lang AND n.kind IN ${CALLABLE}) = 1`).run();
+
+    // Runs after Pass F (a type written at the declaration is better evidence than
+    // one read from a callee's signature) and before the bare-name fallback.
+    resolveReturnTypes();
 
     // Pass B — a unique bare-name match, only when no qualified candidate exists.
     // The extra guard is the one the evaluation showed missing: a call through a

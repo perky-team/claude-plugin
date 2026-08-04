@@ -21,10 +21,10 @@ beforeEach(() => {
   write('svc/svc.go', `package svc
 type A struct{}
 func (a *A) Guessed() {}
-func Make() *A { return &A{} }
+func Make() (*A, error) { return &A{}, nil }
 func UseTyped(a *A) { a.Guessed() }
 func UseUntyped() {
-	x := Make()
+	x, _ := Make()
 	x.Guessed()
 }
 `);

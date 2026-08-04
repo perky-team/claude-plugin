@@ -20,10 +20,10 @@ describe('a guessed edge is marked and kept out of impact', () => {
 type A struct{}
 func (a *A) Certain() {}
 func (a *A) Guessed() {}
-func Make() *A { return &A{} }
+func Make() (*A, error) { return &A{}, nil }
 func UseTyped(a *A) { a.Certain() }
 func UseGuessed() {
-	x := Make()
+	x, _ := Make()
 	x.Guessed()
 }
 `);
@@ -46,14 +46,14 @@ func UseGuessed() {
     write('mix/mix.go', `package mix
 type A struct{}
 func (a *A) Ping() {}
-func Make() *A { return &A{} }
+func Make() (*A, error) { return &A{}, nil }
 func Both(a *A) {
 	a.Ping()
-	x := Make()
+	x, _ := Make()
 	x.Ping()
 }
 func OnlyGuess() {
-	y := Make()
+	y, _ := Make()
 	y.Ping()
 }
 `);
@@ -86,9 +86,9 @@ func OnlyGuess() {
     write('svc2/svc2.go', `package svc2
 type A struct{}
 func (a *A) Guessed() {}
-func Make() *A { return &A{} }
+func Make() (*A, error) { return &A{}, nil }
 func Reached() {
-	x := Make()
+	x, _ := Make()
 	x.Guessed()
 }
 func Caller() { Reached() }

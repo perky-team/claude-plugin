@@ -212,11 +212,11 @@ func UseB() string { return shared.Get() }
 `);
     const store = await indexed();
 
-    // UseB never touches pool.Keeper. Its own `shared` takes its type from a
-    // function's return value, which extraction does not read, so that call has
-    // to be reported rather than answered with the other directory's type.
+    // UseB never touches pool.Keeper: its own `shared` is typed from NewBag's
+    // declared result, so each call reaches the type of ITS OWN directory. The two
+    // `shared` keys must not meet, even though both files declare `package tpl`.
     expect(store.callers('pool.Keeper.Get').map((n) => n.qname)).toEqual(['tpl.UseA']);
-    expect(store.gapsFor('other.Bag.Get').length).toBeGreaterThan(0);
+    expect(store.callers('other.Bag.Get').map((n) => n.qname)).toEqual(['tpl.UseB']);
 
     store.close();
   }, 30000);
@@ -245,11 +245,11 @@ func init() {
 `);
     const store = await indexed();
 
-    // Go allows many func init() per package, so a qname is not unique. Only one
-    // of the two `db`s has a type we can read, and it must not answer for the
-    // other file's call.
+    // Go allows many func init() per package, so a qname is not unique. Each
+    // file's `db` has its own type — one written at the declaration, one read from
+    // NewMemory's result — and neither may answer for the other file's call.
     expect(store.callers('store.Postgres.Get')).toHaveLength(1);
-    expect(store.gapsFor('store.Memory.Get').length).toBeGreaterThan(0);
+    expect(store.callers('store.Memory.Get').map((n) => n.qname)).toEqual(['api.init']);
 
     store.close();
   }, 30000);

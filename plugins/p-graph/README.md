@@ -110,6 +110,7 @@ Each symbol carries a bare `name` (used for search) and a qualified `qname`. A c
 
 - the call site wrote the qualified name itself (`filesink.New(...)`, `Table::Check(3)`), and exactly one symbol carries that `qname`; or
 - the graph knows the receiver's type. Go writes the type down, so four shapes count: a method's own receiver (`s.M()`), a struct field of that receiver (`s.store.Get()`), a parameter (`func f(st *store.Store) { st.Get() }`), and a local or package-level variable (`var st store.Store`); or
+- **the callee's signature says what the receiver is.** `c := store.Open()` then `c.Query(...)`: the call site names no type, but `Open` declares one result and the graph reads it. Only a single named result counts — `(T, error)` says nothing about one variable, and a callee outside the repo has no signature to read, which is exactly when a bare-name guess used to invent a caller; those calls are now refused and reported as gaps instead.
 - **the definition is in scope where the call is written.** A plain `walk(1)` in JavaScript, TypeScript, Python or C++ first looks for a `walk` in the calling file: one nested in a scope that holds the call site, else one at file top level. Scope is read, not guessed, so these rows are certain — and they come first, because a top-level function in those languages has a bare `qname`, which would otherwise let the rule above match a same-named function in a file the call site never heard of. Two definitions of one name in one scope resolve to neither. A call written on a value (`o.walk()`) is not covered by this: a function in scope is not a member of anything.
 
 **Guess** — the only reason to link was that a bare method name happened to be unique in the whole repo. The receiver's type was unknown, so the graph picked the one symbol that shares the name. Guessed rows print apart, under their own heading:
@@ -160,9 +161,11 @@ Of the resolved rows in that same set:
 | | Resolved rows | False | False rate |
 |---|---|---|---|
 | before this work | 2,767 | 1,188 | 42.9% |
-| now | 1,734 | 165 | 9.5% |
-| now, certain rows only | 1,352 | **0** | **0.0%** |
-| now, guessed rows only | 382 | 165 | 43.2% |
+| now | 1,707 | 138 | 8.1% |
+| now, certain rows only | 1,355 | **0** | **0.0%** |
+| now, guessed rows only | 352 | 138 | 39.2% |
+
+The last row of "now" moved after a receiver typed by a function's result started resolving through the callee's signature: 27 false rows went (24 on one hugo symbol, 3 on another), and 3,112 rows on hugo turned from guesses into certain ones. Repo-wide on hugo, certain call edges went 12,569 → 15,681 and guesses 5,002 → 2,030; on caddy, 6,071 → 6,496 and 1,610 → 1,207.
 
 **No certain row in that set was false. Every false row is marked a guess.** Treat a guess as a lead and check it.
 

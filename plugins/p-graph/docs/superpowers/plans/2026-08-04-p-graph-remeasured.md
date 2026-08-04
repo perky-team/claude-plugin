@@ -8,6 +8,14 @@ audited from the repo instead of from a working folder on one machine.
 It also replaces what used to be follow-up item 11: the row-level evidence for
 "no certain row was false" now lives here.
 
+**Numbers moved after this was written.** A receiver typed by a function's result
+now resolves through the callee's signature, which removed 27 false rows and turned
+thousands of guesses into certain ones. The current figures are 1,707 resolved,
+1,355 certain, 352 guessed — see "A receiver typed from a function's return value"
+in `2026-08-04-p-graph-follow-up.md`. Everything below describes the run that came
+first; the method, the audit and the eight hand-read rows are unchanged, and the
+script prints today's numbers.
+
 ## Run it again
 
 ```bash

@@ -187,6 +187,18 @@ function goInitTypeNode(expr) {
   return null;
 }
 
+// The call a short declaration takes its value from: `x := reflect.ValueOf(v)`,
+// `buf := bp.GetBuffer()`, `y := Make()`. Returns the call node, or null when the
+// initializer is anything else. Parens and `new(T)` are already handled by
+// goInitTypeNode, which names a real type and runs first.
+function goInitCallNode(expr) {
+  let n = expr;
+  while (n?.type === 'parenthesized_expression') n = n.namedChild(0);
+  if (n?.type !== 'call_expression') return null;
+  if (n.childForFieldName?.('function')?.text === 'new') return null;
+  return n;
+}
+
 // The names a Go declaration introduces, each paired with the type node that
 // gives its type. Pairing runs through the node's own fields, never by position:
 // `a, b *store.Postgres` has two names and one type and both must get a row, and
@@ -208,7 +220,9 @@ function goVarDeclNames(decl) {
     for (let i = 0; i < left.namedChildCount; i++) {
       const name = left.namedChild(i);
       if (name.type !== 'identifier') continue;
-      out.push({ nameNode: name, typeNode: paired ? goInitTypeNode(right.namedChild(i)) : null });
+      const init = paired ? right.namedChild(i) : null;
+      const t = init ? goInitTypeNode(init) : null;
+      out.push({ nameNode: name, typeNode: t, callNode: t ? null : (init ? goInitCallNode(init) : null) });
     }
     return out;
   }
@@ -226,7 +240,9 @@ function goVarDeclNames(decl) {
   const value = declared ? null : decl.childForFieldName?.('value');
   const perName = value && value.namedChildCount === names.length;
   for (let i = 0; i < names.length; i++) {
-    out.push({ nameNode: names[i], typeNode: declared ?? (perName ? goInitTypeNode(value.namedChild(i)) : null) });
+    const init = !declared && perName ? value.namedChild(i) : null;
+    const t = declared ?? (init ? goInitTypeNode(init) : null);
+    out.push({ nameNode: names[i], typeNode: t, callNode: t ? null : (init ? goInitCallNode(init) : null) });
   }
   return out;
 }
@@ -743,6 +759,21 @@ export async function extract({ file, lang, langId, scm, source, pyRepoModules =
   // time (cross-package). Only emitted for Go, where receiver typing applies.
   const fieldTypes = [];
   if (goCtx) {
+    // The declared result type of a repo function or method, keyed "<qname>#ret".
+    // Read here like every other type fact, joined at build time: a variable
+    // declared `x := pkg.Make()` records "#ret:pkg.Make", and the resolver follows
+    // that to this row to learn what x is. Without it the call on x falls back to
+    // a bare name — the largest remaining source of false rows.
+    //
+    // Only a single result that names a type counts. `(T, error)` is a
+    // parameter_list, and a slice, map or func type names nothing we can resolve a
+    // method call through, so goFieldTypeName returns null and no row is written.
+    for (const def of defs) {
+      if (def.kind !== 'function' && def.kind !== 'method') continue;
+      const result = def.node?.childForFieldName?.('result');
+      const type = result ? goFieldTypeName(result, goCtx.pkg) : null;
+      if (type) fieldTypes.push({ key: `${def.qname}#ret`, type, file });
+    }
     const fieldDeclCaps = caps.filter((c) => c.name === 'field.decl');
     for (const fd of fieldDeclCaps) {
       const structDef = defs
@@ -824,7 +855,30 @@ export async function extract({ file, lang, langId, scm, source, pyRepoModules =
     // `fromNode` is the node a name becomes visible AFTER. Go starts a variable's
     // scope at the end of its own declaration, which is why the right-hand side of
     // `watcher, err := watcher.New(...)` still reads `watcher` as the package.
-    const bind = (cap, nameNode, typeNode, fromNode) => {
+    // A variable whose value comes from a call has a type we cannot read: the
+    // declaration is in the callee, often in another package or outside the repo
+    // (`x := reflect.ValueOf(v)`). Record the CALLEE instead of a type, under a
+    // "#ret:" prefix that can never be a Go type name. Nothing resolves through
+    // it — its whole job is to tell the resolver the type is decided elsewhere, so
+    // Pass B's guard refuses the bare-name fallback instead of guessing that the
+    // one repo method sharing the name is the target. That guess is the largest
+    // remaining source of false rows.
+    const retTypeOf = (callNode) => {
+      const fn = callNode.childForFieldName?.('function');
+      if (!fn) return null;
+      if (fn.type === 'identifier') return `#ret:${goCtx.pkg}.${fn.text}`;
+      if (fn.type === 'selector_expression') {
+        const head = fn.childForFieldName?.('operand');
+        const field = fn.childForFieldName?.('field');
+        if (head?.type !== 'identifier' || !field) return null;
+        // Translate an import alias the same way a call site is translated, so a
+        // later pass can look the callee up by the name the graph stores.
+        const pkgName = goCtx.importPkgs.get(head.text) ?? head.text;
+        return `#ret:${pkgName}.${field.text}`;
+      }
+      return null; // a call on an expression: nothing to name
+    };
+    const bind = (cap, nameNode, typeNode, fromNode, callNode = null) => {
       // `_` binds nothing a later line can read — Go itself refuses to read it
       // back. Recording a type for it anyway is how two unrelated files each
       // writing `var _ SomeIface = &Impl{}` (the interface-assertion idiom)
@@ -859,16 +913,21 @@ export async function extract({ file, lang, langId, scm, source, pyRepoModules =
         startLine: scope.startPosition.row + 1, startCol: scope.startPosition.column,
         endLine: scope.endPosition.row + 1, endCol: scope.endPosition.column,
       });
-      const typeName = typeNode ? goFieldTypeName(typeNode, goCtx.pkg) : null;
+      const typeName = typeNode ? goFieldTypeName(typeNode, goCtx.pkg)
+        : (callNode ? retTypeOf(callNode) : null);
       if (!typeName) return;
+      // A "#ret:" row names a callee, not a type, so it must not be offered as
+      // one: `x.f.M()` keys on the type that owns the field `f`, and there is no
+      // such type here.
+      if (typeName.startsWith('#ret:')) { fieldTypes.push({ key, type: typeName, file }); return; }
       fieldTypes.push({ key, type: typeName, file });
       // One key is one binding, so a second type for it can only come from two
       // query patterns matching the same declaration. Refuse rather than pick.
       varTypes.set(key, varTypes.has(key) && varTypes.get(key) !== typeName ? null : typeName);
     };
     for (const vd of caps.filter((c) => c.name === 'var.decl')) {
-      for (const { nameNode, typeNode } of goVarDeclNames(vd.node)) {
-        bind(vd, nameNode, typeNode, vd.node);
+      for (const { nameNode, typeNode, callNode } of goVarDeclNames(vd.node)) {
+        bind(vd, nameNode, typeNode, vd.node, callNode);
       }
     }
     for (const vl of caps.filter((c) => c.name === 'var.local')) {

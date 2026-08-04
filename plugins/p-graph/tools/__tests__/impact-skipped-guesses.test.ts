@@ -27,9 +27,9 @@ describe('impact --json says WHY an empty answer is empty', () => {
     write('svc/svc.go', `package svc
 type A struct{}
 func (a *A) Guessed() {}
-func Make() *A { return &A{} }
-func R1() { x := Make(); x.Guessed() }
-func R2() { y := Make(); y.Guessed() }
+func Make() (*A, error) { return &A{}, nil }
+func R1() { x, _ := Make(); x.Guessed() }
+func R2() { y, _ := Make(); y.Guessed() }
 `);
     run(['index', '--full']);
 
@@ -54,8 +54,8 @@ func R2() { y := Make(); y.Guessed() }
     write('svc/svc.go', `package svc
 type A struct{}
 func (a *A) Guessed() {}
-func Make() *A { return &A{} }
-var eager = func() *A { x := Make(); x.Guessed(); return x }()
+func Make() (*A, error) { return &A{}, nil }
+var eager = func() *A { x, _ := Make(); x.Guessed(); return x }()
 `);
     run(['index', '--full']);
 

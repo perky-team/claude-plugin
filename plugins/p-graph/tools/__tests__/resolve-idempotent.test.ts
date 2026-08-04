@@ -21,15 +21,16 @@ describe('incremental resolution matches a full rebuild', () => {
   it('drops an edge that a newly added same-named symbol made ambiguous', async () => {
     write('pkga/a.go', `package pkga
 type A struct{}
-func New() *A { return &A{} }
+func New() (*A, error) { return &A{}, nil }
 func (a *A) Frobnicate() {}
 `);
-    // `a` takes its type from a function's return value, which the graph does not
-    // read, so this call can only ever resolve by its unique bare name. That is
+    // `a, _ := pkga.New()` is one value for two names, so Go itself pairs nothing
+    // and no type can be read — not at the declaration, and not from New's result
+    // either. This call can only ever resolve by its unique bare name, which is
     // the resolution an added namesake has to invalidate.
     write('caller/c.go', `package caller
 import "x/pkga"
-func Do() { a := pkga.New(); a.Frobnicate() }
+func Do() { a, _ := pkga.New(); a.Frobnicate() }
 `);
     const store = openStore(':memory:');
     await indexFull({ root: dir, store, ignorePatterns: [] });

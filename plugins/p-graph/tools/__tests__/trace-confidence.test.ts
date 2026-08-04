@@ -84,9 +84,9 @@ describe('trace says how sure each hop is', () => {
 type A struct{}
 func (a *A) Sink() {}
 func Mid(a *A) { a.Sink() }
-func Make() *A { return &A{} }
+func Make() (*A, error) { return &A{}, nil }
 func Entry(a *A) {
-	x := Make()
+	x, _ := Make()
 	x.Sink()
 	Mid(a)
 }

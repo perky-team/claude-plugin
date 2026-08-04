@@ -21,8 +21,8 @@ caddyserver/caddy, google/leveldb, sindresorhus/got and psf/requests, with
 
 | | Before | Now |
 |---|---|---|
-| False rows among resolved | 42.9% | 9.5% |
-| False rows among **certain** | — | **0 of 1,352**; one shape the set did not contain was found later and fixed, see below |
+| False rows among resolved | 42.9% | 8.1% |
+| False rows among **certain** | — | **0 of 1,355**; one shape the set did not contain was found later and fixed, see below |
 | Silent misses | the original complaint | 2 of 1,724, both pre-existing |
 | `impact` on hugo | 15,555 ms | 399 ms |
 | caddy database | 105.6 MB | 10.5 MB |
@@ -31,52 +31,43 @@ caddyserver/caddy, google/leveldb, sindresorhus/got and psf/requests, with
 
 ## Ordered by how much wrongness each one still causes
 
-### 1. A receiver typed from a function's return value
-
-`x := reflect.ValueOf(...)`, `buf := bp.GetBuffer()`. The variable has no
-recorded type, so the call resolves by unique bare name — a guess. **This is the
-largest remaining source of wrong rows.** `collections.Namespace.Index` prints 26
-rows where `gopls` says 3, and all 25 false ones are this shape.
-
-Reading a called repo function's declared return type would close most of it.
-
-### 2. A type table for TypeScript and Python
+### 1. A type table for TypeScript and Python
 
 A real method with a real owner, called on an untyped value, still resolves
 wrongly: got's `setHeader` 89 false rows, `RequestsCookieJar.set` 22, `.update`
 15. The owner rule that shipped cannot help here, because the owner is genuinely
 a class. Only a recorded type can.
 
-### 3. A C++ type table
+### 2. A C++ type table
 
 C++ is usable for calls written `Class::method(...)` — 11 of 11 correct on a real
 leveldb symbol. A member call on a value is about 40% of C++ calls and still
 cannot resolve.
 
-### 4. Interface dispatch
+### 3. Interface dispatch
 
 There are no `implements` edges. A call through an interface with one
 implementation resolves to it as a guess; with two or more it becomes a gap. The
 honest answer is "these N types could receive this call", and the graph cannot
 say that yet.
 
-### 5. TypeScript call-argument function bodies are not definitions
+### 4. TypeScript call-argument function bodies are not definitions
 
 `describe` / `it` callbacks, so 394 of nest's 1,727 files produce no symbols, and
 a majority of resolved edges there have no source symbol. They do surface, as
 `outside any indexed symbol` gap rows — but they have no caller to name.
 
-### 6. Two repo packages sharing a base name collapse into one qname space
+### 5. Two repo packages sharing a base name collapse into one qname space
 
 So a call can resolve to the wrong package's symbol. The `count(DISTINCT ft.type)
 = 1` guard in Pass F is what stops that from becoming a *certain* wrong row today
 (`receiver-types.test.ts` covers it), but the collapse itself is still there.
 
-### 7. `gitChangedFiles` cannot see a file created and deleted without a commit
+### 6. `gitChangedFiles` cannot see a file created and deleted without a commit
 
 So a stale row survives until the next `--full`.
 
-### 8. Smaller, all recorded in `.superpowers/sdd/progress.md`
+### 7. Smaller, all recorded in `.superpowers/sdd/progress.md`
 
 - An assertion in `alias-resolution.test.ts` that no longer tells the two
   variable-key shapes apart.
@@ -134,6 +125,34 @@ re-measured on fresh clones with the shipped code, and the audit of every certai
 row is now in `2026-08-04-p-graph-remeasured.md`: 1,734 resolved rows (same as
 published), 1,353 certain, **0 false** — 1,345 checked mechanically, 8 read by hand.
 
+
+
+**A receiver typed from a function's return value** (the old item 1, the largest
+remaining source of false rows). `b := hugolib.Test(t, files)` then
+`b.AssertFileContent(...)`: nothing at the call site names a type, so the bare name
+answered it. Extraction now records the callee under the variable's key
+(`#ret:hugolib.Test`) and every function's declared result under `<qname>#ret`, and
+a new resolver pass follows one to the other. Both are facts read from the source,
+so the rows are certain.
+
+| | before | after |
+|---|---|---|
+| hugo: certain call edges | 12,569 | **15,681** |
+| hugo: guessed call edges | 5,002 | **2,030** |
+| caddy: certain / guessed | 6,071 / 1,610 | **6,496 / 1,207** |
+| `collections.Namespace.Index` rows (gopls: 2 real sites) | 37 edges, 0 certain | **13 edges, 2 certain — and those 2 are the real ones** |
+| `byteCountFlexiWriter.WriteRune` (1 real site, already a gap row) | 3 edges, all false | **0 edges** |
+| the 22 measured symbols | 1,734 resolved / 165 false | **1,707 / 138** |
+
+The other half of the same fact does the pruning: when the callee is outside the
+repo (`x := reflect.ValueOf(v)`) there is no result to read, and the recorded marker
+tells Pass B to refuse instead of guessing. That is where the 27 false rows went.
+
+Costs, measured and disclosed: three correct rows on hugo were lost because their
+callee is a closure held in a variable (`runTest := func(...) *T`), which is not a
+function declaration and so has no recorded result — all three are in the gap
+report. A chain through a method call (`t := c.Begin()`) is not followed either: the
+receiver's own type is the question being asked.
 
 **Three defects that broke a command or a number** (the old items 5, 6 and 7):
 
