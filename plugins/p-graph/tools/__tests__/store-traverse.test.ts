@@ -22,7 +22,7 @@ describe('store traverse', () => {
       { src_id: 'a', dst_id: 'b', dst_name: 'b', kind: 'call', file: 'a.ts', line: 1 },
       { src_id: 'b', dst_id: 'c', dst_name: 'c', kind: 'call', file: 'a.ts', line: 1 },
     ]);
-    expect(s.trace('a', 'c')).toEqual(['a', 'b', 'c']);
+    expect(s.trace('a', 'c')).toEqual({ path: ['a', 'b', 'c'], guessed: [false, false] });
     expect(s.trace('c', 'a')).toBeNull();
     s.close();
   });

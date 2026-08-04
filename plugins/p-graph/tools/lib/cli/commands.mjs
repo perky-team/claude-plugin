@@ -164,10 +164,30 @@ export async function runCommand(ctx) {
     return emitGaps(gaps);
   }
   if (command === 'trace') {
-    const path = store.trace(opts._[0], opts._[1]);
+    const found = store.trace(opts._[0], opts._[1]);
     const st = store.status();
-    if (opts.json) return emitJson({ path, unresolved_calls: st.unresolved_calls, call_edges: st.call_edges });
-    if (path) return out(path.join(' -> '));
+    const guessedHops = found ? found.guessed.filter(Boolean).length : 0;
+    if (opts.json) {
+      // `certain` and `guessed_hops` are null with no path: there are no hops to
+      // be sure or unsure about, and false would read as "the path is a guess".
+      return emitJson({
+        path: found?.path ?? null,
+        guessed_hops: found?.guessed ?? null,
+        certain: found ? guessedHops === 0 : null,
+        unresolved_calls: st.unresolved_calls, call_edges: st.call_edges,
+      });
+    }
+    if (found) {
+      // Mark the ARROW, because a guess is a fact about the step, not about
+      // either symbol: the symbols on both sides are really in the graph.
+      out(found.path
+        .map((q, i) => (i === 0 ? q : `${found.guessed[i - 1] ? '-(guess)->' : '->'} ${q}`))
+        .join(' '));
+      if (guessedHops) {
+        out(`UNVERIFIED: ${guessedHops} of ${found.guessed.length} hop${found.guessed.length === 1 ? '' : 's'} matched by name only (guess) — the graph could not see the receiver's type there, so this path may not be real.`);
+      }
+      return;
+    }
     // A missing path is not proof there is none: any unattributed call site
     // could be the hop the walk needed.
     return out(st.unresolved_calls

@@ -131,6 +131,12 @@ const memberOwnerSql = (langCol) => `(
 const MEMBER_TARGET_OK =
   `(edges.member = 0 OR edges.lang = 'go' OR ${memberOwnerSql('edges.lang')})`;
 
+// Only these kinds can be the target of a call. A Go conversion (`Duration(v)`)
+// parses as a call but names a type, and a call edge into a type node makes
+// callers/impact report a caller that does not exist. `class` stays in:
+// `new Service()` in TS and a C++ constructor call really do target one.
+const CALLABLE = `('function','method','class')`;
+
 export function openStore(dbPath, opts = {}) {
   const DatabaseSync = loadDatabaseSync();
   if (opts.readOnly) return openReadOnly(DatabaseSync, dbPath);
@@ -286,13 +292,49 @@ export function openStore(dbPath, opts = {}) {
     }
   };
 
+  // Pass S — a Go declaration that shadows a builtin. Extraction marks a plain
+  // call to `max`, `len`, `new` … external, because a call to a Go builtin
+  // belongs to no package and must not be package-qualified. That mark is a
+  // per-file guess: a package may declare `func max` itself (Go 1.21 added the
+  // builtins min/max, so any repo supporting an older Go does), and Go's own
+  // scoping rule then makes a plain `max(...)` inside that package mean the
+  // declaration, not the builtin. Extraction reads one file at a time, so it
+  // cannot know whether any file of the package declares the name — this pass
+  // runs after every file is stored, which is the first point where the whole
+  // repo is visible.
+  //
+  // The call site's package is the first segment of any Go qname in its file.
+  // Two candidates (two build-tagged files declaring the same name) resolve to
+  // neither: a pick would be a guess.
+  //
+  // `external` itself is left as extraction wrote it. The invalidation at the
+  // top of resolvePending clears dst_id only, so a 0 stored here would outlive
+  // the declaration that justified it, and the gap report would then call a
+  // real builtin call "ambiguous" for as long as the graph lives.
+  const resolveShadowedBuiltins = () => {
+    const candidates = db.prepare(`
+      SELECT rowid, file, dst_name FROM edges
+      WHERE kind = 'call' AND dst_id IS NULL AND external = 1 AND lang = 'go'
+        AND member = 0 AND dst_name IS NOT NULL`).all();
+    if (!candidates.length) return;
+    const pkgOfFile = db.prepare(`
+      SELECT substr(qname, 1, instr(qname, '.') - 1) AS pkg FROM nodes
+      WHERE file = ? AND lang = 'go' AND instr(qname, '.') > 0 LIMIT 1`);
+    const byQname = db.prepare(
+      `SELECT id FROM nodes WHERE qname = ? AND lang = 'go' AND kind IN ${CALLABLE} LIMIT 2`);
+    const setDst = db.prepare('UPDATE edges SET dst_id = ?, guess = 0 WHERE rowid = ?');
+    const pkgOf = new Map();
+    for (const e of candidates) {
+      if (!pkgOf.has(e.file)) pkgOf.set(e.file, pkgOfFile.get(e.file)?.pkg ?? null);
+      const pkg = pkgOf.get(e.file);
+      if (!pkg) continue; // a file with no indexed Go symbol names no package
+      const hits = byQname.all(`${pkg}.${e.dst_name}`);
+      if (hits.length !== 1) continue;
+      setDst.run(hits[0].id, e.rowid);
+    }
+  };
+
   store.resolvePending = () => {
-    // Only these kinds can be the target of a call. A Go conversion
-    // (`Duration(v)`) parses as a call but names a type, and a call edge into a
-    // type node makes callers/impact report a caller that does not exist.
-    // `class` stays in: `new Service()` in TS and a C++ constructor call really
-    // do target one.
-    const CALLABLE = `('function','method','class')`;
     // Invalidate every call edge and resolve from scratch. A resolved edge can
     // become ambiguous when a new same-named symbol appears, so keeping it would
     // make an incremental index answer differently from a full rebuild —
@@ -322,6 +364,11 @@ export function openStore(dbPath, opts = {}) {
         AND EXISTS (SELECT 1 FROM nodes n
              WHERE n.qname = edges.dst_name AND n.lang = edges.lang AND n.kind IN ${CALLABLE}
                AND ${MEMBER_TARGET_OK})`).run();
+
+    // Runs next to Pass A because it settles the same kind of question — an
+    // exact qualified name — and it only ever touches edges Pass A cannot: the
+    // ones extraction marked external.
+    resolveShadowedBuiltins();
 
     // Pass F — Go recv.field.Method() through the field-type table. Runs before
     // the bare-name fallback so an ambiguous method name links to the RIGHT type.
@@ -822,25 +869,55 @@ function attachReadHelpers(store, db, hasFts) {
       )
       SELECT count(*) AS c FROM edges e JOIN up ON up.id = e.dst_id WHERE e.guess = 1`).get(target.id).c;
   };
+  // How X reaches Y, and how sure each step is. Returns
+  // `{ path: [qname, …], guessed: [bool, …] }` with one flag per ARROW, so
+  // `guessed` is always one shorter than `path`; null when there is no path.
+  //
+  // Guessed hops are MARKED, not dropped. A path built partly from guesses is
+  // still the best lead the graph has; a path silently missing would read as
+  // "there is no way from X to Y", which is a much stronger claim than the
+  // graph can make. `impact` refuses a guess because it answers "what breaks"
+  // — a wrong entry there is a false alarm a reader cannot check. `trace`
+  // hands back a concrete route the reader can open and confirm, so marking it
+  // is enough.
+  //
+  // A certain route wins over a guessed one even when it is longer: the search
+  // runs first over certain edges only, and falls back to all edges. Two edges
+  // between the same pair collapse to the more certain one (MIN), because the
+  // hop is then real however the other edge was resolved.
   store.trace = (fromName, toName) => {
     const from = store.node(fromName), to = store.node(toName);
     if (!from || !to) return null;
-    const edges = db.prepare('SELECT src_id, dst_id FROM edges WHERE dst_id IS NOT NULL').all();
+    const edges = db.prepare(`
+      SELECT src_id, dst_id, ${hasGuess ? 'MIN(guess)' : '0'} AS guess FROM edges
+      WHERE dst_id IS NOT NULL AND src_id IS NOT NULL
+      GROUP BY src_id, dst_id`).all();
     const next = new Map();
     for (const e of edges) {
       if (!next.has(e.src_id)) next.set(e.src_id, []);
-      next.get(e.src_id).push(e.dst_id);
+      next.get(e.src_id).push({ id: e.dst_id, guess: e.guess === 1 });
     }
-    const q = [[from.id]], seen = new Set([from.id]);
-    while (q.length) {
-      const path = q.shift();
-      const last = path[path.length - 1];
-      if (last === to.id) return path.map((id) => store.node(id).qname);
-      for (const nx of next.get(last) ?? []) {
-        if (!seen.has(nx)) { seen.add(nx); q.push([...path, nx]); }
+    // Breadth-first, so the route found is the shortest one this edge set
+    // allows. `hops` holds the guess flag of the arrow that led to each node
+    // after the first, so it is always one shorter than `ids`.
+    const walk = (certainOnly) => {
+      const q = [{ ids: [from.id], hops: [] }], seen = new Set([from.id]);
+      while (q.length) {
+        const cur = q.shift();
+        const last = cur.ids[cur.ids.length - 1];
+        if (last === to.id) return cur;
+        for (const nx of next.get(last) ?? []) {
+          if (certainOnly && nx.guess) continue;
+          if (seen.has(nx.id)) continue;
+          seen.add(nx.id);
+          q.push({ ids: [...cur.ids, nx.id], hops: [...cur.hops, nx.guess] });
+        }
       }
-    }
-    return null;
+      return null;
+    };
+    const found = walk(true) ?? walk(false);
+    if (!found) return null;
+    return { path: found.ids.map((id) => store.node(id).qname), guessed: found.hops };
   };
   store.schemaStale = () => Number(store.getMeta('schema_version')) !== SCHEMA_VERSION;
 }

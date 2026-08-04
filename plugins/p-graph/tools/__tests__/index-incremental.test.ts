@@ -87,7 +87,7 @@ describe('incremental index', () => {
     });
     // Without re-resolving dangling dst_id the edge would silently vanish.
     expect(store.callers('g').map((x) => x.name)).toContain('f');
-    expect(store.trace('f', 'g')).toEqual(['f', 'g']);
+    expect(store.trace('f', 'g')).toEqual({ path: ['f', 'g'], guessed: [false] });
     store.close();
   }, 30000);
 });

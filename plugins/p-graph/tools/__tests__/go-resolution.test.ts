@@ -50,7 +50,8 @@ func Boot() {
     // impact (transitive callers) and trace work via the qualified name.
     expect(store.impact('filesink.New').map((n) => n.qname).sort())
       .toEqual(['app.Boot', 'filesink.Make']);
-    expect(store.trace('app.Boot', 'filesink.New')).toEqual(['app.Boot', 'filesink.New']);
+    expect(store.trace('app.Boot', 'filesink.New'))
+      .toEqual({ path: ['app.Boot', 'filesink.New'], guessed: [false] });
 
     // A uniquely-named method still resolves through the bare-name fallback.
     expect(store.callers('rotateOnFill').map((n) => n.qname)).toContain('filesink.roll');
