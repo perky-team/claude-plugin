@@ -109,7 +109,7 @@ export function die(message, exitCode = 1) {
   process.exit(exitCode);
 }
 
-const KNOWN = ['tick', 'run', 'install-cron', 'remove-cron', 'set-job', 'rm-job', 'reset-breaker', 'pause', 'resume', 'status', 'stop', 'wait-idle', 'deploy'];
+const KNOWN = ['tick', 'run', 'install-cron', 'remove-cron', 'set-job', 'rm-job', 'reset-breaker', 'pause', 'resume', 'profile', 'status', 'stop', 'wait-idle', 'deploy'];
 
 // The in-flight deployed command, so a POSIX signal handler can forward the interrupt to
 // it. Null while `deploy` is still waiting for idle — that phase is cancelled by the flag
@@ -242,6 +242,66 @@ async function main() {
         (wasPaused ? resumedIds : notPausedIds).push(id);
       }
       return emitJson({ action: 'resume', scope: target.scope, ...scoped, resumedIds, notPausedIds }, 0);
+    }
+
+    // Speed profiles. `profiles:` in jobs.yml is the table; the ACTIVE value is a single
+    // name that can live outside the scheduled repository — see lib/profile.mjs. These
+    // commands are the strict surface: a human is reading the output here, so a malformed
+    // table is an error, while the tick stays lenient and never halts over one.
+    if (command === 'profile') {
+      const sub = args._[0] ?? 'show';
+      if (!['show', 'set', 'list'].includes(sub)) {
+        return emitJson({ error: { code: 'validation', message: `profile: unknown subcommand ${sub} (expected show, set or list)` } }, 2);
+      }
+      const jobsData = readJobs(root);
+      const config = readConfig(root);
+      validateProfiles(jobsData.profiles);
+      const known = Object.keys(jobsData.profiles ?? {});
+
+      if (sub === 'list') return emitJson({ action: 'profile-list', profiles: known }, 0);
+
+      if (sub === 'set') {
+        const name = args._[1];
+        if (!name) return emitJson({ error: { code: 'validation', message: 'profile set <name> requires a name' } }, 2);
+        // Fail loud on a typo, like resolveTarget: silently writing a name nothing
+        // matches leaves the operator believing they switched the pace when they did not.
+        if (!known.includes(name)) {
+          return emitJson({ error: { code: 'validation', message: `no such profile: ${name} (known: ${known.join(', ') || 'none'})` } }, 2);
+        }
+        const file = profileFilePath(root, config);
+        // No silent fallback to a path inside the repo: that would quietly undo the one
+        // requirement this feature exists for.
+        if (!file) {
+          return emitJson({ error: { code: 'validation', message: 'no profileFile configured in .pshed/config.json — refusing to write the active profile inside the scheduled repository' } }, 2);
+        }
+        mkdirSync(dirname(file), { recursive: true });
+        writeFileSync(file, `${name}\n`, 'utf-8');
+        return emitJson({ action: 'profile-set', name, file }, 0);
+      }
+
+      const profile = resolveProfile({ root, jobsData, config });
+      const { jobs } = effectiveJobs({ root, jobsData, config });
+      const rawById = new Map((jobsData.jobs ?? []).map((j) => [j.id, j]));
+      const changed = jobs.map((j) => {
+        const raw = rawById.get(j.id) ?? {};
+        const changes = {};
+        for (const f of PROFILE_FIELDS) if (raw[f] !== j[f]) changes[f] = { from: raw[f] ?? null, to: j[f] ?? null };
+        return Object.keys(changes).length ? { id: j.id, changes } : null;
+      }).filter(Boolean);
+
+      if (args.human) {
+        const flags = [profile.problem, profile.warning].filter(Boolean).join(', ');
+        const lines = [
+          `profile:   ${profile.name ?? '-'} (${profile.source}${profile.file ? ` ${profile.file}` : ''})${flags ? ` [${flags}]` : ''}`,
+          `known:     ${known.join(', ') || '-'}`,
+          '',
+          ['job', 'field', 'from', 'to'].join('\t'),
+        ];
+        for (const j of changed) for (const [f, c] of Object.entries(j.changes)) lines.push([j.id, f, String(c.from), String(c.to)].join('\t'));
+        process.stdout.write(lines.join('\n') + '\n');
+        return process.exit(0);
+      }
+      return emitJson({ action: 'profile', ...profile, known, jobs: changed }, 0);
     }
 
     if (command === 'status') {

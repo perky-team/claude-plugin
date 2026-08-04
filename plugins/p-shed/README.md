@@ -29,7 +29,8 @@ Tool: `node tools/pshed.mjs <command>` (all support `--json`; exit `0` ok / `1` 
 | `pause` / `resume` | Reversibly halt / resume the **whole** scheduler (`run/PAUSED`; cron stays installed), or with `--id <job>` / `--group <name>` just that job or every member of that concurrency group (`run/<id>.pause`). `pause` accepts `--reason`; both idempotent. An unknown id, an unmatched group, or both flags at once is an error (exit 2) — never a global pause. |
 | `wait-idle` | Block until no job (or no member of `--group`) holds a live pidfile. Changes no state. `--timeout-sec` (default 1800), `--poll-ms` (default 1000). Human-readable report by default; `--json` for machine output (mirrors `deploy`, below). Exit `0` idle / `1` timed out (holder named) / `2` validation. |
 | `deploy` | Open a maintenance window and run a command in it: wait for idle → pause → re-check → run → always release. `--reason` required, `--group` optional, then `-- <cmd> [args...]`. Refuses outright (does not wait, does not pause) when another `deploy` already holds `run/DEPLOY` with a live pid, naming that pid and its reason. The command's stdout/stderr pass through untouched and its exit code becomes `deploy`'s; p-shed's own report — including every validation error — goes to stderr, honouring `--json`, so nothing but the deployed command's own output ever reaches stdout. Exit: the command's own code when it ran (`0` on success) / `1` the wait timed out or deploy itself failed / `2` validation (`--id` given, `--reason` or command missing) or another deploy already in progress / `127` the command could not be spawned — POSIX only, on Windows the shell reports plain `1` / `128+signum` killed by a signal / `130` operator interrupted. Nothing is left paused in any of these cases — the one exception is deliberate: if an operator's own `pause`/`pause --group` lands on this deploy's marker while the command is still running, it takes ownership (see `run/PAUSED` below), and release leaves that alone. The report (`takenOver`, JSON and human) says so instead of claiming `released`; the exit code is still the command's own, since it genuinely ran and succeeded. |
-| `status` | Report, from disk + the OS scheduler: installed?, globally paused?, and per job running/paused/breaker/last-run. JSON by default, `--human` for a text table. |
+| `profile show` / `set <name>` / `list` | The speed profile — one word that changes the whole loop's pace (see below). `show` reports the active name, **which source it came from**, and the per-job resolution; `set` writes the name to the file named by `config.profileFile` and refuses when there is none configured or the name is not in `profiles:`; `list` names the defined profiles. `show` takes `--human`. |
+| `status` | Report, from disk + the OS scheduler: installed?, globally paused?, the active profile (when there is one), and per job running/paused/breaker/last-run — all at their **effective** values, i.e. with the profile applied. JSON by default, `--human` for a text table. |
 | `stop` `[--kill]` | Honest teardown of the OS scheduler entry — reports `removed: true|false` (see below). `--kill` also SIGTERM→SIGKILLs any in-flight jobs (`--grace-ms` tunes the escalation delay). |
 | `install-cron` / `remove-cron` | Register/unregister the every-minute `tick` in the OS scheduler for this folder. `remove-cron` reports `removed` and warns on a cwd mismatch (see below). |
 
@@ -41,8 +42,8 @@ Tool: `node tools/pshed.mjs <command>` (all support `--json`; exit `0` ok / `1` 
 
 | File | Tracked? | Contents |
 |---|---|---|
-| `jobs.yml` | git | `version`, `defaults`, `jobs[]{ id, schedule, enabled, cwd?, prompt, timeoutSec?, permissionMode?, allowedTools?, model?, effort?, maxConsecutiveFailures?, guard?, guardTimeoutSec?, concurrencyGroup? }` |
-| `config.json` | gitignore | `{ nodeBin, claudeBin }` (resolved at init) |
+| `jobs.yml` | git | `version`, `defaults` (may carry `profile:`), `jobs[]{ id, schedule, enabled, cwd?, prompt, timeoutSec?, permissionMode?, allowedTools?, model?, effort?, maxConsecutiveFailures?, guard?, guardTimeoutSec?, concurrencyGroup? }`, optional `profiles{}` (see Speed profiles) |
+| `config.json` | gitignore | `{ nodeBin, claudeBin, profileFile? }` (resolved at init; `profileFile` is the path — absolute, or relative to the repo root — of the file holding the active profile name) |
 | `state/<id>.json` | gitignore | per-job `{ lastRun, lastExit, pid, consecutiveFailures, consecutiveGuardFailures?, lastGuard?, breakerTripped?, breakerReason?, breakerAt?, lastSkipReason?, lastSkipAt?, lastSkipResetAt? }` — one file per job (no shared state file). `lastSkip*` records the most recent skip (`lastSkipReason` is `usage-limit` or `api-overload`) and is cleared once the job runs for real again; `lastGuard` records the most recent guard check (`{ at, outcome, exit, reason? }` — `reason` is the last non-empty line of the guard's stdout, collapsed to one line and capped at 120 chars; absent when the guard printed nothing) |
 | `logs/<date>.jsonl` | gitignore | one record per run (see below); auto-rotated (7-day retention) |
 | `run/<id>.pid` | gitignore | duplicate-guard pidfile |
@@ -176,6 +177,70 @@ Set it from the CLI with `--concurrency-group <name>`; `--concurrency-group ""` 
 an explicit `null`, i.e. "this job is unconstrained even if `defaults` sets a group".
 (Unlike `--guard ""`, it does not delete the field — deleting it would silently
 re-inherit the default.)
+
+## Speed profiles
+
+One word changes how hard the whole loop works. Without it, slowing down means editing
+`schedule` / `model` / `effort` / `timeoutSec` on several jobs — several independent
+writes with no transaction, easy to leave half-applied. Measured cost of getting the pace
+wrong once: the whole subscription quota burned by evening, then two days losing 70 and 16
+runs to usage-limit skips.
+
+**The table** lives in `jobs.yml` (rarely edited, and every edit is a reviewable diff):
+
+```yaml
+defaults:
+  profile: eco          # lowest-precedence source of the active name
+profiles:
+  eco:
+    worker:     { schedule: '0 */3 * * *' }
+    strategist: { schedule: '20 6 * * *', model: sonnet }
+    planner:    { enabled: false }
+  fast:
+    worker:     { schedule: '0,30 * * * *' }
+```
+
+Overridable per job: `schedule`, `model`, `effort`, `timeoutSec`, `enabled`. Nothing else —
+a profile is a pace control, not a second place to define a job.
+
+**The active value** is resolved in this order:
+
+| # | source | `show` reports |
+|---|---|---|
+| 1 | `PSHED_PROFILE` environment variable | `env` |
+| 2 | first line of the file named by `profileFile` in `config.json` | `file` + the path |
+| 3 | `defaults.profile` in `jobs.yml` | `default` |
+| 4 | — | `none` |
+
+Point 2 is the reason this feature exists: **`jobs.yml` is inside the repository the loop
+writes to, so a knob stored there is a knob the loop can turn.** `config.json` holds only
+a *path*; the value it points at lives wherever the operator wants — outside the scheduled
+checkout. `pshed profile set` writes exactly that file and **refuses when no `profileFile`
+is configured** rather than silently falling back to somewhere inside the repo.
+
+Semantics worth knowing:
+
+- **Overrides are applied in memory, at tick time. `jobs.yml` is never rewritten** —
+  rewriting it would dirty the working tree of the repository the loop commits to, and the
+  loop would eventually commit the pace change as if it were its own work.
+- **`tick`, `status` and `run` all read through the same resolution**, so `status` can
+  never report a schedule or an `enabled` flag the scheduler will not act on.
+- **A profile problem never stops the scheduler.** A missing or unreadable `profileFile`,
+  a name absent from `profiles:`, a malformed table, an invalid single override — each
+  falls back to the job's own values and keeps ticking. Fail toward running: a stopped loop
+  is a worse failure than a loop running at its default pace. The condition is visible in
+  `profile show` and in `status` (`[unknown-name]`, `[file-missing]`).
+- **Strict where a human is watching**: `profile show` / `list` / `set` validate the table
+  with `set-job`'s own rules and fail with a message naming the profile, job and field —
+  including for an unknown key, so a `schedul:` typo cannot sit there doing nothing.
+- A `jobs.yml` with no `profiles:` key behaves exactly as it always has, down to
+  byte-identical `status` output.
+
+```bash
+pshed profile list                 # eco, fast
+pshed profile set eco              # writes "eco" to config.profileFile
+pshed profile show --human         # which profile, from where, and what it changes per job
+```
 
 ## Job guards
 
