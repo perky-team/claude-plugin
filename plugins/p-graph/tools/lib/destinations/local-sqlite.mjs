@@ -543,6 +543,19 @@ function attachReadHelpers(store, db, hasFts) {
   const GUESS_COL = hasGuess ? 'MIN(e.guess)' : '0';
   const GUESS_FILTER = hasGuess ? 'AND e.guess = 0' : '';
 
+  // Every gap statement names edges.dst_bare, added in schema 6. A writable open
+  // rebuilds such a database, so the only way to be reading one is the read-only
+  // fallback — a filesystem that can never be migrated, which is exactly what the
+  // fallback exists for. Detected once, like the guess column: the rows a query
+  // CAN answer are answered, and the gap report reports itself missing instead of
+  // taking four commands down with "no such column: e.dst_bare".
+  //
+  // An empty gap list is not the same claim as "no gaps", so this is a flag the
+  // caller must relay, not a silent []. The CLI prints it and puts it in --json.
+  let hasBare = true;
+  try { db.prepare('SELECT dst_bare FROM edges LIMIT 1').get(); } catch { hasBare = false; }
+  store.gapsUnavailable = !hasBare;
+
   store.search = (query, { kind, lang } = {}) => {
     const q = String(query);
     let rows = [];
@@ -874,11 +887,13 @@ function attachReadHelpers(store, db, hasFts) {
   // id/qname (store.node) silently dropped the whole no-caller report for a
   // bare-name query — see the comment on targetsFor above.
   store.gapsFor = (name) => {
+    if (!hasBare) return [];
     const targets = targetsFor(name);
     if (!targets.length) return collectGaps([symbolOf(name, null)], []);
     return collectGaps(targets.map((t) => symbolOf(name, t)), targets.map((t) => t.id));
   };
   store.gapsFrom = (name) => {
+    if (!hasBare) return [];
     const n = store.node(name);
     if (!n) return [];
     return db.prepare(`
@@ -907,6 +922,7 @@ function attachReadHelpers(store, db, hasFts) {
   // already counted as a target is dropped from the merged "reached" set so it
   // does not also show up as its own reached neighbour.
   store.gapsAround = (name) => {
+    if (!hasBare) return [];
     const targets = targetsFor(name);
     if (!targets.length) return collectGaps([symbolOf(name, null)], []);
     const targetIds = new Set(targets.map((t) => t.id));
@@ -955,7 +971,8 @@ function attachReadHelpers(store, db, hasFts) {
         JOIN up ON e.dst_id = up.id
         WHERE up.depth < ${MAX_DEPTH} AND e.src_id IS NOT NULL ${GUESS_FILTER}
       )
-      SELECT count(*) AS c FROM edges e JOIN up ON up.id = e.dst_id WHERE e.guess = 1`).get(target.id).c;
+      SELECT count(*) AS c FROM edges e JOIN up ON up.id = e.dst_id
+      WHERE e.guess = 1 AND e.src_id IS NOT NULL`).get(target.id).c;
   };
   // How X reaches Y, and how sure each step is. Returns
   // `{ path: [qname, …], guessed: [bool, …] }` with one flag per ARROW, so

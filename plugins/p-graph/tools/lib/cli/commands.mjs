@@ -61,6 +61,23 @@ export async function runCommand(ctx) {
     return out(`schema ${st.schema_version} - ${st.nodes} nodes - ${st.edges} edges - ${st.files} files - sha ${st.indexed_sha ?? '-'} - fts ${st.fts} - drift ${st.drift ?? 'n/a'} - unattributed calls ${st.unresolved_calls}/${st.call_edges}${hint}`);
   }
 
+  // A forgotten argument used to travel all the way into SQLite as an unbound
+  // parameter, so a typo answered with `Provided value cannot be bound to SQLite
+  // parameter 1.` and exit 3. Say which argument is missing, like `search` does.
+  const needArg = (what) => {
+    const v = opts._[0];
+    if (v === undefined) die(`${command} needs ${what}`);
+    return v;
+  };
+
+  // The gap report cannot be built on a database older than schema 6 (no
+  // dst_bare column). That is not "no gaps" — say so, or the rows above read as
+  // the whole truth.
+  const GAPS_UNAVAILABLE = 'the gap report needs a rebuilt graph (this one predates schema 7), '
+    + 'so call sites missing from this answer are NOT listed. Run: pgraph index --full';
+  const gapsOff = Boolean(store.gapsUnavailable);
+  const noteGapsOff = () => { if (gapsOff) out(`⚠ ${GAPS_UNAVAILABLE}`); };
+
   const fmtNode = (n) => `${n.kind} ${n.qname}  ${n.file}:${n.start_line}  ${n.signature}`;
 
   // A guessed row is not wrong, just unverified: the graph could not see the
@@ -134,7 +151,7 @@ export async function runCommand(ctx) {
     return opts.json ? emitJson(rows) : (rows.length ? rows.forEach((r) => out(fmtNode(r))) : out('(no matches)'));
   }
   if (command === 'node') {
-    const n = store.node(opts._[0]); if (!n) die('symbol not found', 1);
+    const n = store.node(needArg('a symbol')); if (!n) die('symbol not found', 1);
     return opts.json ? emitJson(n) : out(fmtNode(n));
   }
   if (command === 'files') {
@@ -143,21 +160,23 @@ export async function runCommand(ctx) {
   }
 
   if (command === 'callers') {
-    const target = opts._[0];
+    const target = needArg('a symbol');
     const rows = store.callers(target), gaps = store.gapsFor(target);
-    if (opts.json) return emitJson({ callers: rows, gaps });
+    if (opts.json) return emitJson({ callers: rows, gaps, ...(gapsOff ? { gaps_unavailable: true } : {}) });
     printCertainThenGuessed(rows, 'caller');
+    noteGapsOff();
     return emitGaps(gaps);
   }
   if (command === 'callees') {
-    const target = opts._[0];
+    const target = needArg('a symbol');
     const rows = store.callees(target), gaps = store.gapsFrom(target);
-    if (opts.json) return emitJson({ callees: rows, gaps });
+    if (opts.json) return emitJson({ callees: rows, gaps, ...(gapsOff ? { gaps_unavailable: true } : {}) });
     printCertainThenGuessed(rows, 'callee');
+    noteGapsOff();
     return emitGaps(gaps);
   }
   if (command === 'impact') {
-    const target = opts._[0];
+    const target = needArg('a symbol');
     // The frontier, not just the target: an impact walk also stops at an
     // unattributed call to something it already reached.
     const rows = store.impact(target), gaps = store.gapsAround(target);
@@ -167,11 +186,13 @@ export async function runCommand(ctx) {
     // tells them apart — a count, not a flag, so a caller can also tell
     // "one near-miss" from "several refused".
     const skippedGuesses = store.impactSkippedGuesses(target);
-    if (opts.json) return emitJson({ impact: rows, gaps, skipped_guesses: skippedGuesses });
+    if (opts.json) return emitJson({ impact: rows, gaps, skipped_guesses: skippedGuesses,
+      ...(gapsOff ? { gaps_unavailable: true } : {}) });
     rows.length ? rows.forEach((r) => out(fmtNode(r))) : out('(no impact)');
     // Only say this when it is actually true for this query — with no guess
     // anywhere near the target, the line would always print and never mean
     // anything.
+    noteGapsOff();
     if (skippedGuesses) {
       const s = skippedGuesses === 1 ? '' : 's';
       const be = skippedGuesses === 1 ? 'was' : 'were';
@@ -180,6 +201,7 @@ export async function runCommand(ctx) {
     return emitGaps(gaps);
   }
   if (command === 'trace') {
+    if (opts._[0] === undefined || opts._[1] === undefined) die('trace needs two symbols');
     const found = store.trace(opts._[0], opts._[1]);
     const st = store.status();
     const guessedHops = found ? found.guessed.filter(Boolean).length : 0;
@@ -211,7 +233,7 @@ export async function runCommand(ctx) {
       : '(no path)');
   }
   if (command === 'context') {
-    const n = store.node(opts._[0]); if (!n) die('symbol not found', 1);
+    const n = store.node(needArg('a symbol')); if (!n) die('symbol not found', 1);
     const gapsIn = store.gapsFor(opts._[0]);
     const gapsOut = store.gapsFrom(opts._[0]);
     // A call from X whose bare name matches X's own name (wrapper delegation,
@@ -229,13 +251,14 @@ export async function runCommand(ctx) {
       node: n, callers: store.callers(opts._[0]), callees: store.callees(opts._[0]),
       gaps_in: gapsIn, gaps_out: gapsOut, gaps,
     };
-    if (opts.json) return emitJson(ctxObj);
+    if (opts.json) return emitJson(gapsOff ? { ...ctxObj, gaps_unavailable: true } : ctxObj);
     out(fmtNode(n));
     // Same split as `callers`/`callees`, run through the same function, so a
     // possibly-wrong row can never show up here unmarked and mixed in with
     // certain ones while `callers` on the same symbol keeps it apart.
     out('callers:'); printCertainThenGuessed(ctxObj.callers, 'caller', '  ');
     out('callees:'); printCertainThenGuessed(ctxObj.callees, 'callee', '  ');
+    noteGapsOff();
     return emitGaps(gaps);
   }
   if (command === 'explore') {

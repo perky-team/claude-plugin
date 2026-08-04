@@ -4,8 +4,8 @@ Written when `feature/p-graph-trustworthy-answers` shipped as p-graph **1.0.0**
 (monorepo tag `v6.0.0`). The numbered list is open work — none of it is
 implemented, and none of it is a regression from that branch: every item is
 either a known limit of what shipped or a defect the branch found and chose not
-to fix. One item was fixed after the list was written; it has its own section at
-the bottom, with the measurements.
+to fix. Items fixed after the list was written are moved to the section at the
+bottom, with their measurements — the numbered list only ever holds open work.
 
 Two plans landed before this list, both with measured results next to them:
 
@@ -60,43 +60,23 @@ implementation resolves to it as a guess; with two or more it becomes a gap. The
 honest answer is "these N types could receive this call", and the graph cannot
 say that yet.
 
-### 5. The read-only fallback dies on a pre-schema-6 database
-
-`callers`, `callees`, `impact` and `context` exit 3 with
-`no such column: e.dst_bare`, because the gap-report statements name columns the
-old schema lacks. This hits in the one situation the fallback exists for: a
-filesystem that can never be migrated. `search`, `node`, `files`, `explore` and
-`status` still work. Make those four degrade instead of dying.
-
-### 6. `impactSkippedGuesses` counts edges `impact` would never have followed
-
-It omits the `src_id IS NOT NULL` that `impact` requires, so a guessed
-module-scope call is reported twice — once as a skipped guess, once as a
-`no-caller` gap.
-
-### 7. A missing argument prints a SQLite error
-
-`callers`, `callees`, `impact`, `context`, `node` and `trace` print
-`pgraph: Provided value cannot be bound to SQLite parameter 1.` and exit 3.
-`search` has the right check; copy it.
-
-### 8. TypeScript call-argument function bodies are not definitions
+### 5. TypeScript call-argument function bodies are not definitions
 
 `describe` / `it` callbacks, so 394 of nest's 1,727 files produce no symbols, and
 a majority of resolved edges there have no source symbol. They do surface, as
 `outside any indexed symbol` gap rows — but they have no caller to name.
 
-### 9. Two repo packages sharing a base name collapse into one qname space
+### 6. Two repo packages sharing a base name collapse into one qname space
 
 So a call can resolve to the wrong package's symbol. The `count(DISTINCT ft.type)
 = 1` guard in Pass F is what stops that from becoming a *certain* wrong row today
 (`receiver-types.test.ts` covers it), but the collapse itself is still there.
 
-### 10. `gitChangedFiles` cannot see a file created and deleted without a commit
+### 7. `gitChangedFiles` cannot see a file created and deleted without a commit
 
 So a stale row survives until the next `--full`.
 
-### 11. Smaller, all recorded in `.superpowers/sdd/progress.md`
+### 8. Smaller, all recorded in `.superpowers/sdd/progress.md`
 
 - An assertion in `alias-resolution.test.ts` that no longer tells the two
   variable-key shapes apart.
@@ -153,6 +133,23 @@ was false" lived in a git-ignored working folder on one machine. All 22 symbols 
 re-measured on fresh clones with the shipped code, and the audit of every certain
 row is now in `2026-08-04-p-graph-remeasured.md`: 1,734 resolved rows (same as
 published), 1,353 certain, **0 false** — 1,345 checked mechanically, 8 read by hand.
+
+
+**Three defects that broke a command or a number** (the old items 5, 6 and 7):
+
+- A forgotten argument printed `pgraph: Provided value cannot be bound to SQLite
+  parameter 1.` and exited 3. `callers`, `callees`, `impact`, `context` and `node`
+  now say `<command> needs a symbol`, `trace` says it needs two, and all exit 1 —
+  the same shape `search` always had.
+- `impactSkippedGuesses` counted edges with no source symbol, which `impact` never
+  walks, so a module-scope call was reported twice: once as a refused path, once as
+  a `no-caller` gap row. It now counts only what the walk could have followed.
+- The read-only fallback died on any pre-schema-6 database with
+  `no such column: e.dst_bare`, taking `callers`, `callees`, `impact` and `context`
+  down in the one situation that fallback exists for — a filesystem that can never
+  be migrated. Those four now answer the rows they have and say the gap report is
+  unavailable, in text and as `gaps_unavailable` in `--json`. An empty gap list is
+  not the same claim as "no gaps", so it is never silent.
 
 **Not covered, and not measured:** C++ has no nested functions, and a lambda
 assigned to a variable (`auto walk = [](int b) { return b; };`) is not indexed as a

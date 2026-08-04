@@ -46,6 +46,30 @@ func R2() { y := Make(); y.Guessed() }
     expect(text).toContain('were not followed');
   }, 30000);
 
+  // `impact` walks `e.src_id IS NOT NULL` only: an edge with no source symbol has
+  // no caller to report, so the walk never had it to refuse. Counting it as a
+  // skipped guess tells the reader a path was withheld when there was none —
+  // and the same call is ALREADY reported, as a `no-caller` gap row.
+  it('does not count a guess the walk would never have followed anyway', () => {
+    write('svc/svc.go', `package svc
+type A struct{}
+func (a *A) Guessed() {}
+func Make() *A { return &A{} }
+var eager = func() *A { x := Make(); x.Guessed(); return x }()
+`);
+    run(['index', '--full']);
+
+    const json = JSON.parse(run(['impact', 'svc.A.Guessed', '--json']));
+    expect(json.impact).toEqual([]);
+    // The one call site sits outside any indexed symbol, so it is a gap row...
+    expect(json.gaps.some((g) => g.reason === 'no-caller')).toBe(true);
+    // ...and must NOT also be counted as a path the walk refused.
+    expect(json.skipped_guesses).toBe(0);
+
+    const text = run(['impact', 'svc.A.Guessed']);
+    expect(text).not.toContain('were not followed');
+  }, 30000);
+
   it('reports skipped_guesses: 0 and drops the disclaimer when no guess is near the target', () => {
     write('a.ts', 'function foo() { bar(); }\nfunction bar() { baz(); }\nfunction baz() {}');
     run(['index', '--full']);
