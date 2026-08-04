@@ -441,7 +441,7 @@ export function openStore(dbPath, opts = {}) {
   const resolveReturnTypes = () => {
     const pending = db.prepare(`
       SELECT rowid, field_key, method, lang FROM edges
-      WHERE kind = 'call' AND dst_id IS NULL AND lang = 'go'
+      WHERE kind = 'call' AND dst_id IS NULL AND lang IN ('go', 'py')
         AND field_key IS NOT NULL AND method IS NOT NULL`).all();
     if (!pending.length) return;
     // One row per key, and only when that key has exactly one recorded type: two
@@ -452,6 +452,20 @@ export function openStore(dbPath, opts = {}) {
     }
     const nodeByQname = db.prepare(
       `SELECT id FROM nodes WHERE qname = ? AND lang = ? AND kind IN ${CALLABLE} LIMIT 2`);
+    // `jar = RequestsCookieJar()` in Python and `new Conn()` elsewhere: a
+    // constructor call means the variable IS that class, so the callee itself is
+    // the type. Only when exactly one class carries the name — two would be a pick.
+    const classByQname = db.prepare(
+      `SELECT qname FROM nodes WHERE qname = ? AND lang = ? AND kind = 'class' LIMIT 2`);
+    const classCache = new Map();
+    const typeFromClass = (callee, lang) => {
+      const k = `${callee}|${lang}`;
+      if (!classCache.has(k)) {
+        const hits = classByQname.all(callee, lang);
+        classCache.set(k, hits.length === 1 ? hits[0].qname : null);
+      }
+      return classCache.get(k);
+    };
     const setDst = db.prepare('UPDATE edges SET dst_id = ?, guess = 0 WHERE rowid = ?');
     const idCache = new Map();
     db.prepare('BEGIN').run();
@@ -459,7 +473,8 @@ export function openStore(dbPath, opts = {}) {
       for (const e of pending) {
         const marker = typeOfKey.get(e.field_key);
         if (!marker || !marker.startsWith('#ret:')) continue;
-        const retType = typeOfKey.get(`${marker.slice(5)}#ret`);
+        const callee = marker.slice(5);
+        const retType = typeOfKey.get(`${callee}#ret`) ?? typeFromClass(callee, e.lang);
         if (!retType) continue; // callee outside the repo, or several result types
         const qname = `${retType}.${e.method}`;
         const key = `${qname}|${e.lang}`;

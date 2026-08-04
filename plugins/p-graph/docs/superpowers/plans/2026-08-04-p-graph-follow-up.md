@@ -21,8 +21,8 @@ caddyserver/caddy, google/leveldb, sindresorhus/got and psf/requests, with
 
 | | Before | Now |
 |---|---|---|
-| False rows among resolved | 42.9% | 8.1% |
-| False rows among **certain** | — | **0 of 1,355**; one shape the set did not contain was found later and fixed, see below |
+| False rows among resolved | 42.9% | 6.9% |
+| False rows among **certain** | — | **0 of 1,391**; one shape the set did not contain was found later and fixed, see below |
 | Silent misses | the original complaint | 2 of 1,724, both pre-existing |
 | `impact` on hugo | 15,555 ms | 399 ms |
 | caddy database | 105.6 MB | 10.5 MB |
@@ -31,12 +31,23 @@ caddyserver/caddy, google/leveldb, sindresorhus/got and psf/requests, with
 
 ## Ordered by how much wrongness each one still causes
 
-### 1. A type table for TypeScript and Python
+### 1. A type table for TypeScript
 
-A real method with a real owner, called on an untyped value, still resolves
-wrongly: got's `setHeader` 89 false rows, `RequestsCookieJar.set` 22, `.update`
-15. The owner rule that shipped cannot help here, because the owner is genuinely
-a class. Only a recorded type can.
+**Now the single largest source of false rows: got's `setHeader`, 89 of them.**
+Measured shape: every one is `response.setHeader(...)` where `response` is an
+UNANNOTATED callback parameter, as in
+`server.all('/x', async (request, response) => ...)`. Its type lives in a library's
+declaration file, so there is nothing in the repo to read. Two independent moves:
+
+- **read TypeScript annotations** (`function f(c: Conn)`, `const c: Conn = ...`,
+  `foo(): Conn`) into the same table Go and Python now use. That adds certainty
+  wherever the source states a type.
+- **refuse a member call on an unannotated parameter, in `.ts` files only.** Under
+  `noImplicitAny` an unannotated parameter means its type is inferred from a library
+  signature, which is exactly the got case. This is the move that removes the 89
+  rows, and it must not apply to `.js`, where nothing is annotated.
+
+Python's half of this item is done - see the fixed section below.
 
 ### 2. A C++ type table
 
@@ -126,6 +137,25 @@ row is now in `2026-08-04-p-graph-remeasured.md`: 1,734 resolved rows (same as
 published), 1,353 certain, **0 false** — 1,345 checked mechanically, 8 read by hand.
 
 
+
+
+**A Python name bound to a constructor call** (half of the old item 2). `jar =
+RequestsCookieJar()` and `close_server = threading.Event()` are one shape to a
+parser. Python bindings are now keyed by scope, a member call on such a name carries
+that key, and the constructor is recorded under it, so the resolver either finds the
+repo class and answers certainly or finds nothing and refuses.
+
+| psf/requests symbol | before | after |
+|---|---|---|
+| `RequestsCookieJar.set` | 38 rows, 1 certain, 22 false | **22 rows, 16 certain - every one a real `jar.set(...)`** |
+| `RequestsCookieJar.update` | 16 rows, 0 certain | **11 rows, 1 certain** |
+| `get` | 84 rows | **104 rows, all certain** - `s = requests.Session()` types `s` |
+| the 22 measured symbols | 1,707 resolved / 1,355 certain | **1,706 / 1,391** |
+
+The 16 refused `set` call sites are all `threading.Event()` objects, and all appear in
+the gap report. Two shapes are deliberately untouched: a receiver written as an
+attribute (`self.ready.set()`), and a name bound to a plain function call rather than
+a constructor.
 
 **A receiver typed from a function's return value** (the old item 1, the largest
 remaining source of false rows). `b := hugolib.Test(t, files)` then

@@ -964,19 +964,84 @@ export async function extract({ file, lang, langId, scm, source, pyRepoModules =
   // function is local to the whole function, so reading it before the assignment
   // is an error, not a reference to the module.
   const pyValueNames = new Map(); // name -> [span, ...]
+  // The same bindings again, but keyed, so a call written ON one of them can be
+  // looked up by the resolver. One key is one name in one Python scope: Python has
+  // no block scope, so unlike Go no position is needed to tell two bindings apart.
+  const pyVarKeys = new Map(); // name -> [{ key, span }, ...]
   if (lang === 'py') {
     for (const c of caps) {
       if (c.name !== 'var.local') continue;
       let scope = c.node?.parent;
       while (scope && !PY_SCOPE_NODES.has(scope.type)) scope = scope.parent;
       if (!scope) continue;
-      if (!pyValueNames.has(c.text)) pyValueNames.set(c.text, []);
-      pyValueNames.get(c.text).push({
+      const span = {
         startLine: scope.startPosition.row + 1, startCol: scope.startPosition.column,
         endLine: scope.endPosition.row + 1, endCol: scope.endPosition.column,
+      };
+      if (!pyValueNames.has(c.text)) pyValueNames.set(c.text, []);
+      pyValueNames.get(c.text).push(span);
+      // A module is one file in Python, so a module-level name is keyed on the
+      // file. Anything narrower is keyed on the definition that holds it, by id:
+      // a qname is not unique (two classes can each hold a method of one name).
+      const owner = defs.filter((d) => within(c, d)).sort(innermostFirst)[0];
+      const key = owner ? `${owner.id}#var:${c.text}` : `${file}#var:${c.text}`;
+      if (!pyVarKeys.has(c.text)) pyVarKeys.set(c.text, []);
+      pyVarKeys.get(c.text).push({ key, span });
+    }
+    // `close_server = threading.Event()` and `jar = RequestsCookieJar()` look the
+    // same to a parser: a name bound to the result of a call. Record the callee
+    // under the name's key, exactly as Go does for `x := pkg.Make()`. The resolver
+    // then finds the repo class and answers certainly, or finds nothing — and a
+    // call on that name is refused instead of guessing the one repo method that
+    // shares its bare name. Those guesses were 39 false rows on psf/requests.
+    for (const c of caps) {
+      if (c.name !== 'var.local') continue;
+      const assign = c.node?.parent;
+      if (assign?.type !== 'assignment') continue;
+      // Compare positions, not objects: every childForFieldName call hands back a
+      // fresh wrapper for the same node, so `!==` is always true.
+      const left = assign.childForFieldName?.('left');
+      if (!left || left.startIndex !== c.node.startIndex) continue; // not a plain `x = …`
+      const value = assign.childForFieldName?.('right');
+      if (value?.type !== 'call') continue;
+      const fn = value.childForFieldName?.('function');
+      if (!fn) continue;
+      let callee = null;
+      if (fn.type === 'identifier') callee = fn.text;
+      else if (fn.type === 'attribute') {
+        // `mod.Cls()`: the head is translated through this file's imports, the same
+        // way a module-qualified CALL is. A repo module leaves the class reachable
+        // by its own (bare) qname; anything else keeps the dotted path, which no
+        // node carries — which is the point, because that type is not ours.
+        const path = pyObjectPath(fn.childForFieldName?.('object'));
+        const attr = fn.childForFieldName?.('attribute');
+        if (path && attr) {
+          const modulePath = pyModules.get(path[0]);
+          const full = modulePath ? [modulePath, ...path.slice(1)].join('.') : path.join('.');
+          const isRepoModule = pyRepoModules ? pyRepoModules.paths.has(full) : false;
+          callee = isRepoModule ? attr.text : `${full}.${attr.text}`;
+        }
+      }
+      if (!callee) continue;
+      // The key is built exactly as the binding loop above builds it, so a row and
+      // the call site that reads it cannot drift apart.
+      const owner = defs.filter((d) => within(c, d)).sort(innermostFirst)[0];
+      fieldTypes.push({
+        key: owner ? `${owner.id}#var:${c.text}` : `${file}#var:${c.text}`,
+        type: `#ret:${callee}`, file,
       });
     }
   }
+  // The key a call written on a plain Python name belongs to, or null when the name
+  // is not bound in this scope (a module, or something we did not capture).
+  const pyVarKeyAt = (name, node) => {
+    const line = node.startPosition.row + 1, col = node.startPosition.column;
+    for (const b of pyVarKeys.get(name) ?? []) {
+      if (posLE(b.span.startLine, b.span.startCol, line, col) &&
+          posLE(line, col, b.span.endLine, b.span.endCol)) return b.key;
+    }
+    return null;
+  };
   const pyNamesAValue = (name, node) => {
     const line = node.startPosition.row + 1, col = node.startPosition.column;
     for (const s of pyValueNames.get(name) ?? []) {
@@ -1055,6 +1120,16 @@ export async function extract({ file, lang, langId, scm, source, pyRepoModules =
       if (kind === 'call' && !goCtx) {
         const owner = selfCallOwner(c, lang, defs, enclosing);
         if (owner) { dst_name = `${owner.qname}.${c.text}`; method = c.text; }
+        // `jar.set(...)` in Python: key the call on the receiver name, the same way
+        // Go keys `db.Get()`. With a type recorded for that name the resolver
+        // answers exactly; with none it keeps today's fallback.
+        else if (lang === 'py' && c.node?.parent?.type === 'attribute') {
+          const obj = c.node.parent.childForFieldName?.('object');
+          if (obj?.type === 'identifier') {
+            const key = pyVarKeyAt(obj.text, obj);
+            if (key) { field_key = key; method = c.text; }
+          }
+        }
       }
     }
     // A plain-identifier call to a builtin or a predeclared type names nothing in

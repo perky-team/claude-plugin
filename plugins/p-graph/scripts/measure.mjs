@@ -114,6 +114,7 @@ const REASONS = [
   'the line writes <alias>.<Name> and the file imports that package (Go)',
   'the line writes <module>.<Name> and the target sits in that module (Python)',
   'the calling file imports the target file',
+  'the source assigns the receiver a constructor of the target\'s own class',
 ];
 
 // Rows with no mechanical reason that were READ and found correct. Keyed by
@@ -158,6 +159,22 @@ async function main() {
       impBase.get(r.file).add(stripExt(r.dst_name.replace(/^['"<]|['">]$/g, '')));
       impPath.get(r.file).add(r.dst_name);
     }
+    // Does this file assign `recv` a constructor of the class that owns `dstQname`?
+    // A text search on purpose: it checks the SOURCE, not the graph's own table, so
+    // the two can disagree and the disagreement shows up here.
+    const srcOf = (file) => {
+      if (!srcCache.has(`ALL|${file}`)) {
+        try { srcCache.set(`ALL|${file}`, readFileSync(join(dir, file), 'utf-8')); }
+        catch { srcCache.set(`ALL|${file}`, ''); }
+      }
+      return srcCache.get(`ALL|${file}`);
+    };
+    const ownerAssignedIn = (file, recv, dstQname) => {
+      const owner = dstQname.slice(0, dstQname.lastIndexOf('.')).split('.').pop();
+      if (!owner || !/^[A-Z]/.test(owner)) return false; // a class name, not a package
+      const head = recv.split('.')[0];
+      return new RegExp(`\\b${head}\\s*=\\s*[\\w.]*\\b${owner}\\s*\\(`).test(srcOf(file));
+    };
     const pkgOf = (file) => store.db.prepare(
       `SELECT substr(qname,1,instr(qname,'.')-1) p FROM nodes
        WHERE file = ? AND instr(qname,'.') > 0 LIMIT 1`).get(file)?.p ?? null;
@@ -180,7 +197,12 @@ async function main() {
           || (e.lang === 'go' && pkg && qualified
               && [...(impPath.get(e.file) ?? [])].some((p) => lastSeg(p) === pkg))
           || (e.lang === 'py' && qualified && e.dfile.split('/').includes(qualified[1].split('.').pop()))
-          || Boolean(impBase.get(e.file)?.has(stripExt(e.dfile)));
+          || Boolean(impBase.get(e.file)?.has(stripExt(e.dfile)))
+          // `jar.set(...)` with `jar = RequestsCookieJar()` above it: the receiver's
+          // type is written in the source, so read the source for it rather than
+          // trusting the resolver's own table. The owner is the target's qname minus
+          // its last segment, and the constructor may be module-qualified.
+          || Boolean(qualified && e.dst.includes('.') && ownerAssignedIn(e.file, qualified[1], e.dst));
         if (ok) { withReason++; continue; }
         const note = ACCEPTED.get(`${repo} ${sym} ${e.file}`);
         const row = `${repo} ${sym}  ${e.file}:${e.line} -> ${e.dst} (${e.dfile})  | ${text.trim().slice(0, 90)}`;
