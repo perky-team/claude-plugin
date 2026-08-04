@@ -1,4 +1,44 @@
-# Incoming requests — Raspberry Pi autonomous loop, 2026-08-03
+# Incoming requests — Raspberry Pi autonomous loop
+
+## Status
+
+**01–04 are done**, shipped as `v5.32.0` (p-tasks 1.1.4→1.2.0, p-shed 0.10.0→0.11.0), and
+deployed on the Pi 2026-08-04. Their files are kept for the reasoning, not as work.
+
+**05 is done as well, and not yet released.** Implemented 2026-08-04 as commit `09fbfd0`
+(p-shed 0.11.0→0.12.0), suite green on Windows and under WSL. Design note:
+`docs/superpowers/specs/2026-08-04-pshed-skip-retry-design.md`.
+
+A second commit in the same batch, `b7e7546`, fixes an unrelated production bug found the
+same day: `emitJson` called `process.exit()` immediately after writing, and because a write
+to a pipe is asynchronous in Node (a write to a file is not), any output larger than a pipe
+buffer was truncated. Measured on the 318-item board — `ptasks list --json` delivered
+853 212 bytes to a file and 65 536 through a pipe. The half-written JSON fails `JSON.parse`,
+a careful consumer catches that and reports "no data", so a corrupt read was
+indistinguishable from an empty one: a guard or a status poll read as all-clear.
+(p-tasks 1.2.0→1.2.1, p-wiki 4.14.0→4.14.1; p-chat already had the fix.)
+
+**Nothing is tagged or pushed.** Proposed monorepo tag `v6.1.0`, awaiting an explicit yes.
+Until that lands and the Pi pulls it, the loop still runs the old behaviour.
+
+Two things were deliberately left out, recorded here so they are not lost:
+
+- **Brief 05's appendix** — a plain-text line on `pchat guard`'s stdout, JSON behind
+  `--json`. Its own condition is "fold in only if it costs nothing", and it does not: 11
+  assertions on the guard's stdout, a changed default-output contract for a plugin the live
+  loop depends on, and a p-chat release of its own for something the brief itself calls
+  purely presentational.
+- **p-graph and p-observe still carry the truncation bug** (`pgraph.mjs:42`, where `die`
+  hard-exits and `emitJson` carries no exit code at all; `pobserve.mjs:117`). Both are named
+  in `tests/cli-exit-safety.test.ts` as not yet migrated, so the gap stays visible.
+
+Nothing else is pending here. A full audit of the loop's job wiring on 2026-08-04 found four
+structural breaks in how signals travel between jobs — **all four are prompt-level and none
+of them is plugin work.** They are recorded in the ops repo at `autonomy/JOB-WIRING.md`.
+
+---
+
+# Original briefs — Raspberry Pi autonomous loop, 2026-08-03
 
 Four changes the live p-shed/p-tasks deployment on the Pi needs. Each numbered file is a
 **requirement**, not an implementation plan: it states the problem, the measurement behind
@@ -27,6 +67,7 @@ both settle in `lib/tick.mjs`.
 | 02 | [`lastGuard.reason`](02-pshed-guard-reason.md) | p-shed | small |
 | 03 | [speed profiles](03-pshed-profiles.md) | p-shed | large — the one that needs a design pass |
 | 04 | [`install-cron` path](04-pshed-install-cron-path.md) | p-shed | medium, independent |
+| 05 | [skip eats a sparse slot](05-pshed-skip-consumes-sparse-slot.md) | p-shed | **added 2026-08-04** — found in production on 0.11.0, after 01–04 shipped |
 
 ## Why these four, and why they are split this way
 
