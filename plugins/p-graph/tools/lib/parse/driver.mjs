@@ -60,6 +60,21 @@ function within(inner, outer) {
 // "Position a is at or before position b", lines 1-based, columns 0-based.
 const posLE = (aLine, aCol, bLine, bCol) => aLine < bLine || (aLine === bLine && aCol <= bCol);
 
+// Sorts a list of definitions innermost first: the one that opens last and
+// closes first encloses the others. Every "which definition is this inside?"
+// pick uses it — the parent of a definition, the caller of a call, the owner of
+// a Go binding, the struct a field belongs to.
+//
+// The columns have to break the line ties, or the choice is left to capture
+// order, which is outermost first. `namespace a { namespace b { void g() {} void
+// f() { g(); } } }` on one line then reads the call as made by `a`, and records
+// its target as `a.g` — a name nothing carries, so the real `a.b.g` goes
+// missing. One line of legal C++ is enough; the same source across six lines is
+// correct.
+const innermostFirst = (a, b) =>
+  (b.startLine - a.startLine) || (b.startCol - a.startCol) ||
+  (a.endLine - b.endLine) || (a.endCol - b.endCol);
+
 // The Go nodes that open a scope. Go's own list: a function body, a func
 // literal, a plain block, an if / for / switch / select statement (its init
 // statement is visible in the whole statement, else branch included), and each
@@ -658,16 +673,8 @@ export async function extract({ file, lang, langId, scm, source, pyRepoModules =
     (b.endLine - a.endLine) || (b.endCol - a.endCol));
   const ordSeen = new Map();
   for (const def of defs) {
-    // The innermost definition around this one: it opens last and closes first.
-    // Sorting on the start LINE alone picks the OUTER of two namespaces opened on
-    // the same line, and then `namespace a { namespace b { void f() {} } }` names
-    // the function `a.f` — so a caller writing `a::b::f()` finds nothing and goes
-    // silently missing.
-    const parent = defs
-      .filter((p) => within(def, p))
-      .sort((a, b) =>
-        (b.startLine - a.startLine) || (b.startCol - a.startCol) ||
-        (a.endLine - b.endLine) || (a.endCol - b.endCol))[0];
+    // The innermost definition around this one — see innermostFirst.
+    const parent = defs.filter((p) => within(def, p)).sort(innermostFirst)[0];
     // C++ writes the owner into the declarator (`PgStore::Get`), so the
     // definition names its own path and nesting only adds what encloses it.
     const local = def.localPath ?? def.name;
@@ -740,7 +747,7 @@ export async function extract({ file, lang, langId, scm, source, pyRepoModules =
     for (const fd of fieldDeclCaps) {
       const structDef = defs
         .filter((d) => d.kind === 'struct' && within(fd, d))
-        .sort((a, b) => b.startLine - a.startLine)[0];
+        .sort(innermostFirst)[0];
       if (!structDef) continue;
       // `within()` only compares line/col spans, so a field nested inside an
       // ANONYMOUS struct type (`inner struct { base.Base }`) still looks like
@@ -813,8 +820,7 @@ export async function extract({ file, lang, langId, scm, source, pyRepoModules =
   // where the field key needs the type that owns the field named at extraction.
   const varTypes = new Map();
   if (goCtx) {
-    const ownerOf = (cap) =>
-      defs.filter((d) => within(cap, d)).sort((a, b) => b.startLine - a.startLine)[0];
+    const ownerOf = (cap) => defs.filter((d) => within(cap, d)).sort(innermostFirst)[0];
     // `fromNode` is the node a name becomes visible AFTER. Go starts a variable's
     // scope at the end of its own declaration, which is why the right-hand side of
     // `watcher, err := watcher.New(...)` still reads `watcher` as the package.
@@ -925,7 +931,7 @@ export async function extract({ file, lang, langId, scm, source, pyRepoModules =
   for (const c of caps) {
     const kind = refMap[c.name];
     if (!kind) continue;
-    const enclosing = defs.filter((d) => within(c, d)).sort((a, b) => b.startLine - a.startLine)[0];
+    const enclosing = defs.filter((d) => within(c, d)).sort(innermostFirst)[0];
     let dst_name, field_key = null, method = null;
     // An identifier names a variable, not a package, when a binding for it is in
     // scope right here. Every fact used is file-local, and that is exactly right:
