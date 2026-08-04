@@ -20,7 +20,7 @@ caddyserver/caddy, google/leveldb, sindresorhus/got and psf/requests, with
 | | Before | Now |
 |---|---|---|
 | False rows among resolved | 42.9% | 9.5% |
-| False rows among **certain** | — | **0 of 1,352** |
+| False rows among **certain** | — | **0 of 1,352** in that set; item 2 below is a shape the set did not contain |
 | Silent misses | the original complaint | 2 of 1,724, both pre-existing |
 | `impact` on hugo | 15,555 ms | 399 ms |
 | caddy database | 105.6 MB | 10.5 MB |
@@ -38,27 +38,63 @@ rows where `gopls` says 3, and all 25 false ones are this shape.
 
 Reading a called repo function's declared return type would close most of it.
 
-### 2. A type table for TypeScript and Python
+### 2. A bare-name call in JavaScript or TypeScript is matched across files, and marked certain
+
+A top-level JS/TS function's qname is just its name (`walk`), not a
+module-qualified one, so Pass A — the exact-qname pass, which marks its matches
+**certain** — accepts any bare call written `walk(...)` anywhere in the repo. The
+real target can be a local function of the same name in the calling scope.
+
+Measured on p-graph's own source as a repo (78 files, 180 symbols, real CLI):
+
+| | |
+|---|---|
+| certain resolved calls | 154 |
+| false among them | **2** |
+| the false pair | `attachReadHelpers` -> `walk` (`lib/index/build.mjs:24`) |
+| the real target | `attachReadHelpers.walk` (`local-sqlite.mjs:910`), in the same file |
+
+Consequences seen in the CLI output: `callers walk` lists 3 certain callers, one
+of which is false; `impact isIgnored` gains four symbols (`openStore`,
+`attachReadHelpers`, `openReadOnly`, `resolveDestination`) that have nothing to do
+with `isIgnored`, because `impact` follows certain edges and this one says it is
+certain.
+
+**This is the one known exception to "no certain row was false".** That figure
+(0 of 1,352) was measured over Go, TypeScript, Python and C++ call sites, but the
+sample held no shadowed top-level name, so the shape never appeared. It ranks
+second here because a false CERTAIN row is worse per row than a false guess, even
+though it needs a duplicated top-level name to happen at all.
+
+Go is not affected: its call targets are package-qualified, so a local `walk`
+cannot collide with `build.walk`. A C++ function in the global namespace has the
+same bare qname and probably the same exposure — not measured.
+
+Fix direction: for a bare-name call in a lexically-scoped language, prefer a
+definition in the same scope or file, and do not call a cross-file bare-name match
+certain unless that file imports the name.
+
+### 3. A type table for TypeScript and Python
 
 A real method with a real owner, called on an untyped value, still resolves
 wrongly: got's `setHeader` 89 false rows, `RequestsCookieJar.set` 22, `.update`
 15. The owner rule that shipped cannot help here, because the owner is genuinely
 a class. Only a recorded type can.
 
-### 3. A C++ type table
+### 4. A C++ type table
 
 C++ is usable for calls written `Class::method(...)` — 11 of 11 correct on a real
 leveldb symbol. A member call on a value is about 40% of C++ calls and still
 cannot resolve.
 
-### 4. Interface dispatch
+### 5. Interface dispatch
 
 There are no `implements` edges. A call through an interface with one
 implementation resolves to it as a guess; with two or more it becomes a gap. The
 honest answer is "these N types could receive this call", and the graph cannot
 say that yet.
 
-### 5. The read-only fallback dies on a pre-schema-6 database
+### 6. The read-only fallback dies on a pre-schema-6 database
 
 `callers`, `callees`, `impact` and `context` exit 3 with
 `no such column: e.dst_bare`, because the gap-report statements name columns the
@@ -66,35 +102,35 @@ old schema lacks. This hits in the one situation the fallback exists for: a
 filesystem that can never be migrated. `search`, `node`, `files`, `explore` and
 `status` still work. Make those four degrade instead of dying.
 
-### 6. `impactSkippedGuesses` counts edges `impact` would never have followed
+### 7. `impactSkippedGuesses` counts edges `impact` would never have followed
 
 It omits the `src_id IS NOT NULL` that `impact` requires, so a guessed
 module-scope call is reported twice — once as a skipped guess, once as a
 `no-caller` gap.
 
-### 7. A missing argument prints a SQLite error
+### 8. A missing argument prints a SQLite error
 
 `callers`, `callees`, `impact`, `context`, `node` and `trace` print
 `pgraph: Provided value cannot be bound to SQLite parameter 1.` and exit 3.
 `search` has the right check; copy it.
 
-### 8. TypeScript call-argument function bodies are not definitions
+### 9. TypeScript call-argument function bodies are not definitions
 
 `describe` / `it` callbacks, so 394 of nest's 1,727 files produce no symbols, and
 a majority of resolved edges there have no source symbol. They do surface, as
 `outside any indexed symbol` gap rows — but they have no caller to name.
 
-### 9. Two repo packages sharing a base name collapse into one qname space
+### 10. Two repo packages sharing a base name collapse into one qname space
 
 So a call can resolve to the wrong package's symbol. The `count(DISTINCT ft.type)
 = 1` guard in Pass F is what stops that from becoming a *certain* wrong row today
 (`receiver-types.test.ts` covers it), but the collapse itself is still there.
 
-### 10. `gitChangedFiles` cannot see a file created and deleted without a commit
+### 11. `gitChangedFiles` cannot see a file created and deleted without a commit
 
 So a stale row survives until the next `--full`.
 
-### 11. The evidence for "0 of 1,352 certain rows false" is not in the repo
+### 12. The evidence for "0 of 1,352 certain rows false" is not in the repo
 
 It lives in `.superpowers/sdd/task-9-report.md`, which is git-ignored scratch on
 one machine. It is this work's strongest claim and nobody can audit it from the
@@ -102,7 +138,7 @@ repo. **Move that table next to `2026-08-01-p-graph-correct-answers-results.md`
 before the scratch folder is cleaned** — `git clean -fdx` destroys it and there
 is no second copy.
 
-### 12. Smaller, all recorded in `.superpowers/sdd/progress.md`
+### 13. Smaller, all recorded in `.superpowers/sdd/progress.md`
 
 - An assertion in `alias-resolution.test.ts` that no longer tells the two
   variable-key shapes apart.

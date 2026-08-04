@@ -163,15 +163,17 @@ Of the resolved rows in that same set:
 | now, certain rows only | 1,352 | **0** | **0.0%** |
 | now, guessed rows only | 382 | 165 | 43.2% |
 
-**No certain row in that set was false. Every false row is marked a guess.** Treat a guess as a lead and check it.
+**No certain row in that set was false.** Treat a guess as a lead and check it. One shape found after that measurement can still make a certain row false — weakness 3 below, which the measured set happened not to contain.
 
-#### The two weaknesses to plan around
+#### The three weaknesses to plan around
 
 **1. A receiver typed from a function's return value.** `x := reflect.ValueOf(...)` and `buf := bp.GetBuffer()` record no type: the type is stated in the callee's signature, and the graph does not read across files for it. The call falls back to the unique bare name, so it becomes a guess. This is the largest remaining source of wrong rows. `collections.Namespace.Index` in hugo still prints 26 caller rows where `gopls` says 3, and all 25 false ones have this shape.
 
 **2. A real method with a real owner, called on an untyped value in TypeScript or Python.** The owner rule cannot help here: the target really is a method of a real class, and the receiver's type is simply unknown. got's `setHeader` keeps 89 false rows, requests' `RequestsCookieJar.set` 22, and `.update` 15. Fixing these needs a type table for TypeScript and Python, the way Go has one.
 
-Neither weakness can put a wrong row into the certain list. Every wrong row from both is printed under `UNVERIFIED`.
+Neither of those two can put a wrong row into the certain list. Every wrong row from both is printed under `UNVERIFIED`.
+
+**3. A bare-name call in JavaScript or TypeScript, matched across files and called certain.** A top-level JS/TS function's `qname` is just its name, so a call written `walk(...)` is an exact `qname` match for a top-level `walk` in *any* file — even when the real target is a local function of the same name right there in the calling scope. Measured on p-graph's own source as a repo (78 files, 180 symbols): 154 certain rows, **2 false**, both from one shadowed name. It also feeds `impact`, which follows certain edges, so four unrelated symbols joined one answer. Go is safe (its targets are package-qualified). Until this is fixed: in JavaScript or TypeScript, check a cross-file caller whose name is also declared locally somewhere.
 
 #### Per-language detail
 
