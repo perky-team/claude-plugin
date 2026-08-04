@@ -5,6 +5,17 @@ import { OWNER_KINDS } from '../owner-kinds.mjs';
 const nodeId = (file, qname, kind, ord) =>
   createHash('sha1').update(`${file}|${qname}|${kind}|${ord}`).digest('hex').slice(0, 16);
 
+// `signature` is a hint for a human skimming a search hit, not a copy of the
+// source. Without a cap, one bundled/minified file with a single huge line
+// (caddyserver/caddy ships one 157,787 characters long) turns into a giant row
+// that dominates the whole graph's size — that one file alone was most of a
+// 105.6 MB database. The marker at the end says plainly that the line was cut,
+// so a truncated signature is never mistaken for a complete one.
+const SIGNATURE_CAP = 300;
+const TRUNCATION_MARKER = '…[truncated]';
+const capSignature = (line) =>
+  line.length <= SIGNATURE_CAP ? line : line.slice(0, SIGNATURE_CAP - TRUNCATION_MARKER.length) + TRUNCATION_MARKER;
+
 // Go's predeclared builtin functions (universe block). A plain call to one of
 // these belongs to no package, so it must not be package-qualified.
 const GO_BUILTINS = new Set([
@@ -607,7 +618,7 @@ export async function extract({ file, lang, langId, scm, source, pyRepoModules =
       name: localPath ? localPath.slice(localPath.lastIndexOf('.') + 1) : (nameCap?.text ?? '(anon)'),
       startLine: d.startLine, endLine: d.endLine,
       startCol: d.startCol, endCol: d.endCol,
-      signature: source.split('\n')[d.startLine - 1]?.trim() ?? '',
+      signature: capSignature(source.split('\n')[d.startLine - 1]?.trim() ?? ''),
       node: d.node, // kept for containment checks below; never copied into `nodes`
     });
   }
@@ -799,6 +810,12 @@ export async function extract({ file, lang, langId, scm, source, pyRepoModules =
     // scope at the end of its own declaration, which is why the right-hand side of
     // `watcher, err := watcher.New(...)` still reads `watcher` as the package.
     const bind = (cap, nameNode, typeNode, fromNode) => {
+      // `_` binds nothing a later line can read — Go itself refuses to read it
+      // back. Recording a type for it anyway is how two unrelated files each
+      // writing `var _ SomeIface = &Impl{}` (the interface-assertion idiom)
+      // turn into a false "conflict" on the shared package-level key: nothing
+      // can ever call through `_`, so there is no binding here to record.
+      if (nameNode.text === '_') return;
       const owner = ownerOf(cap);
       const scope = goScopeNode(nameNode);
       if (!scope) return;

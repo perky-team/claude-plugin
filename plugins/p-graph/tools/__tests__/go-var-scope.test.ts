@@ -487,3 +487,67 @@ func Vars() string {
     store.close();
   }, 30000);
 });
+
+// Go's blank identifier `_` binds nothing a later line can read — the
+// language itself refuses `_ = _`. Recording a type for it is pure waste:
+// on gohugoio/hugo, files across one package each write `var _ SomeIface =
+// &Impl{}` (the common "assert this type implements that interface" idiom)
+// with a DIFFERENT concrete type, and every one of them landed under the
+// same "#pkgvar:_" key — 21 keys that looked like a real type conflict but
+// named nothing anyone could ever call.
+describe('Go blank identifier', () => {
+  it('records no variable-type row for any binding named _', async () => {
+    const src = `package api
+import "x/store"
+func Pair(a, _ *store.Postgres) {}
+var _ *store.Postgres
+func Vars() {
+	b, _ := Make()
+	var _ = Make()
+	for _, x := range []int{1} {
+		_ = x
+	}
+	_ = b
+}
+func Make() *store.Postgres { return nil }
+`;
+    const cfg = resolveLang('api/api.go');
+    const { fieldTypes } = await extract(
+      { file: 'api/api.go', lang: cfg.lang, langId: cfg.langId, scm: cfg.query, source: src });
+
+    // The real names still get their rows — the fix must not touch them.
+    expect(fieldTypes.some((f) => /#var:a(@|$)/.test(f.key))).toBe(true);
+    // Nothing is ever keyed on the blank identifier, in any binding shape:
+    // a parameter, a package-level var, a short declaration, a plain var,
+    // or a range clause.
+    expect(fieldTypes.some((f) => /[:#]_(@|$)/.test(f.key))).toBe(false);
+  }, 20000);
+
+  it('does not turn a package-level _ into a false type conflict', async () => {
+    write('iface/iface.go', `package iface
+type Greeter interface{ Greet() string }
+`);
+    write('impl/a.go', `package impl
+import "x/iface"
+type English struct{}
+func (e *English) Greet() string { return "hi" }
+var _ iface.Greeter = &English{}
+`);
+    write('impl/b.go', `package impl
+import "x/iface"
+type French struct{}
+func (f *French) Greet() string { return "salut" }
+var _ iface.Greeter = &French{}
+`);
+    const store = await indexed();
+
+    // Before the fix, both files' "var _ = ..." landed on the same
+    // "<dir>:impl#pkgvar:_" key with two different types — a conflict Pass F
+    // would refuse to trust, even though nothing can ever call through "_".
+    const rows = store.db.prepare(
+      `SELECT key FROM field_types WHERE key LIKE '%#pkgvar:_'`).all();
+    expect(rows).toEqual([]);
+
+    store.close();
+  }, 30000);
+});
