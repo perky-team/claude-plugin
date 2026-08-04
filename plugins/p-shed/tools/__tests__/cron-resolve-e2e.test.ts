@@ -22,13 +22,18 @@ function shellCommand(line: string) {
   return line.replace(/^\* \* \* \* \* /, '').replace(new RegExp(` # ${taskName(root)}$`), '');
 }
 
+// Reports the path it was actually loaded from, NOT a version baked in at creation time:
+// these tests rename directories, and a hardcoded string would keep reporting the old
+// name from the new location — passing or failing for reasons unrelated to resolution.
 function fakeTool(version: string) {
   const dir = join(cache, 'p-shed', version, 'tools');
   mkdirSync(dir, { recursive: true });
   const p = join(dir, 'pshed.mjs');
-  writeFileSync(p, `console.log(process.argv[2] + ' from ${version}');\n`, 'utf-8');
+  writeFileSync(p, "import { fileURLToPath } from 'node:url';\nconsole.log(process.argv[2] + ' from ' + fileURLToPath(import.meta.url));\n", 'utf-8');
   return p;
 }
+
+const cronLog = () => readFileSync(join(root, '.pshed', 'logs', 'cron.log'), 'utf-8');
 
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'pshed-cronres-'));
@@ -44,21 +49,23 @@ describe.skipIf(process.platform === 'win32')('generated cron line (POSIX)', () 
   // Cron's environment is not a login shell's: run with `env -i` plus only the PATH cron
   // itself sets, so anything the line assumes is resolvable by name has to actually be
   // there.
-  const runUnderCronEnv = (command: string) =>
-    execFileSync('/usr/bin/env', ['-i', 'PATH=/usr/bin:/bin', '/bin/sh', '-c', command], { encoding: 'utf-8' });
+  const runUnderCronEnv = (command: string, path = '/usr/bin:/bin') =>
+    execFileSync('/usr/bin/env', ['-i', `PATH=${path}`, '/bin/sh', '-c', command], { encoding: 'utf-8' });
 
   it('runs the tool with a stripped PATH and writes to the cron log', () => {
     const toolPath = fakeTool('0.10.0');
     runUnderCronEnv(shellCommand(crontabLine({ root, nodeBin: process.execPath, toolPath })));
-    expect(readFileSync(join(root, '.pshed', 'logs', 'cron.log'), 'utf-8')).toContain('tick from 0.10.0');
+    expect(cronLog()).toContain(`tick from ${toolPath}`);
   });
 
   it('still resolves after the version directory is renamed — the whole point', () => {
     const toolPath = fakeTool('0.10.0');
     const line = crontabLine({ root, nodeBin: process.execPath, toolPath });
     renameSync(join(cache, 'p-shed', '0.10.0'), join(cache, 'p-shed', '0.11.0'));
+    // The literal fallback path no longer exists, so anything that runs at all can only
+    // have come from the glob.
     runUnderCronEnv(shellCommand(line));
-    expect(readFileSync(join(root, '.pshed', 'logs', 'cron.log'), 'utf-8')).toContain('tick from 0.11.0');
+    expect(cronLog()).toContain(join(cache, 'p-shed', '0.11.0', 'tools', 'pshed.mjs'));
   });
 
   it('picks the newest version, not the lexicographically largest', () => {
@@ -67,20 +74,18 @@ describe.skipIf(process.platform === 'win32')('generated cron line (POSIX)', () 
     const toolPath = fakeTool('0.9.0');
     fakeTool('0.10.0');
     runUnderCronEnv(shellCommand(crontabLine({ root, nodeBin: process.execPath, toolPath })));
-    expect(readFileSync(join(root, '.pshed', 'logs', 'cron.log'), 'utf-8')).toContain('tick from 0.10.0');
+    expect(cronLog()).toContain(join(cache, 'p-shed', '0.10.0', 'tools', 'pshed.mjs'));
+    expect(cronLog()).not.toContain('0.9.0');
   });
 
-  it('falls back to the literal path when the glob matches nothing at all', () => {
+  it('falls back to the literal path when the resolver cannot run at all', () => {
+    // An empty PATH makes ls/sort/tail unresolvable — the one case where the resolver
+    // produces nothing while the tool is perfectly present. ${P:-<literal>} must then be
+    // exactly today's behaviour. node and sh are absolute, so only the resolver breaks.
     const toolPath = fakeTool('0.10.0');
     const line = crontabLine({ root, nodeBin: process.execPath, toolPath });
-    renameSync(join(cache, 'p-shed'), join(cache, 'p-shed-moved'));
-    // The resolver finds nothing; ${P:-<literal>} keeps today's behaviour. Restore the
-    // literal target so the fallback has something to run.
-    renameSync(join(cache, 'p-shed-moved'), join(cache, 'p-shed-x'));
-    mkdirSync(join(cache, 'p-shed', '0.10.0'), { recursive: true });
-    renameSync(join(cache, 'p-shed-x', '0.10.0', 'tools'), join(cache, 'p-shed', '0.10.0', 'tools'));
-    runUnderCronEnv(shellCommand(line));
-    expect(readFileSync(join(root, '.pshed', 'logs', 'cron.log'), 'utf-8')).toContain('tick from 0.10.0');
+    runUnderCronEnv(shellCommand(line), '/nonexistent');
+    expect(cronLog()).toContain(`tick from ${toolPath}`);
   });
 
   it('a non-versioned (dev checkout) path runs exactly as before', () => {
@@ -89,6 +94,6 @@ describe.skipIf(process.platform === 'win32')('generated cron line (POSIX)', () 
     const toolPath = join(dir, 'pshed.mjs');
     writeFileSync(toolPath, "console.log(process.argv[2] + ' from dev');\n", 'utf-8');
     runUnderCronEnv(shellCommand(crontabLine({ root, nodeBin: process.execPath, toolPath })));
-    expect(readFileSync(join(root, '.pshed', 'logs', 'cron.log'), 'utf-8')).toContain('tick from dev');
+    expect(cronLog()).toContain('tick from dev');
   });
 });
