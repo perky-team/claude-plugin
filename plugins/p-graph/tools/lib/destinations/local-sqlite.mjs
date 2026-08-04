@@ -341,6 +341,83 @@ export function openStore(dbPath, opts = {}) {
     }
   };
 
+  // Pass L — what the call site can see wins. A top-level function in JS,
+  // TypeScript, Python or C++ has a BARE qname (`walk`, not `util.walk`), so the
+  // exact-qname pass below treats a plain `walk(...)` written ANYWHERE in the repo
+  // as an exact match for it, and calls the match certain. Measured on p-graph's
+  // own source: `walk(true)` inside attachReadHelpers linked to build.mjs's walk
+  // while the real target, a closure named walk, sat eleven lines above the call
+  // in the same file. A false CERTAIN row is the worst kind — `impact` follows it.
+  //
+  // So resolve lexical scope FIRST: when the calling file holds a definition of
+  // that name which the call site can actually see, that definition is the answer.
+  // This pass only ever claims edges Pass A would otherwise claim by name alone,
+  // so it cannot lose an edge; and reading scope is knowledge, not a guess, which
+  // is why these rows stay certain.
+  //
+  // Deliberately narrow:
+  //   - `lang <> 'go'`: a Go call target is already package-qualified, and a Go
+  //     method call carries a bare method name that means something else entirely.
+  //   - `member = 0`: `o.walk()` is a call on a value. A function in scope is not
+  //     a candidate for it, whatever it is named.
+  //   - a candidate owned by a class, struct, interface or namespace is skipped:
+  //     a bare `walk()` inside a class is not a call on that class (only
+  //     `this.walk()` is). A TypeScript namespace is lexical and would be safe,
+  //     but it shares the owner list, so it falls through to Pass A as before.
+  //   - two definitions of one name in one scope: refuse. A pick would be a guess.
+  const resolveLexicalScope = () => {
+    const pending = db.prepare(`
+      SELECT rowid, file, line, dst_name, lang FROM edges
+      WHERE kind = 'call' AND dst_id IS NULL AND dst_name IS NOT NULL AND external = 0
+        AND member = 0 AND lang <> 'go' AND instr(dst_name, '.') = 0`).all();
+    if (!pending.length) return;
+    // Every candidate in one query, grouped by file+language+name. One query per
+    // call site instead cost 3 s of a 43 s index on a 1,728-file repo, for a table
+    // of 5,804 rows that fits in memory many times over.
+    // The join reads the candidate's own container, because that is the scope the
+    // definition lives in: code can see it only from inside that container.
+    const byKey = new Map();
+    for (const n of db.prepare(`
+      SELECT n.id, n.file, n.name, n.lang, n.container_id,
+             c.start_line AS c_start, c.end_line AS c_end
+      FROM nodes n LEFT JOIN nodes c ON c.id = n.container_id
+      WHERE n.kind IN ${CALLABLE} AND (c.id IS NULL OR c.kind NOT IN ${OWNER_KINDS_SQL})`).all()) {
+      const key = `${n.file}|${n.lang}|${n.name}`;
+      if (!byKey.has(key)) byKey.set(key, []);
+      byKey.get(key).push(n);
+    }
+    const setDst = db.prepare('UPDATE edges SET dst_id = ?, guess = 0 WHERE rowid = ?');
+    // One transaction for the whole pass. This resolves hundreds of edges on a
+    // small repo, and an UPDATE of its own outside a transaction costs a disk
+    // sync each — that alone was 900 ms of a 2.6 s full index. resolvePending
+    // itself runs outside any transaction (every other writer opens its own), so
+    // this is the outermost one and cannot nest.
+    db.prepare('BEGIN').run();
+    try {
+      for (const e of pending) {
+        const rows = byKey.get(`${e.file}|${e.lang}|${e.dst_name}`);
+        if (!rows?.length) continue;
+        // A top-level definition is visible in its whole file. A nested one is
+        // visible only inside the scope that holds it — which is what makes the
+        // call in a sibling function keep the answer it had before.
+        const visible = rows.filter((r) => r.container_id === null
+          || (r.c_start !== null && r.c_start <= e.line && e.line <= r.c_end));
+        if (!visible.length) continue;
+        // Innermost wins. Of two scopes that both hold the call site, one is inside
+        // the other, so the one that STARTS LATER is the inner one.
+        const depth = (r) => (r.container_id === null ? -1 : r.c_start);
+        const deepest = Math.max(...visible.map(depth));
+        const winners = visible.filter((r) => depth(r) === deepest);
+        if (winners.length !== 1) continue;
+        setDst.run(winners[0].id, e.rowid);
+      }
+      db.prepare('COMMIT').run();
+    } catch (err) {
+      db.prepare('ROLLBACK').run();
+      throw err;
+    }
+  };
+
   store.resolvePending = () => {
     // Invalidate every call edge and resolve from scratch. A resolved edge can
     // become ambiguous when a new same-named symbol appears, so keeping it would
@@ -349,6 +426,10 @@ export function openStore(dbPath, opts = {}) {
     // guess is cleared with dst_id: a re-resolve must not let a stale 1 from a
     // previous index survive on an edge that this pass now resolves for real.
     db.prepare(`UPDATE edges SET dst_id = NULL, guess = 0 WHERE kind = 'call'`).run();
+
+    // Runs before Pass A on purpose: a definition the call site can see is a
+    // better answer than a same-named symbol in a file it may never have heard of.
+    resolveLexicalScope();
 
     // Pass A — exact qualified match. "filesink.New" links to the node whose
     // qname is "filesink.New", in the same language, and only when it is unique.

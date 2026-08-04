@@ -152,11 +152,8 @@ Say so plainly and point elsewhere — don't guess:
   name may be misspelled, or external (stdlib / third-party symbols have no node in the graph),
   or the graph is stale (suggest `/p-graph:sync`).
 - **The question is "have I found them all?"** — the graph alone cannot answer that. Use it to
-  find the call sites fast, then grep the bare name to confirm the count. The guessed rows and the
-  gap banner are where the count moves. Certain rows are reliable with one known exception: in
-  JavaScript or TypeScript a bare-name call can be matched to a top-level function of the same
-  name in another file and still be called certain, so if a certain caller sits in a file that
-  never imports the symbol, read the call before reporting it.
+  find the call sites fast, then grep the bare name to confirm the count. The certain rows are
+  reliable; the guessed rows and the gap banner are where the count moves.
 - **The question is about literal text** — string contents, comments, log messages, config values
   — rather than code structure. The graph only knows symbols and call/import edges; point the user
   to grep / Read for text search.
