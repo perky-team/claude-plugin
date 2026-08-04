@@ -292,6 +292,52 @@ function cppNamePath(declarator) {
   return path;
 }
 
+// The class name a macro-broken class declaration writes.
+// `class LEVELDB_EXPORT DB { … };` leaves tree-sitter no class to work with: it
+// reads `class LEVELDB_EXPORT` as the type and the rest as a broken function
+// definition (or, with two base classes, a broken declaration). The real name is
+// still in the source, so read it from the text between the specifier and what
+// follows: the LAST word before a base clause (`:`) or the body (`{`), with a
+// trailing `final` dropped.
+//
+//   class M Name { … }              -> Name
+//   class M Name final { … }        -> Name    the declarator field holds `final`
+//   class M1 M2 Name { … }          -> Name    the declarator field holds M2
+//   class M Name : public A { … }   -> Name
+//   class M Name : public A, public B { … } -> Name
+//
+// Reading the declarator field instead is what named a class `final` or after the
+// second macro. A wrongly-named class node is worse than none at all: it puts
+// every member the class owns under an owner that does not exist. So this returns
+// null whenever there is no word to read, and the definition is then skipped.
+function cppMacroClassName(node, source) {
+  const spec = node.childForFieldName?.('type');
+  // A specifier that has its own body is not a broken parse. `struct P { int a; }
+  // p;` and `struct P { … } make() { … }` are ordinary code, and the
+  // class_specifier rule already indexed that class under its real name.
+  if (!spec || spec.childForFieldName?.('body')) return null;
+  // A declaration with a bodyless specifier is ordinary code too: `class Foo x;`
+  // declares a variable of an existing class, and naming a class after `x` would
+  // be pure invention. Only a broken parse leaves an ERROR node behind, so
+  // require one before reading a class name out of a declaration.
+  if (node.type === 'declaration') {
+    let broken = false;
+    for (let i = 0; i < node.childCount; i++) if (node.child(i).type === 'ERROR') broken = true;
+    if (!broken) return null;
+  }
+  let head = source.slice(spec.endIndex, node.endIndex);
+  // A base clause names OTHER classes, and the body names members, so cut both
+  // off before looking for the name.
+  for (const stop of [':', '{']) {
+    const at = head.indexOf(stop);
+    if (at >= 0) head = head.slice(0, at);
+  }
+  const words = head.match(/[A-Za-z_]\w*/g) ?? [];
+  // `final` is written after the class name, never as one.
+  while (words[words.length - 1] === 'final') words.pop();
+  return words.length ? words[words.length - 1] : null;
+}
+
 // What a C++ call site names, and the bare method name to fall back on.
 //
 // `scope` is the qname of the class or namespace the call is written inside;
@@ -309,15 +355,34 @@ function cppCallTarget(c, scope, ns) {
   if (node.type === 'qualified_identifier') {
     const path = cppNamePath(node);
     if (!path) return { dst_name: c.text, method: null };
-    // Prefix the enclosing namespace, because C++ searches it before the global
-    // scope: `Status::OK()` written inside `namespace leveldb` means
-    // `leveldb::Status::OK`. Two cases must not be prefixed — a leading `::`,
-    // which starts at global scope (no `scope` field), and a path that already
-    // spells a namespace we are inside (`leveldb::Status::OK()`).
-    const rooted = !node.childForFieldName?.('scope');
-    const alreadyQualified = ns ? ns.split('.').includes(path[0]) : false;
-    const prefix = ns && !rooted && !alreadyQualified ? `${ns}.` : '';
-    return { dst_name: prefix + path.join('.'), method: null };
+    // A leading `::` starts the lookup at global scope (no `scope` field), so the
+    // path is already absolute. With no enclosing namespace there is nothing to
+    // resolve it against either.
+    if (!node.childForFieldName?.('scope') || !ns) {
+      return { dst_name: path.join('.'), method: null };
+    }
+    // C++ looks the FIRST segment of a qualifier up in the innermost scope first,
+    // so the written qualifier has to be resolved against the enclosing namespace
+    // path from the inside out. Inside `a::b`:
+    //   `b::f()`     -> a.b.f    `b` names the scope we are already in
+    //   `a::f()`     -> a.f      `a` names the scope one level out
+    //   `a::b::f()`  -> a.b.f    the path is spelled in full
+    //   `b::c::f()`  -> a.b.c.f  `c` is nested inside the scope we are in
+    // Taking the LAST matching segment is what makes this innermost-first: in
+    // `a.b` the segment `b` is nearer than `a`. Matching ANY segment and then
+    // dropping the whole prefix is what made `b::f()` inside `a::b` answer with
+    // the unrelated global `b::f` — a wrong answer marked certain.
+    const segs = ns.split('.');
+    const k = segs.lastIndexOf(path[0]);
+    if (k >= 0) return { dst_name: [...segs.slice(0, k), ...path].join('.'), method: null };
+    // The qualifier names no scope we are inside, so the innermost place it can
+    // live is the enclosing namespace: `Status::OK()` inside `namespace leveldb`
+    // means `leveldb::Status::OK`. It may instead live at an outer level, and the
+    // source alone does not say which — so record the innermost reading only. If
+    // no node carries that qname the call stays unresolved and the gap report
+    // shows it, which is the honest answer; a second candidate at an outer scope
+    // would be a pick, not a fact.
+    return { dst_name: `${ns}.${path.join('.')}`, method: null };
   }
   // `x.m()` or `x->m()`. The receiver's type is unknown, so only `this` says
   // which type the call belongs to; any other receiver keeps the bare name.
@@ -514,6 +579,15 @@ export async function extract({ file, lang, langId, scm, source, pyRepoModules =
       if (!path) continue; // a shape we cannot name — see cppFunctionDeclarator
       localPath = path.join('.');
     }
+    // A class whose name a macro pushed out of the parse. The captured node is
+    // the broken function definition or declaration, not a class_specifier, and
+    // the name has to be read from the source — see cppMacroClassName.
+    if (lang === 'cpp' && (kind === 'class' || kind === 'struct') &&
+        d.node.type !== 'class_specifier' && d.node.type !== 'struct_specifier') {
+      const recovered = cppMacroClassName(d.node, source);
+      if (!recovered) continue; // too broken to name — a wrong owner is worse
+      localPath = recovered;
+    }
     // The outermost name inside this definition is its own. The column has to
     // break a line tie or the pick is left to capture order: in
     // `const Widget = class { render() {} };` both `Widget` and `render` are
@@ -555,10 +629,25 @@ export async function extract({ file, lang, langId, scm, source, pyRepoModules =
   defs.length = 0;
   defs.push(...dedupedDefs);
 
-  defs.sort((a, b) => a.startLine - b.startLine || b.endLine - a.endLine);
+  // Outermost first, so a parent's qname is always built before its children's.
+  // The columns have to break the line ties: `namespace a { namespace b { void
+  // f() {} } }` puts three definitions on one line, and lines alone cannot order
+  // them.
+  defs.sort((a, b) =>
+    (a.startLine - b.startLine) || (a.startCol - b.startCol) ||
+    (b.endLine - a.endLine) || (b.endCol - a.endCol));
   const ordSeen = new Map();
   for (const def of defs) {
-    const parent = defs.filter((p) => within(def, p)).sort((a, b) => b.startLine - a.startLine)[0];
+    // The innermost definition around this one: it opens last and closes first.
+    // Sorting on the start LINE alone picks the OUTER of two namespaces opened on
+    // the same line, and then `namespace a { namespace b { void f() {} } }` names
+    // the function `a.f` — so a caller writing `a::b::f()` finds nothing and goes
+    // silently missing.
+    const parent = defs
+      .filter((p) => within(def, p))
+      .sort((a, b) =>
+        (b.startLine - a.startLine) || (b.startCol - a.startCol) ||
+        (a.endLine - b.endLine) || (a.endCol - b.endCol))[0];
     // C++ writes the owner into the declarator (`PgStore::Get`), so the
     // definition names its own path and nesting only adds what encloses it.
     const local = def.localPath ?? def.name;

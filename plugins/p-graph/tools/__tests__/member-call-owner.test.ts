@@ -92,6 +92,29 @@ export function draw(w: any) { return w.render(); }
     store.close();
   }, 30000);
 
+  it('does not let a class in one file hand a nested function an owner', async () => {
+    write('a.ts', `export class Widget { paint(): void {} }
+`);
+    write('b.ts', `export function Widget(mode: string) {
+  function render() { return mode; }
+  return render();
+}
+`);
+    write('c.ts', `declare const thing: any;
+export function boot() { thing.render(); }
+`);
+    const store = await indexed();
+
+    // `render` is nested inside a FUNCTION named Widget. A CLASS of the same name
+    // in another file says nothing about who owns it, so a call written on a
+    // value must not reach it. The qname-prefix half of the owner rule exists for
+    // C++, where a method is defined outside its class; anywhere else the qname
+    // prefix is the container, and matching on the prefix alone invents an owner.
+    expect(store.callers('Widget.render').map((n) => n.qname)).not.toContain('boot');
+
+    store.close();
+  }, 30000);
+
   it('resolves a Python call through an imported module but not through a value', async () => {
     write('api.py', `def get(url):
     return url

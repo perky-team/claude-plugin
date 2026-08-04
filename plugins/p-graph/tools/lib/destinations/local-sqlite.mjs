@@ -99,13 +99,18 @@ CREATE INDEX IF NOT EXISTS field_types_file ON field_types(file);
 //
 //  1. the node sits inside an owner in its own file — the normal case, and the
 //     only one for a language whose qname comes from lexical nesting;
-//  2. the node's own qname names the owner. C++ defines a method outside its
-//     class (`std::string PgStore::Get(int)` in the .cpp, `class PgStore` in the
-//     .h), so it has no owner in its own file and rule 1 can never see one. The
-//     qname says `PgStore.Get` because the source wrote `PgStore::`, and the
-//     owner is checked against a class this repo really indexed — so this is a
-//     recorded fact, not a guess. It changes nothing for the other languages:
-//     there, the qname prefix IS the container, so rule 1 already answered.
+//  2. the node's own qname names the owner, and the node is C++. C++ defines a
+//     method outside its class (`std::string PgStore::Get(int)` in the .cpp,
+//     `class PgStore` in the .h), so it has no owner in its own file and rule 1
+//     can never see one. The qname says `PgStore.Get` because the source wrote
+//     `PgStore::`, and the owner is checked against a class this repo really
+//     indexed — so for C++ this is a recorded fact.
+//     It is limited to C++ because nothing here ties the matched node to the
+//     target's REAL parent — only the text of the qname prefix. In every other
+//     language the qname prefix IS the container, so rule 1 has already answered
+//     and this clause can only add wrong owners: a function `render` nested
+//     inside a FUNCTION named `Widget` has the qname `Widget.render`, and a CLASS
+//     named `Widget` in another file would hand it an owner it does not have.
 //
 // A C++ namespace is excluded, unlike a TypeScript one. `namespace X { void f(); }`
 // is reached by writing `X::f()`, never `x.f()`, so a dot in C++ can only mean a
@@ -118,10 +123,10 @@ const memberOwnerSql = (langCol) => `(
   EXISTS (SELECT 1 FROM nodes own WHERE own.id = n.container_id
             AND own.kind IN ${OWNER_KINDS_SQL}
             AND (own.kind <> 'namespace' OR ${langCol} <> 'cpp'))
-  OR EXISTS (SELECT 1 FROM nodes own WHERE own.lang = n.lang
+  OR (n.lang = 'cpp' AND EXISTS (SELECT 1 FROM nodes own WHERE own.lang = 'cpp'
             AND own.qname = substr(n.qname, 1, length(n.qname) - length(n.name) - 1)
             AND own.kind IN ${OWNER_KINDS_SQL}
-            AND (own.kind <> 'namespace' OR ${langCol} <> 'cpp')))`;
+            AND own.kind <> 'namespace')))`;
 const MEMBER_TARGET_OK =
   `(edges.member = 0 OR edges.lang = 'go' OR ${memberOwnerSql('edges.lang')})`;
 

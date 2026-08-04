@@ -7,13 +7,24 @@
 (struct_specifier name: (type_identifier) @name body: (field_declaration_list)) @definition.struct
 
 ;; `class LEVELDB_EXPORT DB { … };`. A macro between `class` and the name makes
-;; tree-sitter read the whole class as a function definition: the class_specifier
-;; keeps only `class LEVELDB_EXPORT`, and the real name lands in the declarator.
-;; Export macros like this are normal in a public C++ header, and without these
-;; two rules the class is missing from the graph and every method written inside
-;; it looks like a free function of the surrounding namespace.
-(function_definition type: (class_specifier) declarator: (identifier) @name) @definition.class
-(function_definition type: (struct_specifier) declarator: (identifier) @name) @definition.struct
+;; tree-sitter read the whole class as a function definition — or, when the class
+;; lists two base classes, as a declaration. Either way the class_specifier keeps
+;; only `class LEVELDB_EXPORT`. Export macros like this are normal in a public C++
+;; header, and without these rules the class is missing from the graph and every
+;; method written inside it looks like a free function of the surrounding
+;; namespace.
+;;
+;; There is no @name capture: which field holds the real name changes with the
+;; shape (`class M X final` puts `final` in the declarator, `class M1 M2 X` puts
+;; M2 there), so the driver reads the name from the source instead and skips the
+;; definition when it cannot — see cppMacroClassName. A real function definition
+;; always has a function_declarator, never a plain identifier, so these rules
+;; cannot match legitimate code; an ordinary `class Foo x;` can match the
+;; declaration rules, and the driver refuses it.
+(function_definition type: (class_specifier) declarator: (identifier)) @definition.class
+(function_definition type: (struct_specifier) declarator: (identifier)) @definition.struct
+(declaration type: (class_specifier) declarator: (identifier)) @definition.class
+(declaration type: (struct_specifier) declarator: (identifier)) @definition.struct
 
 ;; A namespace owns its members, so index it as a definition — the same way a
 ;; TypeScript namespace is indexed. Without it every free function in a repo that

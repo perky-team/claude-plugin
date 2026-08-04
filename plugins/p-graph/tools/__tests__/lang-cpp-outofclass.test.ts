@@ -195,6 +195,80 @@ int main() { double a[1] = {1}; return (int)shape::TotalArea(a, 1); }
     store.close();
   }, 30000);
 
+  it('reads a qualifier that names the namespace it is written inside', async () => {
+    write('src/inner.cc', `namespace a {
+namespace b {
+void f() {}
+void g() { b::f(); }
+}
+}
+`);
+    write('src/other.cc', `namespace b {
+void f() {}
+}
+`);
+    const store = await indexed();
+
+    // `b::f()` written inside `a::b` means `a::b::f`: C++ looks the qualifier up
+    // in the innermost scope first, and `b` names the scope we are already in.
+    // The global namespace `b` holds a DIFFERENT function, so answering with it
+    // is a wrong answer marked certain — and impact follows a certain edge.
+    expect(store.callers('a.b.f').map((n) => n.qname)).toEqual(['a.b.g']);
+    expect(store.callers('b.f')).toEqual([]);
+    expect(store.impact('b.f').map((n) => n.qname)).toEqual([]);
+
+    store.close();
+  }, 30000);
+
+  it('gives two namespaces opened on one line each its own name', async () => {
+    write('src/nest.cc', `namespace a { namespace b { void f() {} } }
+`);
+    write('src/use.cc', `void run() { a::b::f(); }
+`);
+    const store = await indexed();
+
+    // Both namespaces open on line 1, so a parent picked by line alone is the
+    // OUTER one and the function ends up called `a.f`. Then a caller writing
+    // `a::b::f()` resolves to nothing and is silently missing.
+    expect(store.node('a.b.f')).toBeTruthy();
+    expect(store.callers('a.b.f').map((n) => n.qname)).toEqual(['run']);
+
+    store.close();
+  }, 30000);
+
+  it('recovers a class name written after a macro, or indexes no class', async () => {
+    // `class MACRO Name final` and two macros in a row are ordinary modern C++.
+    // The parse is broken either way, so the name has to be read from the source
+    // between the specifier and the body — never from whichever identifier the
+    // declarator field happens to hold.
+    const shape = async (src) => (await cppNodes(src)).nodes.map((n) => n.qname);
+
+    expect(await shape(`class LIB_EXPORT DB final { public: int Get(); };
+`)).toContain('DB');
+    expect(await shape(`class LIB_EXPORT LIB_ABI Store { public: int Put(); };
+`)).toContain('Store');
+    expect(await shape(`class LIB_EXPORT Cache : public Base { public: int Hit(); };
+`)).toContain('Cache');
+    expect(await shape(`class LIB_EXPORT Multi : public A, public B { public: int Ping(); };
+`)).toContain('Multi');
+
+    // A wrong name is worse than no name: it puts every member of the class
+    // under an owner that does not exist.
+    expect(await shape(`class LIB_EXPORT DB final { public: int Get(); };
+`)).not.toContain('final');
+    expect(await shape(`class LIB_EXPORT LIB_ABI Store { public: int Put(); };
+`)).not.toContain('LIB_ABI');
+    expect(await shape(`class LIB_EXPORT Cache : public Base { public: int Hit(); };
+`)).not.toContain('Base');
+
+    // An ordinary declaration of a variable of an existing class is not a broken
+    // parse, so it must not produce a class node named after the variable.
+    expect(await shape(`class Foo x;
+class Foo y = {1};
+struct P { int a; } p;
+`)).toEqual(['P']);
+  }, 30000);
+
   it('keeps a C++ member access away from a namespace function', async () => {
     write('src/util.cpp', `namespace util { void Flush() {} }
 void run(int fd) { fd.Flush(); }
