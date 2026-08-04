@@ -36,6 +36,52 @@ func UseGuessed() {
     store.close();
   }, 30000);
 
+  // The rule this locks in: a caller that is certain by ANY path is certain,
+  // and is reported ONCE. Two things can break it, and both used to pass the
+  // suite: folding the group with MAX instead of MIN buries a certain caller
+  // under the UNVERIFIED heading as soon as some other call site guessed its
+  // way to the same target, and dropping the grouping altogether prints that
+  // caller twice, once per guess value.
+  it('reports a caller reached by both a certain and a guessed edge once, as certain', async () => {
+    write('mix/mix.go', `package mix
+type A struct{}
+func (a *A) Ping() {}
+func Make() *A { return &A{} }
+func Both(a *A) {
+	a.Ping()
+	x := Make()
+	x.Ping()
+}
+func OnlyGuess() {
+	y := Make()
+	y.Ping()
+}
+`);
+    const store = openStore(':memory:');
+    await indexFull({ root: dir, store, ignorePatterns: [] });
+
+    // Both writes two call sites to the same target: one on a typed parameter
+    // (Pass F, a recorded type -> certain) and one on a local typed from a
+    // function's return value, which nothing reads (Pass B's unique bare name
+    // -> a guess). OnlyGuess writes the guessed shape alone.
+    const rows = store.callers('mix.A.Ping')
+      .map((r) => ({ qname: r.qname, guess: r.guess }))
+      .sort((a, b) => a.qname.localeCompare(b.qname));
+    expect(rows).toEqual([
+      { qname: 'mix.Both', guess: 0 },
+      { qname: 'mix.OnlyGuess', guess: 1 },
+    ]);
+
+    // callees folds its groups with its own copy of the same expression, so it
+    // is checked here too: from Both, Ping is certain and listed once.
+    const callees = store.callees('mix.Both')
+      .filter((r) => r.name === 'Ping')
+      .map((r) => ({ qname: r.qname, guess: r.guess }));
+    expect(callees).toEqual([{ qname: 'mix.A.Ping', guess: 0 }]);
+
+    store.close();
+  }, 30000);
+
   it('does not let a guessed edge seed or extend the impact walk, and still walks a certain chain in full', async () => {
     write('svc2/svc2.go', `package svc2
 type A struct{}

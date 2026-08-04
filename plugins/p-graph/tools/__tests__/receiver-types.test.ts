@@ -252,23 +252,37 @@ func Lex(w *buf.Writer) { w.buff.WriteRune('x') }
     store.close();
   }, 30000);
 
-  it('refuses a variable that is assigned two different types', async () => {
-    write('svc/svc.go', `package svc
-type A struct{}
-func (a *A) Run() {}
-type B struct{}
-func (b *B) Run() {}
-func Use(flag bool) {
-	var x *A
-	y := &B{}
-	if flag { x.Run() } else { y.Run() }
-}
+  // Build tags are how one variable really does hold two types. Only one of the
+  // two files below compiles on any given platform, but the index reads both, so
+  // the package-level name `store` carries two recorded types at once. Pass F
+  // must refuse the key instead of answering with whichever type it reads first
+  // — that would be a CERTAIN row naming the wrong platform's type.
+  it('refuses a variable that two files give different types', async () => {
+    write('svc/types.go', `package svc
+type Postgres struct{}
+func (p *Postgres) Get(id string) string { return "" }
+type Memory struct{}
+func (m *Memory) Get(id string) string { return "" }
 `);
-    const store = await indexed();
+    write('svc/store_linux.go', `//go:build linux
+package svc
+var store = &Postgres{}
+`);
+    write('svc/store_windows.go', `//go:build windows
+package svc
+var store = &Memory{}
+`);
+    write('svc/use.go', `package svc
+func Read() string { return store.Get("1") }
+`);
+    const s = await indexed();
 
-    expect(store.callers('svc.A.Run').map((n) => n.qname)).toEqual(['svc.Use']);
-    expect(store.callers('svc.B.Run').map((n) => n.qname)).toEqual(['svc.Use']);
+    // Neither type may claim the call...
+    expect(s.callers('svc.Postgres.Get')).toEqual([]);
+    expect(s.callers('svc.Memory.Get')).toEqual([]);
+    // ...and it must not vanish in silence.
+    expect(s.gapsFor('svc.Postgres.Get').length).toBeGreaterThan(0);
 
-    store.close();
+    s.close();
   }, 30000);
 });
