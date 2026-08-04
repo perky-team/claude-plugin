@@ -52,14 +52,16 @@ workload has no reason to write.
 | function | contract |
 |---|---|
 | `readProfileValue(path)` | first line of the file, trimmed; `null` on missing / unreadable / empty. Never throws. |
-| `resolveProfile({ root, jobsData, config, env })` | `{ name, source, file?, problem? }`. `source` ∈ `env` \| `file` \| `default` \| `none`. `problem` ∈ `file-missing` \| `file-unreadable` \| `unknown-name`, absent when healthy. `name` is whatever was found — including a name absent from the table — and is `null` only when `source` is `none`. **Overrides are applied only when `problem` is absent**, so an unknown name reports itself while behaving as no profile. |
+| `resolveProfile({ root, jobsData, config, env })` | `{ name, source, file?, problem?, warning? }`. `source` ∈ `env` \| `file` \| `default` \| `none`. `name` is whatever was found — including a name absent from the table — and is `null` only when `source` is `none`. `problem` is `unknown-name` and means **the overrides are not applied**. `warning` is `file-missing` \| `file-unreadable`: the configured file could not be read, so resolution fell through to `defaults.profile`; whatever name that yields is still applied. Two fields rather than one because a broken `profileFile` and an unresolvable name have opposite consequences — one keeps a valid profile active, the other cannot. |
 | `validateProfiles(table)` | throws `ValidationError` listing the offending profile/job/field. Called only from CLI commands. |
 | `applyProfile(jobs, table, name)` | returns a NEW job array with the profile's per-job overrides layered on top. Never mutates its input. |
 | `effectiveJobs({ root, jobsData, config, env })` | convenience: resolve + apply, returning `{ jobs, profile }`. The single seam tick / status / run use. |
 
-Overridable fields: `schedule`, `model`, `effort`, `timeoutSec`, `enabled`. Anything else
-in a profile entry is ignored (forward compatibility: an older p-shed reading a newer
-table must not die).
+Overridable fields: `schedule`, `model`, `effort`, `timeoutSec`, `enabled`. An unknown key
+in a profile entry is **an error at the human surfaces and ignored by the tick** — the same
+split as invalid values below. A silently ignored `schedul:` typo is exactly the
+under-pressure failure this feature exists to prevent, while an older p-shed must still
+tick against a newer table rather than halt.
 
 ### Resolution rules
 
@@ -72,7 +74,7 @@ table must not die).
   an unset env var. The file holds "the operator's current choice"; no choice written is
   not a choice to have no profile.
 - **A missing file, an unreadable file, or a name absent from `profiles:` behaves as "no
-  profile" and the tick continues.** The condition is reported (`problem`) in
+  profile" and the tick continues.** The condition is reported (`problem` / `warning`) in
   `profile show` and `status`, never by refusing to tick. Fail toward running: a stopped
   loop is a worse failure than a loop running at its default pace.
 
