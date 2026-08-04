@@ -1,13 +1,15 @@
 import { readJobs, readConfig, readJobState, writeJobState, removeJobState, listStateIds } from './io.mjs';
 import { parseCron, isDue } from './cron.mjs';
 import { runJob as realRunJob } from './launch.mjs';
-import { runGuard as realRunGuard } from './guard.mjs';
+import { runGuard as realRunGuard, guardReason } from './guard.mjs';
 import { appendLog as realAppendLog, rotateLogs as realRotateLogs } from './logs.mjs';
 import { readPause } from './breaker.mjs';
 import { readGlobalPause } from './pause.mjs';
 import { isPidAlive, readPid, writePid, removePid } from './pids.mjs';
 import { findGroupHolder } from './concurrency.mjs';
 import { classifyRun, classifySkipReason, parseUsage, resolveUsageLimitPattern, parseResetAt, truncateOutput } from './classify.mjs';
+import { reclaimOrphanedDeployPauses } from './owner.mjs';
+import { effectiveJobs } from './profile.mjs';
 
 export async function tick({ root, now = Date.now(), deps = {} }) {
   const d = {
@@ -15,20 +17,45 @@ export async function tick({ root, now = Date.now(), deps = {} }) {
     runJob: realRunJob, appendLog: realAppendLog, rotateLogs: realRotateLogs,
     runGuard: (job, defaults) => realRunGuard({ job, defaults, root }),
     isPidAlive, writePid: (id, pid) => writePid(root, id, pid), removePid: (id) => removePid(root, id),
-    readGlobalPause,
+    readGlobalPause, reclaimOrphanedDeployPauses,
     ...deps,
   };
+
+  // Reclaim FIRST. A pause abandoned by a dead `pshed deploy` must be lifted before the
+  // gate below, because that gate short-circuits on ANY marker regardless of origin — a
+  // reclaim placed after it would never run and the loop would stay silently halted.
+  // Only deploy-origin markers are eligible; an operator pause survives untouched.
+  const { reclaimed } = d.reclaimOrphanedDeployPauses(root, { isAlive: d.isPidAlive });
+  const preamble = [];
+  if (reclaimed.length) {
+    preamble.push({ action: 'reclaimed-deploy-pause', reclaimed });
+    // NOT a run record: no job launched, so `job` is explicit null rather than an absent
+    // field, and this gets its own `action` rather than an `outcome` value — the README's
+    // run-log contract promises `ts`/`job`/`durationMs` always and `outcome` only ever
+    // `success`|`failure`|`skipped`|`guard-error` for a real run. A consumer keyed on that
+    // contract (see plugins/p-observe's adapter) needs a distinct, recognisable shape here
+    // instead of a row that quietly fails both promises.
+    d.appendLog(root, { ts: now, job: null, action: 'reclaimed-deploy-pause', reclaimed }, now);
+  }
 
   // Global pause: while run/PAUSED exists the whole scheduler is halted (cron stays
   // installed). This is the FIRST gate in the launch flow — before log rotation and any
   // job evaluation — so a paused tick is a genuine no-op, mirroring the per-job pause
   // marker but for every job at once.
-  if (d.readGlobalPause(root)) return { action: 'tick', paused: true, launched: 0 };
+  if (d.readGlobalPause(root)) return { action: 'tick', paused: true, launched: 0, ...(reclaimed.length ? { reclaimed } : {}) };
 
   d.rotateLogs(root, now);
-  const { defaults, jobs } = d.readJobs(root);
+  const jobsData = d.readJobs(root);
   const config = d.readConfig(root);
-  const results = [];
+  const { defaults } = jobsData;
+  // Speed profile: an operator-owned pace whose ACTIVE value can live outside this
+  // repository (lib/profile.mjs). Overrides are layered in memory only — rewriting
+  // jobs.yml would dirty the working tree of the repo the loop commits to, and the loop
+  // would eventually commit the pace change as if it were its own work. A missing file,
+  // an unknown name or an invalid override never stops the tick: it falls back to the
+  // job's own values and stays visible in `profile show` / `status`.
+  const { jobs } = effectiveJobs({ root, jobsData, config });
+  const results = [...preamble];
 
   for (const job of jobs) {
     if (job.enabled === false) continue;
@@ -79,7 +106,14 @@ export async function tick({ root, now = Date.now(), deps = {} }) {
     let guarded;
     if (job.guard) {
       const g = await d.runGuard(job, defaults);
-      const lastGuard = { at: now, outcome: g.outcome, exit: g.exit };
+      // Keep the guard's own explanation of its decision. A quiet slot writes no history
+      // row (log-noise policy, below) and `status` used to show only `quiet 40s ago`, so
+      // "why did the worker not run at 14:00?" had no answer anywhere — and with composed
+      // guards (`a && b`) no way to tell which link said no. Recorded for all three
+      // outcomes: a pass can usefully say why, and an error usually printed the failure.
+      // Absent rather than '' when the guard printed nothing.
+      const reason = guardReason(g.out);
+      const lastGuard = { at: now, outcome: g.outcome, exit: g.exit, ...(reason ? { reason } : {}) };
       const prevG = d.readJobState(root, job.id) ?? {};
       if (g.outcome === 'quiet') {
         // Log-noise policy: quiet is state-only (lastGuard) — no history line. A

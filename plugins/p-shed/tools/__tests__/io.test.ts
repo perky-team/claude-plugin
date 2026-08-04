@@ -10,12 +10,14 @@ afterEach(() => { rmSync(root, { recursive: true, force: true }); });
 
 describe('io', () => {
   it('readJobs returns empty defaults when missing', () => {
-    expect(readJobs(root)).toEqual({ version: 1, defaults: {}, jobs: [] });
+    expect(readJobs(root)).toEqual({ version: 1, defaults: {}, jobs: [], profiles: {} });
   });
   it('writeJobs round-trips through YAML', () => {
     const data = { version: 1, defaults: { timeoutSec: 900 }, jobs: [{ id: 'a', schedule: '* * * * *', enabled: true, prompt: 'go' }] };
     writeJobs(root, data);
-    expect(readJobs(root)).toEqual(data);
+    // profiles is reported as {} for a file that has no such block, and writeJobs does
+    // not add an empty one — see the round-trip tests in jobs.test.ts.
+    expect(readJobs(root)).toEqual({ ...data, profiles: {} });
   });
   it('job state round-trips through JSON', () => {
     const st = { lastRun: 111, lastExit: 0, pid: null };

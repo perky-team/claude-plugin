@@ -21,13 +21,18 @@ function writeFile(path, content) {
 
 export function readJobs(root) {
   const p = paths(root).jobs;
-  if (!existsSync(p)) return { version: 1, defaults: {}, jobs: [] };
+  if (!existsSync(p)) return { version: 1, defaults: {}, jobs: [], profiles: {} };
   const data = yaml.load(readFileSync(p, 'utf-8')) || {};
-  return { version: data.version ?? 1, defaults: data.defaults ?? {}, jobs: data.jobs ?? [] };
+  return { version: data.version ?? 1, defaults: data.defaults ?? {}, jobs: data.jobs ?? [], profiles: data.profiles ?? {} };
 }
 
 export function writeJobs(root, data) {
-  writeFile(paths(root).jobs, yaml.dump(data));
+  // The speed-profile table has to survive the round trip. setJob/rmJob write back
+  // exactly the object readJobs handed them, so a key dropped on either side is a key
+  // deleted from the operator's file by the next `set-job` — silently.
+  const { profiles, ...rest } = data;
+  const out = profiles && Object.keys(profiles).length ? { ...rest, profiles } : rest;
+  writeFile(paths(root).jobs, yaml.dump(out));
 }
 
 export function readConfig(root) {

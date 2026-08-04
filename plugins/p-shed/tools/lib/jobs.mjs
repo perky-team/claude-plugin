@@ -3,7 +3,28 @@ import { parseCron } from './cron.mjs';
 
 export class ValidationError extends Error {}
 
-const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh'];
+export const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh'];
+
+// One definition of "is this a legal value for this job field", shared by setJob and the
+// speed-profile table (lib/profile.mjs). Returns a message, or null when valid. Two
+// copies of these rules is exactly how `set-job` and a profile override end up
+// disagreeing about what `effort: turbo` means.
+export function jobFieldError(field, value) {
+  switch (field) {
+    case 'schedule':
+      try { parseCron(value); return null; } catch (e) { return `invalid cron: ${e.message}`; }
+    case 'effort':
+      return EFFORT_LEVELS.includes(value) ? null : `invalid effort: ${value} (expected one of ${EFFORT_LEVELS.join(', ')})`;
+    case 'timeoutSec':
+      return Number.isFinite(value) && value > 0 ? null : `invalid timeoutSec: ${value} (expected a positive number)`;
+    case 'enabled':
+      return typeof value === 'boolean' ? null : `invalid enabled: ${value} (expected true or false)`;
+    case 'model':
+      return typeof value === 'string' && value.length > 0 ? null : `invalid model: ${value} (expected a name)`;
+    default:
+      return null;
+  }
+}
 
 export function slugify(text) {
   return String(text)
@@ -30,10 +51,12 @@ export function setJob(root, spec) {
     if (!spec.prompt) throw new ValidationError('prompt is required');
   }
   const schedule = spec.schedule ?? existing.schedule;
-  try { parseCron(schedule); } catch (e) { throw new ValidationError(`invalid cron: ${e.message}`); }
+  const scheduleErr = jobFieldError('schedule', schedule);
+  if (scheduleErr) throw new ValidationError(scheduleErr);
 
-  if (spec.effort !== undefined && !EFFORT_LEVELS.includes(spec.effort)) {
-    throw new ValidationError(`invalid effort: ${spec.effort} (expected one of ${EFFORT_LEVELS.join(', ')})`);
+  if (spec.effort !== undefined) {
+    const effortErr = jobFieldError('effort', spec.effort);
+    if (effortErr) throw new ValidationError(effortErr);
   }
 
   // guard: a shell command; '' is the documented clear sentinel (--guard "").

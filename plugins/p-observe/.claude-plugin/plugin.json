@@ -1,6 +1,6 @@
 {
   "name": "p-observe",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Zero-touch realtime observability for perky.team plugins. Watches p-shed/p-tasks/p-graph/p-wiki runtime state and emits a normalized human-readable event stream. Commands (tool `pobserve`): watch, status, capture, tui. Skills: init, watch, tui, help.",
   "author": {
     "name": "Andrey Sukharev",

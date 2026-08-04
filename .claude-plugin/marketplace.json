@@ -19,7 +19,7 @@
     {
       "name": "p-tasks",
       "source": "./plugins/p-tasks",
-      "description": "Task tracker (task → sub-task) with FS and Jira destinations, one-way sync. Skills: init, add, set, next, summary, sync."
+      "description": "Task tracker (task → sub-task) with FS and Jira destinations, one-way sync. CLI `ptasks guard` answers \"is there work?\" as a p-shed guard (exit 0 launch / 75 quiet, --exclude-origin skips items parked on a human), reusing next's selection rules. Skills: init, add, set, next, summary, list, sync."
     },
     {
       "name": "p-statusline",
@@ -34,7 +34,7 @@
     {
       "name": "p-shed",
       "source": "./plugins/p-shed",
-      "description": "Scheduler/launcher for Claude Code headless runs: cron-scheduled `claude -p` launches with timeout, duplicate guard, catch-up, and log rotation. Skills: init, start, stop, job."
+      "description": "Scheduler/launcher for Claude Code headless runs: cron-scheduled `claude -p` launches with timeout, duplicate guard, catch-up, and log rotation. Per-job guard command gates each launch (0 launch / 75 quiet / else breaker), and its last stdout line is kept as the reason `status` shows. Speed profiles make pace one word: a `profiles:` table in jobs.yml, an active name resolved from PSHED_PROFILE / a file outside the scheduled repo / defaults.profile, applied in memory by tick, status and run alike. Maintenance windows via `deploy`. Skills: init, start, stop, job, reset-breaker."
     },
     {
       "name": "p-observe",

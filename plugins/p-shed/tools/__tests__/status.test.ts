@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { collectStatus, formatHuman } from '../lib/status.mjs';
 import { writeJobs, writeJobState, paths } from '../lib/io.mjs';
-import { pausePath } from '../lib/breaker.mjs';
+import { pausePath, writePause } from '../lib/breaker.mjs';
 import { writeGlobalPause } from '../lib/pause.mjs';
 import { writePid } from '../lib/pids.mjs';
 
@@ -54,6 +54,49 @@ describe('collectStatus', () => {
     expect(a).toMatchObject({ lastSkipReason: 'usage-limit', lastSkipResetAt: '3am' });
     expect(formatHuman(status)).toContain('usage-limit');
   });
+
+  // I2: `status` used to read only `gp.reason` / a job's reason, so a live `deploy`
+  // holding the loop open was INDISTINGUISHABLE from an operator pause someone forgot to
+  // `resume` — exactly the confusion `origin` exists to remove (resetBreaker already
+  // makes this distinction, reporting `deployPause: true`).
+  it('surfaces pauseOrigin for both the global marker and a per-job pause', () => {
+    writeJobs(root, { version: 1, defaults: {}, jobs: [
+      { id: 'worker', schedule: '* * * * *', enabled: true, prompt: 'go' },
+    ] });
+    writeGlobalPause(root, { reason: 'deploying prompt update', origin: 'deploy', now: 1 });
+    writePause(root, 'worker', { reason: 'deploying prompt update', origin: 'deploy' });
+
+    const status = collectStatus(root);
+    expect(status.pauseOrigin).toBe('deploy');
+    const worker = status.jobs.find((j: any) => j.id === 'worker');
+    expect(worker).toMatchObject({ paused: true, pauseOrigin: 'deploy' });
+  });
+
+  it('leaves pauseOrigin undefined for a plain operator/self pause (additive, not a new required field)', () => {
+    writeJobs(root, { version: 1, defaults: {}, jobs: [
+      { id: 'selfpaused', schedule: '* * * * *', enabled: true, prompt: 'go' },
+    ] });
+    mkdirSync(paths(root).runDir, { recursive: true });
+    writeFileSync(pausePath(root, 'selfpaused'), 'verify red', 'utf-8'); // no header -> self
+    const status = collectStatus(root);
+    expect(status.pauseOrigin).toBeUndefined(); // no global marker at all
+    const j = status.jobs.find((x: any) => x.id === 'selfpaused');
+    expect(j).toMatchObject({ pauseOrigin: 'self' });
+  });
+
+  // `writeGlobalPause` only ever writes an explicit `origin` field for a deploy pause — a
+  // plain `pshed pause --reason ...` writes none (see lib/pause.mjs) — so a present marker
+  // with no `origin` key can only be an ordinary operator pause. Before this fix, that case
+  // reported `pauseOrigin: undefined`, which a JSON consumer cannot tell apart from "marker
+  // present but truly unknown"; per-job status never has this ambiguity, since a written
+  // header always says which non-self origin it is.
+  it('reports pauseOrigin "operator" for a global marker with no explicit origin field', () => {
+    writeJobs(root, { version: 1, defaults: {}, jobs: [] });
+    writeGlobalPause(root, { reason: 'reconfiguring', now: 1 }); // no origin arg -> operator
+    const status = collectStatus(root);
+    expect(status.paused).toBe(true);
+    expect(status.pauseOrigin).toBe('operator');
+  });
 });
 
 describe('formatHuman', () => {
@@ -67,5 +110,33 @@ describe('formatHuman', () => {
     expect(text).toMatch(/installed:\s*false/);
     expect(text).toMatch(/paused:\s*true/);
     expect(text).toContain('a');
+  });
+
+  // I2: the origin must be visible in the human table too, not just the JSON — status
+  // --human is the surface the README points an operator at.
+  it('shows a non-operator pause origin on the global line and in a per-job column', () => {
+    const status: any = {
+      action: 'status', task: 'pshed-abc', installed: false,
+      paused: true, pauseReason: 'deploying prompt update', pauseOrigin: 'deploy',
+      jobs: [{
+        id: 'worker', enabled: true, running: false, paused: true,
+        pauseReason: 'deploying prompt update', pauseOrigin: 'deploy',
+        breakerTripped: false, consecutiveFailures: 0, lastRun: 1, lastExit: 0,
+      }],
+    };
+    const text = formatHuman(status);
+    expect(text).toMatch(/paused:\s*true \(deploying prompt update\) \[deploy\]/);
+    const jobLine = text.split('\n').find((l) => l.startsWith('worker\t'));
+    expect(jobLine).toBeDefined();
+    expect(jobLine).toContain('deploy');
+  });
+
+  it('does not annotate an ordinary operator pause with a redundant [operator] tag', () => {
+    const status: any = {
+      action: 'status', task: 'pshed-abc', installed: false,
+      paused: true, pauseReason: 'by hand', pauseOrigin: 'operator',
+      jobs: [],
+    };
+    expect(formatHuman(status)).not.toContain('[operator]');
   });
 });

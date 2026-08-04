@@ -70,7 +70,16 @@ Pure scheduler/launcher. Key decisions:
   and **the reason stays plain text** (`status`'s `pauseReason` / `--human` column and
   the tick's `skipped-paused` are where a human reads it — a JSON blob there is a
   regression). Pausing an already-paused job keeps the FIRST reason: it explains why
-  the job actually stopped.
+  the job actually stopped — **except an operator pause landing on a still-live
+  `deploy`-origin marker, which takes OWNERSHIP of it instead** (origin flips to
+  `operator`, and the reason is replaced when one is given). Without that exception, a
+  human's incident halt placed mid-deploy would be silently lifted the instant the
+  deploy finished and released — `release()` only ever clears a marker still carrying
+  ITS OWN origin (see `dropOwnPauses` in `lib/deploy.mjs`), so flipping the origin is
+  what makes the halt survive. Every other combination — self/self, operator/operator,
+  self walked into by an operator — keeps the first reason unchanged; this is the one
+  carve-out, and it exists only because `deploy` release is the one actor that would
+  otherwise auto-clear a marker a human is actively relying on.
 - **Three-way run classification, not two.** `tick` no longer branches on `exit === 0`
   alone; it calls `classifyRun(exit, out, err)` (`lib/classify.mjs`) → `success` |
   `usage_limit` | `failure`. A Claude usage-limit or transient API overload (`429`/`529`,
@@ -125,3 +134,27 @@ Pure scheduler/launcher. Key decisions:
   NO history-log line — state (`lastGuard`) + `status` only. `run <id>` respects
   the guard (`--no-guard` bypasses) and stays stateless.
 - Deps vendored via `scripts/vendor-deps.mjs` (js-yaml only), same pattern as p-tasks.
+- **`wait-idle` waits; the TICK still never does.** The "not now, next tick" rule above
+  governs the scheduler: a held concurrency group is a skip, never a queue or a lock, and
+  that must not change. `wait-idle` and `deploy` are foreground OPERATOR commands — a
+  human (or a deploy script) is blocked on them, no job's `timeoutSec` budget is being
+  charged, and nothing is queued. Do not "unify" the two by teaching the tick to wait, and
+  do not delete the wait as a violation of the tick's rule: they answer different questions.
+- **The deploy dance is ordered, and the order is load-bearing.** wait-idle → pause →
+  re-check → run → release. Pausing FIRST silences every job, chat included, for the whole
+  remaining run of an in-flight worker (measured: 20 minutes of silence); waiting first
+  costs seconds. The re-check exists because a job can launch in the gap; when it does,
+  `deploy` undoes only its own pause and waits again.
+- **Ownership is a file, not a signal trap.** `run/DEPLOY` names the process holding a
+  deploy pause, and `tick` reclaims a deploy-origin marker whose owner is dead — BEFORE
+  its global-pause gate, since that gate short-circuits on any marker regardless of
+  origin. This is not belt-and-braces: measured, a Node process on Windows receives
+  neither SIGTERM nor SIGINT, so a trap cannot be the mechanism there at all. Do not put
+  the owner pid in the pause header — `#pshed origin=deploy pid=123` fails `ORIGIN_HEADER`,
+  reads back as a SELF pause, and `reset-breaker` on an unrelated job then deletes a live
+  deploy's pause. Do not name the file `*.pid` either: `listPidEntries` would invent a
+  phantom job for `status` and `stop --kill`.
+- **`deploy` has no `--id`, and rejects it loudly.** Pausing one job while a groupmate
+  keeps writing the same checkout is a window that only looks safe. `parseArgs` swallows
+  unknown flags, so ignoring `--id` would silently mean "pause everything" — the same
+  blast-radius widening `lib/target.mjs` exists to prevent.

@@ -7,6 +7,30 @@ import { killTree } from './launch.mjs';
 // as eternal quiet — the classic fail-open reader defect.
 export const GUARD_QUIET_EXIT = 75;
 
+// Cap for the reason kept in state. The full stdout is capped at 64 KB below, and
+// state/<id>.json is rewritten on EVERY tick — keeping the whole tail there would make
+// a per-minute JSON write unboundedly large for the sake of one status column.
+export const GUARD_REASON_MAX = 120;
+
+// The guard's own one-line explanation of its decision, distilled from stdout.
+//
+// LAST non-empty line, not the first: `guard: a && b` is the supported way to compose
+// conditions and a shell chain prints in order, so the last line comes from the link
+// that actually decided. Whitespace is collapsed because the value lands in a
+// tab-separated status row, where a stray newline would render as a fake job row.
+// Returns '' — never null — so callers can spread it in conditionally and simply omit
+// the field rather than storing an empty string.
+export function guardReason(out) {
+  if (typeof out !== 'string' || out.length === 0) return '';
+  const lines = out.split('\n');
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].replace(/\s+/g, ' ').trim();
+    if (!line) continue;
+    return line.length > GUARD_REASON_MAX ? `${line.slice(0, GUARD_REASON_MAX - 3)}...` : line;
+  }
+  return '';
+}
+
 // Execute a job's guard command and classify the result:
 //   exit 0  -> 'pass'  (launch the job)
 //   exit 75 -> 'quiet' (skip silently — not a failure)

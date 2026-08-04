@@ -8,6 +8,13 @@ const today = () => new Date().toISOString().slice(0, 10);
 
 function recordToEvent(rec) {
   const job = rec.job ?? '-';
+  // A reclaim row is not a run: it carries no `exit`, so without this branch it fell
+  // through every check below straight to the final `job.launched` fallback — a phantom
+  // "launched" event for job "-" on every tick that lifted an abandoned deploy pause.
+  if (rec.action === 'reclaimed-deploy-pause') {
+    const count = Array.isArray(rec.reclaimed) ? rec.reclaimed.length : 0;
+    return makeEvent('p-shed', 'deploy.reclaimed', job, `reclaimed ${count} pause(s)`, rec, rec.ts);
+  }
   if (rec.action && rec.action !== 'launched') {
     const kind = { skipped: 'job.skipped', 'not-due': 'job.notdue', baselined: 'job.baselined' }[rec.action];
     if (!kind) return makeEvent('p-shed', 'job.action', job, `${rec.action}`, rec, rec.ts);

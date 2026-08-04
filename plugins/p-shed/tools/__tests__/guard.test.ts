@@ -2,7 +2,7 @@ import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { runGuard, GUARD_QUIET_EXIT } from '../lib/guard.mjs';
+import { runGuard, GUARD_QUIET_EXIT, guardReason, GUARD_REASON_MAX } from '../lib/guard.mjs';
 
 let root: string;
 beforeEach(() => { root = mkdtempSync(join(tmpdir(), 'pshed-runguard-')); });
@@ -92,5 +92,37 @@ describe('runGuard', () => {
       await runGuard({ job: job(marker), defaults: { cwd: sub }, root });
       expect(existsSync(join(sub, 'guard-was-here.txt'))).toBe(true);
     } finally { rmSync(sub, { recursive: true, force: true }); }
+  });
+});
+
+describe('guardReason', () => {
+  it('takes the last non-empty line — the link of an `a && b` chain that decided', () => {
+    expect(guardReason('checking chat\nno pending questions\n')).toBe('no pending questions');
+  });
+
+  it('ignores trailing blank lines and whitespace-only lines', () => {
+    expect(guardReason('decided\n\n   \n\n')).toBe('decided');
+  });
+
+  it('collapses internal whitespace so the status table stays one row per job', () => {
+    expect(guardReason('no   work:\t3 open')).toBe('no work: 3 open');
+  });
+
+  it('returns empty for empty, whitespace-only, or absent stdout', () => {
+    expect(guardReason('')).toBe('');
+    expect(guardReason('   \n\t\n')).toBe('');
+    expect(guardReason(undefined)).toBe('');
+    expect(guardReason(null)).toBe('');
+  });
+
+  it('caps a long single line', () => {
+    const long = guardReason('x'.repeat(5000));
+    expect(long.length).toBeLessThanOrEqual(GUARD_REASON_MAX);
+    expect(long.endsWith('...')).toBe(true);
+  });
+
+  it('leaves a line exactly at the cap untouched', () => {
+    const exact = 'y'.repeat(GUARD_REASON_MAX);
+    expect(guardReason(exact)).toBe(exact);
   });
 });

@@ -1,0 +1,247 @@
+import { isPidAlive } from './pids.mjs';
+import { listHolders, waitForIdle } from './idle.mjs';
+import { readDeployOwner, writeDeployOwner, removeDeployOwner } from './owner.mjs';
+import { writeGlobalPause, removeGlobalPause, readGlobalPause } from './pause.mjs';
+import { writePause, readPauseRecord, removePause } from './breaker.mjs';
+import { resolveGroup } from './concurrency.mjs';
+
+const realSleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const noop = () => {};
+
+// The deploy dance. The ORDER is the feature:
+//   own -> wait -> pause -> re-check -> run -> release
+// Pausing before waiting for idle silences every job — including the read-only chat
+// ones — for the entire remaining run of an in-flight worker; measured on the live
+// system as 20 minutes of silence. Waiting first costs about four seconds.
+//
+// The re-check exists because a job can launch in the gap between "idle" and "paused".
+// When that happens we undo our own pause and go back to waiting, inside whatever is
+// left of the timeout, rather than deploying into a live run.
+//
+// onStep fires AFTER the operation for 'wait' / 'recheck' / 'run' (reporting what just
+// happened) but BEFORE the operation for 'pause' / 'release' (reporting what is about to
+// happen) — a caller reusing this hook for live progress display needs to know which.
+export async function runDeploy({
+  root, jobs = [], defaults = {}, group = null, reason,
+  timeoutMs = 1_800_000, pollMs = 1000,
+  cmd, args = [], pid = process.pid, deps = {},
+} = {}) {
+  const d = {
+    waitForIdle, listHolders, isAlive: isPidAlive,
+    now: () => Date.now(), sleep: realSleep, onStep: noop, isAborted: () => false,
+    spawn: null, // required; the CLI injects the real one
+    ...deps,
+  };
+  const scope = group ? 'group' : 'global';
+
+  // run/DEPLOY has ONE slot, not a lock — two overlapping `deploy` invocations would
+  // otherwise both overwrite it and run their commands side by side, which is exactly
+  // the double-launch this command exists to prevent (a live deploy pause then also
+  // looks like an orphan to whichever of the two exits first, and its release() deletes
+  // the survivor's ownership — see the release() fix below). So refuse outright when the
+  // current owner is a LIVE pid. A dead or absent owner is NOT refused: it is overwritten
+  // below exactly as before, so a crashed deploy can never wedge every later one.
+  //
+  // This check is inherently best-effort: a second `deploy` can still slip through in
+  // the window between this read and writeDeployOwner() below. That race is accepted,
+  // not fixed — run/DEPLOY is a marker, not a mutex (see CLAUDE.md), and closing it
+  // would mean building real lock semantics this file deliberately does not have.
+  const existingOwner = readDeployOwner(root);
+  if (existingOwner && d.isAlive(existingOwner.pid)) {
+    const reasonText = existingOwner.reason ? `"${existingOwner.reason}"` : 'unknown';
+    // Named recovery, not just a diagnosis: `isAlive` only checks that SOME process has
+    // this pid, and pids get recycled (aggressively on Windows) — a killed deploy's pid
+    // can be reassigned to an unrelated process, which then reads as "still busy" forever.
+    // The tick's own orphan reclaim normally clears a dead owner within a minute, but with
+    // cron torn down (`pshed stop`) nothing sweeps run/DEPLOY at all, and there was no
+    // lever to clear it by hand short of knowing the file's path already.
+    return {
+      outcome: 'busy', exit: 2, waitedMs: 0, attempts: 0,
+      scope, group, pausedIds: [], ownedGlobal: false, preserved: [],
+      holder: { pid: existingOwner.pid, reason: existingOwner.reason ?? null },
+      message: `another deploy is in progress (pid ${existingOwner.pid}, reason ${reasonText}); `
+        + `if pid ${existingOwner.pid} has since been reused by an unrelated process, delete `
+        + `.pshed/run/DEPLOY to clear the stale marker`,
+    };
+  }
+
+  const started = d.now();
+  const remaining = () => Math.max(0, timeoutMs - (d.now() - started));
+  const members = () => jobs.filter((j) => resolveGroup(j, defaults) === group).map((j) => j.id);
+
+  // Ownership is claimed BEFORE any pause, so the "marker exists, owner unknown" window
+  // cannot open. If this process dies from here on, the next tick reclaims whatever it
+  // placed — the only recovery path on Windows, where no signal reaches a handler.
+  writeDeployOwner(root, { pid, scope, group, reason, now: d.now() });
+
+  let pausedIds = [];
+  let ownedGlobal = false;
+  let preserved = [];
+  let attempts = 0;
+
+  // Clears whatever pauses THIS run placed (never one it walked into) — shared by the
+  // mid-loop "undo" (a job started in the gap between idle and paused) and by release()
+  // below, so a future change to how placed pauses are cleared has exactly one place to
+  // edit. Each removal is isolated in its own try/catch: rmSync({force:true}) suppresses
+  // ENOENT but still throws on a real I/O failure (a locked file, a permission error —
+  // a live concern on Windows), and one such failure must not stop the rest of the
+  // cleanup, nor ever throw out of here. Failures come back as short messages.
+  //
+  // Re-reads each marker before removing it, and skips one ONLY when the re-read
+  // positively confirms its origin is no longer 'deploy'. An operator `pause` landing on
+  // one of these markers while this deploy is still running takes ownership of it (see
+  // writeGlobalPause / writePause) precisely so this check can catch it — without the
+  // re-read, this would blindly delete-by-path and wipe out a human's halt the instant
+  // this run released, which is the mirror image of the bug the orphan reclaim exists to
+  // prevent (that one never lifts an operator pause either).
+  //
+  // Deliberately NOT the inverse (remove only when origin reads back as 'deploy'): both
+  // readGlobalPause and readPauseRecord fold a genuine I/O failure — not "an operator
+  // took it", something else entirely, e.g. the marker path colliding with a directory —
+  // into a falsy/originless result, and this run KNOWS it wrote 'deploy' as the origin
+  // (ownedGlobal / pausedIds are only populated right after doing exactly that). So the
+  // absence of positive evidence of a takeover means "still ours" and the removal is
+  // still attempted, exactly as before — a real fs error surfaces in `errors` instead of
+  // being silently swallowed into "must have been taken over".
+  //
+  // A skipped marker is not an error and must not be discarded either: the caller (the
+  // 'ok' report, in particular) has no other way to learn that a pause it thinks it
+  // "released" is actually still standing, now owned by whoever took it over. So every
+  // skip is collected into `takenOver` — {scope, id?, origin, reason} — and returned
+  // alongside `errors` for release() to pass up to the final result.
+  const dropOwnPauses = () => {
+    const errors = [];
+    const takenOver = [];
+    if (ownedGlobal) {
+      try {
+        const cur = readGlobalPause(root);
+        const wasTakenOver = cur != null && cur.origin != null && cur.origin !== 'deploy';
+        if (wasTakenOver) takenOver.push({ scope: 'global', origin: cur.origin, reason: cur.reason ?? null });
+        else removeGlobalPause(root);
+      } catch (err) { errors.push(`removeGlobalPause: ${err.message}`); }
+    }
+    for (const id of pausedIds) {
+      try {
+        const cur = readPauseRecord(root, id);
+        const wasTakenOver = cur != null && cur.origin !== 'deploy';
+        if (wasTakenOver) takenOver.push({ scope: 'job', id, origin: cur.origin, reason: cur.reason ?? null });
+        else removePause(root, id);
+      } catch (err) { errors.push(`removePause(${id}): ${err.message}`); }
+    }
+    pausedIds = [];
+    ownedGlobal = false;
+    return { errors, takenOver };
+  };
+
+  // Unconditional: success, non-zero exit, a throw, or (on POSIX) a signal that got this
+  // far all call this. A deploy that dies holding a global pause takes the whole loop
+  // down, so release() must never itself throw — a cleanup failure is recorded here
+  // instead of raised, and the finally block below attaches it onto the result the try
+  // block already produced rather than letting it replace that result.
+  const release = () => {
+    const { errors, takenOver } = dropOwnPauses();
+    // Only remove run/DEPLOY when it still names OUR pid. Another `deploy` can have
+    // overwritten it after this run's ownership check above (the accepted race) or —
+    // before the refusal check existed — two deploys could both be running at once; in
+    // either case an unconditional removeDeployOwner() here would delete a LIVE deploy's
+    // ownership out from under it, which is exactly what let the tick misread that
+    // deploy's still-active pause as an orphan and reclaim it mid-run.
+    try {
+      const owner = readDeployOwner(root);
+      if (owner && owner.pid === pid) removeDeployOwner(root);
+    } catch (err) { errors.push(`removeDeployOwner: ${err.message}`); }
+    return { errors, takenOver };
+  };
+
+  let result;
+  try {
+    for (;;) {
+      attempts++;
+      const waited = await d.waitForIdle({
+        root, jobs, defaults, group, timeoutMs: remaining(), pollMs,
+        isAlive: d.isAlive, now: d.now, sleep: d.sleep, isAborted: d.isAborted,
+      });
+      d.onStep('wait');
+      if (!waited.idle) {
+        // Nothing was paused and nothing ran — the honest failure, whether the wait ran
+        // out or the operator interrupted it. Ownership is dropped by the finally below.
+        // `preserved` reflects this run's actual state, not a literal: on attempt 1 it is
+        // still the initial [] (nothing has been placed yet), but after an undo-and-retry
+        // it may hold pre-existing pauses walked into last attempt — dropOwnPauses() never
+        // touches those, so they are still genuinely sitting on disk when this fires again.
+        result = {
+          outcome: waited.aborted ? 'aborted' : 'timeout', exit: waited.aborted ? 130 : 1,
+          waitedMs: d.now() - started, attempts,
+          scope, group, pausedIds: [], ownedGlobal: false, preserved, holders: waited.holders,
+        };
+        return result;
+      }
+
+      d.onStep('pause');
+      preserved = [];
+      if (scope === 'global') {
+        const before = readGlobalPause(root);
+        if (before) preserved.push({ scope: 'global' });
+        else { writeGlobalPause(root, { reason, origin: 'deploy', now: d.now() }); ownedGlobal = true; }
+      } else {
+        for (const id of members()) {
+          const existing = readPauseRecord(root, id);
+          if (existing) { preserved.push({ scope: 'job', id, origin: existing.origin }); continue; }
+          writePause(root, id, { reason, origin: 'deploy' });
+          pausedIds.push(id);
+        }
+      }
+
+      const stragglers = d.listHolders({ root, jobs, defaults, group, isAlive: d.isAlive });
+      d.onStep('recheck');
+      if (stragglers.length === 0) break;
+
+      // A job started in the gap. Undo only what we placed, then wait again.
+      d.onStep('undo');
+      dropOwnPauses();
+      if (remaining() === 0) {
+        result = {
+          outcome: 'timeout', exit: 1, waitedMs: d.now() - started, attempts,
+          scope, group, pausedIds: [], ownedGlobal: false, preserved, holders: stragglers,
+        };
+        return result;
+      }
+      // Rate-limit the retry the same way waitForIdle rate-limits its own polling. In
+      // ordinary operation waitForIdle's own poll loop already paces this (the straggler
+      // it just saw is still live, so the next waitForIdle call sleeps before its first
+      // re-check) — this only matters in the unlucky case where the straggler finishes
+      // between the recheck above and the next waitForIdle call, which would otherwise
+      // loop back to 'pause' with no delay at all. Effectively unreachable in practice,
+      // but nothing above prevented it from spinning.
+      await d.sleep(pollMs);
+    }
+
+    const spawned = await d.spawn({ cmd, args });
+    d.onStep('run');
+    result = {
+      outcome: 'ok', exit: spawned.exit, signal: spawned.signal ?? null,
+      waitedMs: d.now() - started, attempts, scope, group,
+      pausedIds: [...pausedIds], ownedGlobal, preserved,
+    };
+    return result;
+  } finally {
+    d.onStep('release');
+    const { errors: releaseErrors, takenOver } = release();
+    // Attach onto the object the try block already built, rather than letting release()
+    // stand in for it: `return result` above already captured the reference before this
+    // finally runs, and mutating it here is visible on the value the caller receives. If
+    // the try block never got as far as building a result (spawn threw, or a signal cut
+    // in), there is nothing to attach to — the original error/interrupt still propagates
+    // once this finally exits, since release() never throws.
+    //
+    // `takenOver` is what makes an operator's mid-run pause visible on the 'ok' outcome:
+    // this run genuinely placed the pause and the command genuinely ran, but if an
+    // operator took ownership of the marker while the command was running, release()
+    // left it standing on purpose (see dropOwnPauses above) — the report and its exit
+    // code must not read as "released" when a halt is still in effect.
+    if (result) {
+      result.releaseErrors = releaseErrors;
+      result.takenOver = takenOver;
+    }
+  }
+}

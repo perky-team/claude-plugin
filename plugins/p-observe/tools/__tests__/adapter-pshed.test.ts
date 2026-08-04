@@ -35,6 +35,30 @@ describe('pshed adapter backfill', () => {
     expect(events[1]).toMatchObject({ entity: 'sync', kind: 'job.skipped', severity: 'info' });
   });
 
+  // I3: a reclaim row (`{ ts, job: null, action: 'reclaimed-deploy-pause', reclaimed }`,
+  // see p-shed's lib/tick.mjs) has neither `exit` (not a completion) nor a recognised
+  // `action` in the skipped/not-due/baselined map. Before p-shed's OWN fix, the row it
+  // actually wrote had no `action` field at all (`{ ts, outcome: 'reclaimed-deploy-pause',
+  // reclaimed }`) and fell all the way through this adapter's fallback to a phantom
+  // `job.launched` for job "-" on every tick that lifted an abandoned deploy pause — a
+  // launch event with no job and no launch behind it. This test feeds the adapter the
+  // NEW row shape p-shed now actually writes and checks it renders as a distinct,
+  // recognisable kind instead of any launch-shaped event.
+  it('renders a deploy-pause reclaim distinctly instead of a phantom job.launched', () => {
+    const { p, events, adapter } = setup();
+    mkdirSync(p.pshedLogsDir, { recursive: true });
+    const today = new Date().toISOString().slice(0, 10);
+    const line = JSON.stringify({ ts: 5, job: null, action: 'reclaimed-deploy-pause', reclaimed: [{ scope: 'global' }] }) + '\n';
+    writeFileSync(join(p.pshedLogsDir, `${today}.jsonl`), line);
+
+    adapter.backfill();
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ kind: 'deploy.reclaimed', entity: '-', severity: 'warn' });
+    expect(events[0].kind).not.toBe('job.launched');
+    expect(events[0].summary).toContain('1');
+  });
+
   it('marks a non-zero exit completion as error', () => {
     const { p, events, adapter } = setup();
     mkdirSync(p.pshedLogsDir, { recursive: true });

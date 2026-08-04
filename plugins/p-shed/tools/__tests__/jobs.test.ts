@@ -1,9 +1,9 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { setJob, rmJob, slugify, ValidationError } from '../lib/jobs.mjs';
-import { readJobs } from '../lib/io.mjs';
+import { setJob, rmJob, slugify, ValidationError, jobFieldError, EFFORT_LEVELS } from '../lib/jobs.mjs';
+import { readJobs, writeJobs, paths } from '../lib/io.mjs';
 
 let root: string;
 beforeEach(() => { root = mkdtempSync(join(tmpdir(), 'pshed-jobs-')); });
@@ -92,5 +92,50 @@ describe('rmJob', () => {
     expect(rmJob(root, 'a')).toBe(true);
     expect(rmJob(root, 'a')).toBe(false);
     expect(readJobs(root).jobs).toHaveLength(0);
+  });
+});
+
+describe('jobs.yml round trip', () => {
+  it('set-job preserves a profiles: block instead of silently deleting it', () => {
+    writeJobs(root, {
+      version: 1, defaults: {}, jobs: [{ id: 'a', schedule: '* * * * *', prompt: 'go' }],
+      profiles: { eco: { a: { schedule: '0 */3 * * *' } } },
+    });
+    setJob(root, { id: 'a', schedule: '*/5 * * * *' });
+    expect(readJobs(root).profiles).toEqual({ eco: { a: { schedule: '0 */3 * * *' } } });
+  });
+
+  it('rm-job preserves it too', () => {
+    writeJobs(root, {
+      version: 1, defaults: {}, jobs: [{ id: 'a', schedule: '* * * * *', prompt: 'go' }, { id: 'b', schedule: '* * * * *', prompt: 'go' }],
+      profiles: { eco: { a: { enabled: false } } },
+    });
+    rmJob(root, 'b');
+    expect(readJobs(root).profiles).toEqual({ eco: { a: { enabled: false } } });
+  });
+
+  it('reports an absent profiles: block as {} and does not write an empty one', () => {
+    writeJobs(root, { version: 1, defaults: {}, jobs: [] });
+    expect(readJobs(root).profiles).toEqual({});
+    expect(readFileSync(paths(root).jobs, 'utf-8')).not.toContain('profiles');
+  });
+});
+
+describe('jobFieldError', () => {
+  it('accepts valid values', () => {
+    expect(jobFieldError('schedule', '*/5 * * * *')).toBeNull();
+    expect(jobFieldError('effort', 'high')).toBeNull();
+    expect(jobFieldError('timeoutSec', 60)).toBeNull();
+    expect(jobFieldError('enabled', false)).toBeNull();
+    expect(jobFieldError('model', 'sonnet')).toBeNull();
+  });
+  it('rejects invalid ones with setJob-identical wording', () => {
+    expect(jobFieldError('effort', 'turbo')).toBe(`invalid effort: turbo (expected one of ${EFFORT_LEVELS.join(', ')})`);
+    expect(jobFieldError('schedule', 'nope')).toMatch(/^invalid cron: /);
+    expect(jobFieldError('timeoutSec', 0)).toMatch(/^invalid timeoutSec: /);
+    expect(jobFieldError('enabled', 'yes')).toMatch(/^invalid enabled: /);
+  });
+  it('ignores fields it does not own', () => {
+    expect(jobFieldError('prompt', 42)).toBeNull();
   });
 });
