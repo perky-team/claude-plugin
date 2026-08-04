@@ -96,15 +96,7 @@ So a call can resolve to the wrong package's symbol. The `count(DISTINCT ft.type
 
 So a stale row survives until the next `--full`.
 
-### 11. The evidence for "0 of 1,352 certain rows false" is not in the repo
-
-It lives in `.superpowers/sdd/task-9-report.md`, which is git-ignored scratch on
-one machine. It is this work's strongest claim and nobody can audit it from the
-repo. **Move that table next to `2026-08-01-p-graph-correct-answers-results.md`
-before the scratch folder is cleaned** — `git clean -fdx` destroys it and there
-is no second copy.
-
-### 12. Smaller, all recorded in `.superpowers/sdd/progress.md`
+### 11. Smaller, all recorded in `.superpowers/sdd/progress.md`
 
 - An assertion in `alias-resolution.test.ts` that no longer tells the two
   variable-key shapes apart.
@@ -154,6 +146,13 @@ nest's one retargeted row is ground truth from the author: `injector.ts` declare
 local `isOptionalFactoryDependency` with the comment "Same as the internal utility
 function `isOptionalFactoryDependency` from `@nestjs/common`", and the old code
 linked the call to that other copy, which the file never imports.
+
+
+**The row-level evidence was outside the repo.** The table behind "no certain row
+was false" lived in a git-ignored working folder on one machine. All 22 symbols were
+re-measured on fresh clones with the shipped code, and the audit of every certain
+row is now in `2026-08-04-p-graph-remeasured.md`: 1,734 resolved rows (same as
+published), 1,353 certain, **0 false** — 1,345 checked mechanically, 8 read by hand.
 
 **Not covered, and not measured:** C++ has no nested functions, and a lambda
 assigned to a variable (`auto walk = [](int b) { return b; };`) is not indexed as a

@@ -164,7 +164,7 @@ Of the resolved rows in that same set:
 | now, certain rows only | 1,352 | **0** | **0.0%** |
 | now, guessed rows only | 382 | 165 | 43.2% |
 
-**No certain row in that set was false. Every false row is marked a guess.** Treat a guess as a lead and check it.
+**No certain row in that set was false. Every false row is marked a guess.** Treat a guess as a lead and check it. Re-measured on fresh clones of all seven repositories with the shipped code: the same 1,734 resolved rows, 1,353 of them certain, none false — 1,345 checked mechanically and 8 read by hand. The row-level evidence is in `docs/superpowers/plans/2026-08-04-p-graph-remeasured.md`.
 
 One shape the measured set did not contain was found afterwards and fixed: a plain `walk(...)` in JavaScript, TypeScript or Python used to match a top-level function of that name in *any* file, because a top-level function's `qname` is just its name. Now a definition the call site can actually see wins. Measured on nestjs/nest (1,728 files): one certain row was false and is now right, 334 calls that resolved to nothing now resolve, and no call lost its answer. See "Name resolution" below.
 
