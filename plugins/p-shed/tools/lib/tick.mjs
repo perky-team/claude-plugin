@@ -9,6 +9,7 @@ import { isPidAlive, readPid, writePid, removePid } from './pids.mjs';
 import { findGroupHolder } from './concurrency.mjs';
 import { classifyRun, classifySkipReason, parseUsage, resolveUsageLimitPattern, parseResetAt, truncateOutput } from './classify.mjs';
 import { reclaimOrphanedDeployPauses } from './owner.mjs';
+import { effectiveJobs } from './profile.mjs';
 
 export async function tick({ root, now = Date.now(), deps = {} }) {
   const d = {
@@ -44,8 +45,16 @@ export async function tick({ root, now = Date.now(), deps = {} }) {
   if (d.readGlobalPause(root)) return { action: 'tick', paused: true, launched: 0, ...(reclaimed.length ? { reclaimed } : {}) };
 
   d.rotateLogs(root, now);
-  const { defaults, jobs } = d.readJobs(root);
+  const jobsData = d.readJobs(root);
   const config = d.readConfig(root);
+  const { defaults } = jobsData;
+  // Speed profile: an operator-owned pace whose ACTIVE value can live outside this
+  // repository (lib/profile.mjs). Overrides are layered in memory only — rewriting
+  // jobs.yml would dirty the working tree of the repo the loop commits to, and the loop
+  // would eventually commit the pace change as if it were its own work. A missing file,
+  // an unknown name or an invalid override never stops the tick: it falls back to the
+  // job's own values and stays visible in `profile show` / `status`.
+  const { jobs } = effectiveJobs({ root, jobsData, config });
   const results = [...preamble];
 
   for (const job of jobs) {
