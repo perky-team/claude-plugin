@@ -8,6 +8,20 @@ audited from the repo instead of from a working folder on one machine.
 It also replaces what used to be follow-up item 11: the row-level evidence for
 "no certain row was false" now lives here.
 
+## Run it again
+
+```bash
+node plugins/p-graph/scripts/measure.mjs              # all seven, clones what is missing
+node plugins/p-graph/scripts/measure.mjs --repos hugo,nest
+node plugins/p-graph/scripts/measure.mjs --no-clone   # reuse clones already on disk
+```
+
+The script pins each repository to the commit below, so its numbers are the numbers
+in this file. It **exits non-zero** if one certain row has no reason to mean the
+symbol it names — the invariant the whole design rests on. Rows that have no
+mechanical reason but were read and found correct live in its `ACCEPTED` list with
+the reason; anything new fails the run.
+
 ## What was run
 
 Seven repositories, cloned fresh (`--depth 1`) and indexed with `index --full`:
@@ -95,10 +109,22 @@ certain row found in p-graph's own source — a Python or JS top-level function 
 bare qname, so a bare call can match it across files. Here every one is right
 because the file really imports the name. The lexical-scope pass prefers a
 definition in scope, but when there is none, a cross-file bare-name match is still
-accepted and still called certain. An import-aware check would close the gap; the
-measurement in the follow-up list is why it was not done: on p-graph's own source,
-50 of 52 such rows were correct, so demoting them all would have cost far more than
-it bought.
+accepted and still called certain.
+
+**Why that is not "fixed" by requiring an import.** Two measurements say the naive
+version costs far more than it buys. On p-graph's own source, 52 certain rows were
+cross-file with no import; 50 were correct (functions handed in through a `ctx`
+object under the same name) and 2 were the shadowing bug, which the lexical-scope
+pass fixes properly. And a file-level import check cannot work at all for a
+re-export barrel (`import { x } from '../common'` where `x` is declared three
+directories deeper) or for a Python package that re-exports (`from flask import
+url_for`) — nest and flask are full of both, so it would demote thousands of correct
+rows. Doing it right means recording imported NAMES and following `export … from`
+chains, which is a real piece of extraction work, not a guard.
+
+So the class stays, bounded and watched instead: across all seven repositories it is
+**8 rows**, each listed by the measurement script, each read. The script fails on a
+ninth.
 
 ## Four figures checked directly
 

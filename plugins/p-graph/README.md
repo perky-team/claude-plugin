@@ -164,7 +164,15 @@ Of the resolved rows in that same set:
 | now, certain rows only | 1,352 | **0** | **0.0%** |
 | now, guessed rows only | 382 | 165 | 43.2% |
 
-**No certain row in that set was false. Every false row is marked a guess.** Treat a guess as a lead and check it. Re-measured on fresh clones of all seven repositories with the shipped code: the same 1,734 resolved rows, 1,353 of them certain, none false — 1,345 checked mechanically and 8 read by hand. The row-level evidence is in `docs/superpowers/plans/2026-08-04-p-graph-remeasured.md`.
+**No certain row in that set was false. Every false row is marked a guess.** Treat a guess as a lead and check it.
+
+**Re-check it yourself**, in one command — it clones the same seven repositories at the same commits, indexes them, and audits every certain row:
+
+```bash
+node plugins/p-graph/scripts/measure.mjs
+```
+
+It exits non-zero if a single certain row has no reason to mean the symbol it names. Last run: 1,734 resolved rows, 1,353 certain, all explained — 1,345 mechanically, 8 read by hand and listed in the output. The write-up is in `docs/superpowers/plans/2026-08-04-p-graph-remeasured.md`.
 
 One shape the measured set did not contain was found afterwards and fixed: a plain `walk(...)` in JavaScript, TypeScript or Python used to match a top-level function of that name in *any* file, because a top-level function's `qname` is just its name. Now a definition the call site can actually see wins. Measured on nestjs/nest (1,728 files): one certain row was false and is now right, 334 calls that resolved to nothing now resolve, and no call lost its answer. See "Name resolution" below.
 
