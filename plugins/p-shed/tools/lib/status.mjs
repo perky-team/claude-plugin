@@ -1,4 +1,5 @@
-import { readJobs, readJobState } from './io.mjs';
+import { readConfig, readJobs, readJobState } from './io.mjs';
+import { effectiveJobs } from './profile.mjs';
 import { readPauseRecord } from './breaker.mjs';
 import { readGlobalPause } from './pause.mjs';
 import { readPid, isPidAlive } from './pids.mjs';
@@ -8,8 +9,12 @@ import { taskName } from './scheduler.mjs';
 // `installed` verdict the caller probes from the OS scheduler. Readers are injectable so
 // the aggregation is testable without real processes or crontab.
 export function collectStatus(root, { installed = null, deps = {} } = {}) {
-  const d = { readJobs, readJobState, readPauseRecord, readGlobalPause, readPid, isPidAlive, ...deps };
-  const { jobs } = d.readJobs(root);
+  const d = { readJobs, readConfig, readJobState, readPauseRecord, readGlobalPause, readPid, isPidAlive, ...deps };
+  const jobsData = d.readJobs(root);
+  // EFFECTIVE, not raw. A speed profile that disables a job or changes its schedule would
+  // otherwise make status state something the scheduler will not do — the one thing a
+  // status snapshot must never do.
+  const { jobs, profile } = effectiveJobs({ root, jobsData, config: d.readConfig(root) });
   const gp = d.readGlobalPause(root);
 
   const jobStatuses = jobs.map((job) => {
@@ -51,6 +56,11 @@ export function collectStatus(root, { installed = null, deps = {} } = {}) {
     action: 'status',
     task: taskName(root),
     installed,
+    // Omitted when there is nothing to say, so an installation that never heard of
+    // profiles gets byte-identical output to before the feature existed. `problem` /
+    // `warning` are reported even with no active name — a broken profileFile is exactly
+    // what an operator needs to see here.
+    ...(profile.name || profile.problem || profile.warning ? { profile } : {}),
     paused: gp != null,
     pauseReason: gp != null ? gp.reason : undefined,
     // Same origin visibility as per-job, above, for the global marker: a live `deploy`
@@ -72,6 +82,14 @@ export function formatHuman(status, now = Date.now()) {
   const lines = [];
   lines.push(`task:      ${status.task}`);
   lines.push(`installed: ${status.installed === null ? 'unknown' : status.installed}`);
+  // The active pace, and WHERE it came from: an operator debugging "why is it still slow"
+  // needs to see that an env var is overriding the file. Absent entirely when no profile
+  // is configured and nothing is wrong.
+  if (status.profile) {
+    const p = status.profile;
+    const flags = [p.problem, p.warning].filter(Boolean).join(', ');
+    lines.push(`profile:   ${p.name ?? '-'} (${p.source}${p.file ? ` ${p.file}` : ''})${flags ? ` [${flags}]` : ''}`);
+  }
   // origin distinguishes "a deploy is holding this open" from "an operator paused it and
   // forgot" — the whole reason the pause marker records an origin at all (see
   // lib/breaker.mjs / lib/pause.mjs). A plain operator pause has no origin field, so it

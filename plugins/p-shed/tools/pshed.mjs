@@ -1,9 +1,10 @@
 #!/usr/bin/env node
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readJobs, readConfig } from './lib/io.mjs';
 import { setJob, rmJob, ValidationError } from './lib/jobs.mjs';
+import { PROFILE_FIELDS, effectiveJobs, profileFilePath, resolveProfile, validateProfiles } from './lib/profile.mjs';
 import { resetBreaker, writePause, readPause, removePause } from './lib/breaker.mjs';
 import { tick as runTick } from './lib/tick.mjs';
 import { runJob } from './lib/launch.mjs';
@@ -137,10 +138,16 @@ async function main() {
     if (command === 'run') {
       const id = args._[0];
       if (!id) return emitJson({ error: { code: 'validation', message: 'run <id> requires a job id' } }, 2);
-      const { defaults, jobs } = readJobs(root);
+      const jobsData = readJobs(root);
+      const { defaults } = jobsData;
+      const config = readConfig(root);
+      // The same effective values the tick would use: a manual run while the loop is on
+      // the eco profile must not silently use the fast model or timeout. `schedule` and
+      // `enabled` change nothing here — `run` is the "do it now regardless" command and
+      // already ignores both.
+      const { jobs } = effectiveJobs({ root, jobsData, config });
       const job = jobs.find((j) => j.id === id);
       if (!job) return emitJson({ error: { code: 'validation', message: `no such job: ${id}` } }, 2);
-      const config = readConfig(root);
       // Duplicate + group guard. `run` used to write no pidfile at all, so a manual
       // run was invisible to the scheduled tick — `pshed run worker` while the
       // scheduled worker was live started a second one in the same working directory.
