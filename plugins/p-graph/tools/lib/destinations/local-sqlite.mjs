@@ -1,4 +1,5 @@
 import { createRequire } from 'node:module';
+import { pathToFileURL } from 'node:url';
 import { OWNER_KINDS_SQL } from '../owner-kinds.mjs';
 const require = createRequire(import.meta.url);
 function loadDatabaseSync() {
@@ -556,9 +557,18 @@ function attachReadHelpers(store, db, hasFts) {
   // other character in that spot. Accepted on purpose: `reachable` is a
   // relevance hint, not a resolution decision, so the worst case is a rare
   // false "yes", never a wrong link between symbols.
+  //
+  // A third pattern covers a module imported at its own ROOT, where the path
+  // ends in a major-version segment instead of the package name — caddy's own
+  // module is "github.com/caddyserver/caddy/v2". goContext (driver.mjs) strips
+  // that trailing "/vN" before naming a package for CALL resolution; this is
+  // the same fix for the gap report's reachability check, which reads the raw
+  // import edge text instead. `v%` is looser than the driver's `/^v[0-9]+$/`
+  // (SQL LIKE has no regex), so it can only make reachable's rare false "yes"
+  // slightly less rare — never a wrong link between symbols.
   const fileImportsPackageSql = `
     SELECT 1 FROM edges WHERE kind = 'import' AND file = ?
-      AND (dst_name LIKE ? OR dst_name LIKE ?) LIMIT 1`;
+      AND (dst_name LIKE ? OR dst_name LIKE ? OR dst_name LIKE ?) LIMIT 1`;
 
   // The Go package a symbol lives in is the first segment of its qname.
   const goPackageOf = (node) =>
@@ -567,7 +577,7 @@ function attachReadHelpers(store, db, hasFts) {
   const reachableIn = (file, pkg) => {
     if (!pkg) return 1;
     if (db.prepare(fileInPackageSql).get(file, `${pkg}.%`)) return 1;
-    if (db.prepare(fileImportsPackageSql).get(file, `%/${pkg}"`, `"${pkg}"`)) return 1;
+    if (db.prepare(fileImportsPackageSql).get(file, `%/${pkg}"`, `"${pkg}"`, `%/${pkg}/v%"`)) return 1;
     return 0;
   };
 
@@ -832,11 +842,25 @@ function attachReadHelpers(store, db, hasFts) {
 // Used as a fallback when the normal (writable, WAL) open fails, e.g. on a
 // read-only filesystem, so a query can still answer (and the refresh degrades).
 function openReadOnly(DatabaseSync, dbPath) {
-  const db = new DatabaseSync(dbPath, { readOnly: true });
+  // A database in WAL mode needs to create a "-shm" shared-memory file next
+  // to it even just to read — SQLite's own rule, not a p-graph choice (see
+  // sqlite.org/wal.html). That is exactly what this fallback cannot rely on:
+  // it exists for the case a normal writable open already failed, which
+  // includes a read-only DIRECTORY (unlike a merely read-only FILE, nothing
+  // beside it can be created either). The "immutable" URI query parameter
+  // tells SQLite the file will never change for this connection's lifetime,
+  // which skips that requirement — it reads the main database file directly,
+  // no "-shm"/"-wal" involved (sqlite.org/uri.html). Only a real file path can
+  // become such a URI; ":memory:" is a special name, not a filesystem path.
+  const location = dbPath === ':memory:' ? dbPath : `${pathToFileURL(dbPath).href}?immutable=1`;
+  const db = new DatabaseSync(location, { readOnly: true });
   let hasFts = false;
   try { db.prepare('SELECT 1 FROM nodes_fts LIMIT 1').get(); hasFts = true; } catch { hasFts = false; }
 
-  const readOnlyError = () => { throw new Error('p-graph: store is read-only'); };
+  // No self-prefix: `die()` in pgraph.mjs is the one place that adds
+  // "pgraph: ", and a message that prefixed itself too printed as the
+  // double "pgraph: p-graph: store is read-only".
+  const readOnlyError = () => { throw new Error('store is read-only'); };
   const store = {
     db, hasFts,
     getMeta: (key) => db.prepare('SELECT value FROM meta WHERE key = ?').get(key)?.value ?? null,

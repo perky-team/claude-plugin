@@ -291,6 +291,48 @@ func TestX(t *testing.T) { t.Errorf("boom") }
     store.close();
   }, 30000);
 
+  // The same /vN blind spot an earlier task fixed in the driver (goContext,
+  // for resolving a call through the import): a Go module path can end in a
+  // major-version segment (caddyserver/caddy's own module is
+  // "github.com/caddyserver/caddy/v2"). fileImportsPackageSql matched only
+  // ".../<pkg>\"" or "\"<pkg>\"", so an import of the package at its MODULE
+  // ROOT — where the path ends in the version segment, not the package name —
+  // never matched. On caddy itself this made every such import invisible to
+  // reachableIn, so a file that genuinely imports the target's package still
+  // got scored "likely unrelated" instead of "may be a real miss".
+  it('sees a module-root import ending in a version segment as reaching the package', async () => {
+    write('logs/logs.go', `package logs
+type Adapter struct{}
+func (a *Adapter) Errorf(f string, v ...any) {}
+`);
+    // A second, unrelated Errorf keeps the bare name from being repo-unique —
+    // otherwise the store's own bare-name fallback would resolve the call
+    // outright instead of leaving it as an ambiguous gap.
+    write('logs2/logs2.go', `package logs2
+type Adapter struct{}
+func (a *Adapter) Errorf(f string, v ...any) {}
+`);
+    // far_test.go genuinely imports the logs package, but through its module
+    // root — the import path ends in "/v2", not "/logs".
+    write('far/far_test.go', `package far
+import (
+	logspkg "github.com/x/logs/v2"
+	"testing"
+)
+func TestX(t *testing.T) { logspkg.Noop(); t.Errorf("boom") }
+`);
+    const store = openStore(':memory:');
+    await indexFull({ root: dir, store, ignorePatterns: [] });
+
+    const rows = store.gapsFor('logs.Adapter.Errorf');
+    const row = rows.find((r) => r.file === 'far/far_test.go');
+    expect(row).toBeTruthy();
+    // far/ really does import logs/ (via the module root), so this is not the
+    // "likely unrelated" case — it belongs in the listed gaps.
+    expect(row.reachable).toBe(1);
+    store.close();
+  }, 30000);
+
   // The bug: a gap was matched and classified by bare name only. "fmt.Errorf"
   // and a repo method "logs.Adapter.Errorf" share the bare name "Errorf", so the
   // old code called fmt.Errorf "ambiguous" — as if the repo method might be the
