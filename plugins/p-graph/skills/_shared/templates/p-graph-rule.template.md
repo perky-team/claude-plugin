@@ -21,20 +21,31 @@ below — a text search costs about the same and cannot silently miss a hit.
 | Several symbols at once | `pgraph explore A B C` |
 | What files are under path/ | `pgraph files path/` |
 
-**Completeness:** the graph links a call by matching names, not by checking types. An
-unresolved call shows up in the gap report below as soon as its bare name matches **one**
-repo symbol — it does not need to be shared by two or more — and, when the call site wrote a
-package qualifier, that qualifier could name a real repo package. Separately, a call through an
-interface, a parameter, or a local variable has no type the graph can check: when its bare name
-is unique it can still link silently instead of showing up as a gap, with no guarantee the
-receiver is the type it names. `callers`, `callees`, `impact` and `context` print
+**How much a row is worth.** A row printed plainly is **certain**: the graph knew the
+target's qualified name, or it knew the receiver's type. A row printed under
+`UNVERIFIED: …, matched by name only (guess) — …` is a **guess**: the only thing that
+matched was a bare method name that happens to be unique in this repo. **Treat a guess
+as a lead: open the `file:line`, read the call, and say in your answer which rows were
+guesses.** Never fold them into the certain list.
+
+**`impact` is a floor, not a ceiling.** It follows certain edges only and never walks a
+guess, so a real dependency can be missing. When it refuses one it prints a line like
+`1 guessed edge (receiver type unknown) near this target was not followed, so a real impact through one may be missing.`
+and `--json` gives the same count as `skipped_guesses`. `(no impact)` is not proof that
+nothing depends on the symbol.
+
+**Completeness.** An unresolved call shows up in the gap report as soon as its bare name
+matches **one** repo symbol — it does not need to be shared by two or more — and, when the
+call site wrote a package qualifier, that qualifier could name a real repo package.
+`callers`, `callees`, `impact` and `context` print
 `⚠ N call sites missing from this answer` with each `file:line`, plus a count of
 same-name call sites in files that cannot see the target and a count of calls the graph found
 nothing to link to; `status` shows the repo-wide share. Gaps are grouped —
 listed rows are worth checking, the two counted groups are scale. **Relay that
 banner to the user and grep to close the gap — never present a list as complete
-while it is there.** Ask by `qname`, not by bare name: `callers Get` merges every
-symbol named `Get`.
+while it is there.**
+
+**Ask by `qname`, not by bare name:** `callers Get` merges every symbol named `Get`.
 
 **Freshness:** structural queries **auto-refresh** the graph before answering —
 `pgraph` reindexes any changed files first, so a query never answers from a stale
