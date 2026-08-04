@@ -190,17 +190,26 @@ describe('cli e2e', () => {
     wireFakeClaude('Claude usage limit reached', 1); // non-zero exit + limit message
     seedDue('a');
 
+    const before = readJobState('a').lastRun;
     const t = JSON.parse(runCli(['tick']));
-    expect(t.results).toEqual([{ id: 'a', action: 'skipped-usage-limit', reason: 'usage-limit' }]);
+    expect(t.results).toMatchObject([{ id: 'a', action: 'skipped-usage-limit', reason: 'usage-limit' }]);
+    expect(t.results[0].retryAt).toBeGreaterThan(Date.now());
 
     const st = readJobState('a');
     expect(st.consecutiveFailures).toBe(0);        // untouched — not counted as a failure
     expect(st.breakerTripped).toBeUndefined();     // and therefore not tripped
     expect(st.lastSkipReason).toBe('usage-limit');
+    // The slot is NOT consumed: lastRun stands still, so the job stays due and retries
+    // once the backoff elapses instead of waiting for its next scheduled slot.
+    expect(st.lastRun).toBe(before);
+    expect(st.consecutiveSkips).toBe(1);
+    expect(st.retryNotBefore).toBeGreaterThan(Date.now());
 
-    // status surfaces the stuck-on-limit state.
+    // status surfaces the stuck-on-limit state, and says a retry is pending.
     const a = JSON.parse(runCli(['status'])).jobs.find((j: any) => j.id === 'a');
     expect(a.lastSkipReason).toBe('usage-limit');
+    expect(a.retryNotBefore).toBe(st.retryNotBefore);
+    expect(runCli(['status', '--human'])).toContain('usage-limit retry');
   }, 15000);
 
   it('tick still trips the breaker for a genuine crash (real-failure behavior preserved)', () => {

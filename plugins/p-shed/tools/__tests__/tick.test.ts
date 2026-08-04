@@ -199,7 +199,9 @@ describe('tick', () => {
     usageLimitJob();
     const runJob = vi.fn(async () => ({ pid: 1, exit: 1, timedOut: false, durationMs: 5, out: 'Claude usage limit reached', err: '' }));
     const res = await tick({ root, now: NOW, deps: fakeDeps({ runJob }) });
-    expect(res).toEqual([{ id: 'a', action: 'skipped-usage-limit', reason: 'usage-limit' }]);
+    // retryAt: the skip no longer consumes the slot, so the tick reports when the job may
+    // try again (lib/backoff.mjs). See tick-skip-retry.test.ts for that behaviour.
+    expect(res).toEqual([{ id: 'a', action: 'skipped-usage-limit', reason: 'usage-limit', retryAt: NOW + MIN }]);
     const st = readState(root).jobs.a;
     expect(st.consecutiveFailures).toBe(1);        // NOT incremented, NOT reset
     expect(st.breakerTripped).toBeUndefined();     // NOT tripped
@@ -230,7 +232,7 @@ describe('tick', () => {
     usageLimitJob();
     const runJob = vi.fn(async () => ({ pid: 1, exit: 1, timedOut: false, durationMs: 5, out: '', err: 'API Error: 529 overloaded_error' }));
     const res = await tick({ root, now: NOW, deps: fakeDeps({ runJob }) });
-    expect(res).toEqual([{ id: 'a', action: 'skipped-usage-limit', reason: 'api-overload' }]);
+    expect(res).toEqual([{ id: 'a', action: 'skipped-usage-limit', reason: 'api-overload', retryAt: NOW + MIN }]);
     expect(readState(root).jobs.a.consecutiveFailures).toBe(1);
   });
 

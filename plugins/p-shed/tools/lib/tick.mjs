@@ -7,9 +7,23 @@ import { readPause } from './breaker.mjs';
 import { readGlobalPause } from './pause.mjs';
 import { isPidAlive, readPid, writePid, removePid } from './pids.mjs';
 import { findGroupHolder } from './concurrency.mjs';
-import { classifyRun, classifySkipReason, parseUsage, resolveUsageLimitPattern, parseResetAt, truncateOutput } from './classify.mjs';
+import { classifyRun, classifySkipReason, parseUsage, resolveUsageLimitPattern, parseResetAt, parseResetTime, truncateOutput } from './classify.mjs';
+import { computeRetryAt } from './backoff.mjs';
 import { reclaimOrphanedDeployPauses } from './owner.mjs';
 import { effectiveJobs } from './profile.mjs';
+
+// Every path that advances `lastRun` consumes the job's slot, and a consumed slot has
+// nothing left to retry — so all three (a real run, a quiet guard, a broken guard) drop
+// the quota-retry fields. `lastSkipReason` is deliberately NOT cleared here: on the guard
+// paths the skip history is still true and still worth showing, and `status` renders a
+// skip with no pending retry as "waiting for its next slot", which is exactly right.
+// Paths that write no state at all — paused, breaker, pid-alive, group-held — leave the
+// retry untouched on purpose: those are transient gates and the retry outlives them.
+function clearRetry(state) {
+  delete state.retryNotBefore;
+  delete state.consecutiveSkips;
+  return state;
+}
 
 export async function tick({ root, now = Date.now(), deps = {} }) {
   const d = {
@@ -78,8 +92,27 @@ export async function tick({ root, now = Date.now(), deps = {} }) {
     const pid = readPid(root, job.id) ?? st.pid;
     if (d.isPidAlive(pid)) { results.push({ id: job.id, action: 'skipped' }); continue; }
 
-    if (!isDue(parseCron(job.schedule), st.lastRun, now)) {
+    // A pending quota retry keeps the job due REGARDLESS of the schedule. A quota skip
+    // does not consume the slot, and `isDue` clamps its catch-up window to 24 h — so
+    // without this, a job sparser than daily (`0 6 * * 1`) that stayed skipped through a
+    // longer outage would silently lose its slot anyway, which is the brief's own defect
+    // one order of magnitude worse. Bounded by construction: `retryNotBefore` is cleared
+    // by every path that consumes the slot, so the override can only ever add ONE launch.
+    if (!isDue(parseCron(job.schedule), st.lastRun, now) && st.retryNotBefore == null) {
       results.push({ id: job.id, action: 'not-due' });
+      continue;
+    }
+
+    // Quota backoff. The job is due — it kept its slot because the last attempt failed on
+    // something external — but relaunching every tick would hammer a quota that is known
+    // to be exhausted (for a minutely job, 300 launches across a five-hour window). Writes
+    // NOTHING and logs NOTHING, exactly like `not-due` and `skipped-group`: a 30-minute
+    // backoff must not add 30 history rows, the same log-noise policy the quiet-guard path
+    // follows. Placed after the schedule check so a job that is not due anyway reports
+    // `not-due` rather than a misleading wait, and before the group gate and the guard so
+    // no owner-supplied command runs for a launch that cannot happen.
+    if (st.retryNotBefore != null && now < st.retryNotBefore) {
+      results.push({ id: job.id, action: 'skipped-retry-wait', reason: st.lastSkipReason, retryAt: st.retryNotBefore });
       continue;
     }
 
@@ -119,7 +152,7 @@ export async function tick({ root, now = Date.now(), deps = {} }) {
         // Log-noise policy: quiet is state-only (lastGuard) — no history line. A
         // minutely chat job must not write 1440 quiet records/day; freshness is
         // visible via status.lastGuard instead.
-        d.writeJobState(root, job.id, { ...prevG, lastRun: now, lastGuard, consecutiveGuardFailures: 0 });
+        d.writeJobState(root, job.id, clearRetry({ ...prevG, lastRun: now, lastGuard, consecutiveGuardFailures: 0 }));
         results.push({ id: job.id, action: 'guard-quiet' });
         continue;
       }
@@ -131,7 +164,7 @@ export async function tick({ root, now = Date.now(), deps = {} }) {
         // job, while a crashing run interleaved with quiet slots would never trip.
         const consecutiveGuardFailures = (prevG.consecutiveGuardFailures ?? 0) + 1;
         const maxFailures = job.maxConsecutiveFailures ?? defaults.maxConsecutiveFailures ?? 3;
-        const next = { ...prevG, lastRun: now, lastGuard, consecutiveGuardFailures };
+        const next = clearRetry({ ...prevG, lastRun: now, lastGuard, consecutiveGuardFailures });
         if (maxFailures > 0 && consecutiveGuardFailures >= maxFailures) {
           next.breakerTripped = true;
           next.breakerReason = g.timedOut ? 'guard timeout' : (g.error ? `guard: ${g.error}` : `guard exit ${g.exit}`);
@@ -171,17 +204,29 @@ export async function tick({ root, now = Date.now(), deps = {} }) {
 
     if (outcome === 'usage_limit') {
       // Quota/infra, not a code failure: do NOT touch the failure counter or breaker.
-      // Record the skip so `status` can show a stuck-on-limit job; the next tick retries.
       // The reason distinguishes a real subscription limit from a transient API
       // overload — same scheduling, very different operational meaning.
+      //
+      // `lastRun` is deliberately NOT advanced. The skip path exists to say "this was not
+      // the job's fault" and proves it by leaving the breaker alone; consuming the slot
+      // contradicted the same judgement. Measured: a `20 6 * * *` job classified
+      // api-overload at 09:05 was not due again until 06:20 the NEXT morning, so a
+      // transient blip cost a full day. The old comment here promised "the next tick
+      // retries", which was only ever true for a minutely job — speed profiles made
+      // sparse schedules ordinary and turned that into a reachable bug.
+      //
+      // Staying due is bounded by `retryNotBefore` (see the gate above and lib/backoff.mjs)
+      // so a minutely job cannot hammer a quota that is known to be exhausted.
       const reason = classifySkipReason(r.out, r.err);
       const resetAt = parseResetAt(r.out, r.err);
-      const next = { ...prev, lastRun: now, lastExit: r.exit, pid: null, lastSkipReason: reason, lastSkipAt: now };
+      const consecutiveSkips = (prev.consecutiveSkips ?? 0) + 1;
+      const retryNotBefore = computeRetryAt({ now, consecutiveSkips, resetAtMs: parseResetTime(r.out, r.err, now) });
+      const next = { ...prev, lastExit: r.exit, pid: null, lastSkipReason: reason, lastSkipAt: now, consecutiveSkips, retryNotBefore };
       if (resetAt) next.lastSkipResetAt = resetAt; else delete next.lastSkipResetAt;
       d.writeJobState(root, job.id, next);
-      d.appendLog(root, withRunDetail({ ts: now, job: job.id, exit: r.exit, timedOut: r.timedOut, durationMs: r.durationMs, outcome: 'skipped', reason, ...(guarded ? { guarded: true } : {}), ...(resetAt ? { resetAt } : {}) }), now);
+      d.appendLog(root, withRunDetail({ ts: now, job: job.id, exit: r.exit, timedOut: r.timedOut, durationMs: r.durationMs, outcome: 'skipped', reason, ...(guarded ? { guarded: true } : {}), ...(resetAt ? { resetAt } : {}), retryAt: retryNotBefore }), now);
       d.removePid(job.id);
-      results.push({ id: job.id, action: 'skipped-usage-limit', reason, ...(resetAt ? { resetAt } : {}) });
+      results.push({ id: job.id, action: 'skipped-usage-limit', reason, ...(resetAt ? { resetAt } : {}), retryAt: retryNotBefore });
       continue;
     }
 
@@ -193,6 +238,7 @@ export async function tick({ root, now = Date.now(), deps = {} }) {
     delete next.lastSkipReason;
     delete next.lastSkipAt;
     delete next.lastSkipResetAt;
+    clearRetry(next);
     if (maxFailures > 0 && consecutiveFailures >= maxFailures) {
       next.breakerTripped = true;
       next.breakerReason = r.timedOut ? 'timeout' : (r.error ?? `exit ${r.exit}`);

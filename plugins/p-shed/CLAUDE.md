@@ -112,6 +112,39 @@ Pure scheduler/launcher. Key decisions:
      the breaker. Do not widen this back to "any non-null status", which turned a dead
      credential into an infinite silent skip that looked healthy to every watchdog keyed on
      `breakerTripped`. The text path's numeric codes stay scoped to an `api error …` context.
+- **A quota/overload skip does NOT consume the slot — and staying due must be bounded.**
+  The skip path exists to say "this was not the job's fault", and proves it by refusing to
+  touch `consecutiveFailures` or the breaker. Writing `lastRun = now` contradicted the same
+  judgement: measured, a `20 6 * * *` job classified `api-overload` at 09:05 was not due
+  again until 06:20 the NEXT morning. The old comment there promised "the next tick
+  retries" — true for a minutely job, false for a sparse one, and speed profiles made
+  sparse schedules ordinary. So `lastRun` is left alone. Two things make that safe and
+  they are not optional:
+  1. **`retryNotBefore` is the bound.** Without it a minutely job relaunches `claude -p`
+     every 60 s for a whole five-hour window. It is the parsed reset time when the message
+     carried one, else `min(60s · 2^(n-1), 30 min)` from `consecutiveSkips`
+     (`lib/backoff.mjs`). The gate sits AFTER the schedule check (so a job that is not due
+     reports `not-due`, not a misleading wait) and BEFORE the group gate and the guard (no
+     owner-supplied command runs for a launch that cannot happen), and it writes and logs
+     **nothing** — same log-noise policy as the quiet-guard path.
+  2. **Every path that advances `lastRun` clears the retry** (`clearRetry`): a real run,
+     a quiet guard, a guard error. Paths that write no state — paused, breaker, pid-alive,
+     group-held — deliberately leave it, since the retry outlives those.
+  A pending retry also keeps the job due past `isDue`'s 24-hour catch-up clamp
+  (`isDue(...) || st.retryNotBefore != null`). Without that, a weekly job loses a week to
+  the identical defect; with it the override can still only ever add ONE launch, because
+  the first real run clears it. Do **not** collapse this into a `nextDueOverride`: that is
+  a second scheduling authority beside cron + `lastRun`, and the two drift.
+  - **`parseResetTime` (`classify.mjs`) is a SEPARATE function from `parseResetAt`,** and
+    must stay one. `parseResetAt` is the reporting form — free text shown verbatim in
+    `status`/logs — and its capture stops at `.` so a sentence's full stop never lands in
+    the string. That truncation silently breaks an ISO timestamp: it drops the
+    milliseconds *and* the trailing `Z`, so `…T19:15:00.000Z` reads back as LOCAL time —
+    a three-hour error on a UTC+3 box. `parseResetTime` therefore rescans a dot-tolerant
+    60-char window and clamps every branch to `(now, now + 48h]`, which is also what
+    rejects V8 reading a bare `3` as the year 2003. Being wrong is cheap by construction
+    (an early retry just re-skips), and that is the ONLY reason parsing a human message is
+    allowed to feed a scheduling decision at all.
 - **Every run's cost is logged, success included.** `parseUsage(out)` (`classify.mjs`,
   reusing `parseResult` — do not duplicate the salvage parse) folds the
   `--output-format json` result into a compact `usage` block on the log row
