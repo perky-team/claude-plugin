@@ -34,7 +34,14 @@ function loadDatabaseSync() {
 // when a target was found only by a unique bare name) and edges.member (set when
 // the call was written as a member access) — later tasks fill them, and a column
 // added after this bump would be missing on an already-migrated graph.
-export const SCHEMA_VERSION = 7;
+// 8: field_types gained two row shapes for a receiver typed by a function's
+// result — "<var key>" -> "#ret:<callee>" and "<callee qname>#ret" -> the declared
+// result type. No DDL change, but the bump is not optional: an incremental reindex
+// writes the "#ret:" marker for a file it reparses while the callee's "#ret" row
+// still lives in a file it did not touch, and Pass B then refuses a call that a
+// full index resolves certainly. So a graph written by 1.0.0 must be rebuilt whole
+// rather than patched.
+export const SCHEMA_VERSION = 8;
 
 const META_DDL = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
