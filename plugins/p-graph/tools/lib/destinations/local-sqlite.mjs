@@ -563,12 +563,20 @@ function attachReadHelpers(store, db, hasFts) {
   // module is "github.com/caddyserver/caddy/v2". goContext (driver.mjs) strips
   // that trailing "/vN" before naming a package for CALL resolution; this is
   // the same fix for the gap report's reachability check, which reads the raw
-  // import edge text instead. `v%` is looser than the driver's `/^v[0-9]+$/`
-  // (SQL LIKE has no regex), so it can only make reachable's rare false "yes"
-  // slightly less rare — never a wrong link between symbols.
+  // import edge text instead.
+  //
+  // A plain LIKE pattern for this ("%/<pkg>/v%\"") is too loose: "v%" has no
+  // digit class, so it also matches a real, unrelated SIBLING subpackage whose
+  // name starts with "v" — "github.com/x/logs/verify" wrongly reads as
+  // reaching package "logs". GLOB does support a character class ([0-9]),
+  // mirroring the driver's own `/^v[0-9]+$/` check for the same job, so this
+  // one pattern uses GLOB instead of LIKE. GLOB's wildcards are `*`/`?`, not
+  // LIKE's `%`/`_`, and it is case-sensitive with no ESCAPE clause — both fine
+  // here because pkg is always a parsed Go identifier (letters/digits/`_`),
+  // never something with a GLOB-special character in it to escape.
   const fileImportsPackageSql = `
     SELECT 1 FROM edges WHERE kind = 'import' AND file = ?
-      AND (dst_name LIKE ? OR dst_name LIKE ? OR dst_name LIKE ?) LIMIT 1`;
+      AND (dst_name LIKE ? OR dst_name LIKE ? OR dst_name GLOB ?) LIMIT 1`;
 
   // The Go package a symbol lives in is the first segment of its qname.
   const goPackageOf = (node) =>
@@ -577,7 +585,7 @@ function attachReadHelpers(store, db, hasFts) {
   const reachableIn = (file, pkg) => {
     if (!pkg) return 1;
     if (db.prepare(fileInPackageSql).get(file, `${pkg}.%`)) return 1;
-    if (db.prepare(fileImportsPackageSql).get(file, `%/${pkg}"`, `"${pkg}"`, `%/${pkg}/v%"`)) return 1;
+    if (db.prepare(fileImportsPackageSql).get(file, `%/${pkg}"`, `"${pkg}"`, `*/${pkg}/v[0-9]*"`)) return 1;
     return 0;
   };
 

@@ -333,6 +333,42 @@ func TestX(t *testing.T) { logspkg.Noop(); t.Errorf("boom") }
     store.close();
   }, 30000);
 
+  // The /vN pattern above is a plain LIKE, which has no digit class — "v%"
+  // matches ANY text starting with "v", not just a version number. That also
+  // matches a real, unrelated SIBLING subpackage whose name happens to start
+  // with "v", like "github.com/x/logs/verify" next to package "logs": the
+  // pattern "%/logs/v%\"" matches that path too, even though "verify" is a
+  // different package that says nothing about whether "logs" is reachable.
+  it('does not treat an unrelated sibling subpackage starting with v as reaching the package', async () => {
+    write('logs/logs.go', `package logs
+type Adapter struct{}
+func (a *Adapter) Errorf(f string, v ...any) {}
+`);
+    write('logs2/logs2.go', `package logs2
+type Adapter struct{}
+func (a *Adapter) Errorf(f string, v ...any) {}
+`);
+    // far_test.go imports a sibling package "verify" — not "logs" itself, and
+    // not the "logs" module imported at its version-numbered root either.
+    write('far/far_test.go', `package far
+import (
+	"github.com/x/logs/verify"
+	"testing"
+)
+func TestX(t *testing.T) { verify.Noop(); t.Errorf("boom") }
+`);
+    const store = openStore(':memory:');
+    await indexFull({ root: dir, store, ignorePatterns: [] });
+
+    const rows = store.gapsFor('logs.Adapter.Errorf');
+    const row = rows.find((r) => r.file === 'far/far_test.go');
+    expect(row).toBeTruthy();
+    // far/ imports "logs/verify", a sibling package — it does not import
+    // "logs" itself, so this stays "likely unrelated".
+    expect(row.reachable).toBe(0);
+    store.close();
+  }, 30000);
+
   // The bug: a gap was matched and classified by bare name only. "fmt.Errorf"
   // and a repo method "logs.Adapter.Errorf" share the bare name "Errorf", so the
   // old code called fmt.Errorf "ambiguous" — as if the repo method might be the
