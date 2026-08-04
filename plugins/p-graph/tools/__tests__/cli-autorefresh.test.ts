@@ -118,6 +118,63 @@ describe('cli auto-refresh', () => {
     expect(JSON.parse(r.stdout).callers.map((x) => x.name)).toEqual(['foo']);
   }, 30000);
 
+  // The schema went 4 -> 7 on this branch, so EVERY existing user passes through
+  // an erased graph once: the first command to open the old database drops the
+  // graph tables. With auto-refresh off nothing rebuilds them, and the query used
+  // to print `{"callers":[],"gaps":[]}` — a confident, empty, wrong answer that a
+  // --json consumer cannot tell from "nothing calls this".
+  describe('an erased graph refuses to answer instead of answering empty', () => {
+    const eraseGraph = () => {
+      const store = openStore(join(dir, '.pgraph', 'graph.db'));
+      store.setMeta('schema_version', '4'); // as if written by the released 0.7.1
+      store.close();
+    };
+
+    it('--stale-ok says so in JSON, and exits non-zero', () => {
+      initRepo();
+      run(['index', '--full']);
+      eraseGraph();
+      const r = run(['callers', 'bar', '--json', '--stale-ok']);
+
+      expect(r.status).not.toBe(0);
+      const body = JSON.parse(r.stdout);
+      expect(body.error).toBe('graph_erased');
+      expect(body.callers).toBeUndefined(); // no empty answer to mistake for one
+      expect(body.message).toContain('erased by a schema upgrade');
+      expect(body.message).toContain('index --full');
+      // And it did NOT rebuild behind the user's back: the graph is still empty.
+      expect(JSON.parse(run(['status', '--json']).stdout).nodes).toBe(0);
+    }, 30000);
+
+    it('PGRAPH_AUTOREFRESH=0 says so in text mode, and exits non-zero', () => {
+      initRepo();
+      run(['index', '--full']);
+      eraseGraph();
+      const r = run(['callers', 'bar'], { PGRAPH_AUTOREFRESH: '0' });
+
+      expect(r.status).not.toBe(0);
+      expect(r.stdout).toBe(''); // nothing that reads as an answer
+      expect(r.stderr).toContain('erased by a schema upgrade');
+      expect(r.stderr).toContain('index --full');
+    }, 30000);
+
+    // The opposite case, so the two are really told apart: a graph whose stored
+    // version the code does not recognise, but whose rows are all still there
+    // (a rollback to an older plugin). That one has an answer to give.
+    it('a graph from a different version still answers, with the stale banner', () => {
+      initRepo();
+      run(['index', '--full']);
+      const store = openStore(join(dir, '.pgraph', 'graph.db'));
+      store.setMeta('schema_version', '99'); // newer than this code: nothing is dropped
+      store.close();
+
+      const r = run(['callers', 'bar', '--json', '--stale-ok']);
+      expect(r.status).toBe(0);
+      expect(JSON.parse(r.stdout).callers.map((x) => x.name)).toEqual(['foo']);
+      expect(r.stderr).toContain('built by a different version of p-graph');
+    }, 30000);
+  });
+
   it('status does not reindex', () => {
     initRepo();
     run(['index', '--full']);

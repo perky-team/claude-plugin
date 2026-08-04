@@ -152,7 +152,14 @@ export function openStore(dbPath, opts = {}) {
   // after that rebuild actually repopulates the tables — is allowed to raise it.
   // Bumping it in openStore would make an empty, just-dropped graph look current.
   const storedVersion = Number(db.prepare(`SELECT value FROM meta WHERE key = 'schema_version'`).get()?.value);
-  if (storedVersion && storedVersion < SCHEMA_VERSION) {
+  // Whether THIS open erased the graph. It has to travel with the store: until
+  // something rebuilds the tables, every query answers zero rows — which reads
+  // exactly like a true "nothing here" answer, so the caller has to be able to
+  // tell the two apart. `graphErased` alone never means "cannot answer": a
+  // rebuild in this same process refills the tables and clears schemaStale, so
+  // both facts together are what mean the graph is still empty.
+  const graphErased = Boolean(storedVersion && storedVersion < SCHEMA_VERSION);
+  if (graphErased) {
     for (const t of ['nodes_fts', 'edges', 'nodes', 'files', 'field_types']) {
       db.exec(`DROP TABLE IF EXISTS ${t}`);
     }
@@ -171,7 +178,7 @@ export function openStore(dbPath, opts = {}) {
     'INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value');
 
   const store = {
-    db, hasFts,
+    db, hasFts, graphErased,
     getMeta(key) { return getMetaStmt.get(key)?.value ?? null; },
     setMeta(key, value) { setMetaStmt.run(key, String(value)); },
     close() { db.close(); },

@@ -84,7 +84,13 @@ Structural queries **auto-refresh** the graph before answering: `pgraph` reindex
 changed files first (incrementally, git-based), so day-to-day freshness is
 automatic and you rarely need `/p-graph:sync`. Pass `--stale-ok` or set
 `PGRAPH_AUTOREFRESH=0` on any query to skip the refresh and answer from the graph
-as-is (you'll get a `⚠ p-graph STALE` note on stderr when it's stale). Use the
+as-is (you'll get a `⚠ p-graph STALE` note on stderr when it's stale). One case
+does not answer at all: right after a plugin upgrade that changes the graph
+format, the first command erases the old graph so the next index can rebuild it.
+With the refresh skipped, nothing rebuilds it and there is no answer to give, so
+the query says the graph was erased and exits `4` — in text and in `--json`
+(`{"error":"graph_erased"}`) — instead of printing an empty list. Run
+`pgraph index --full`, or drop the opt-out. Use the
 graph to find candidates fast and to get a transitive `impact` sketch in one
 call. Use grep to confirm a count: on a 900-file Go repo a text search costs
 about the same as a graph query, and it cannot silently omit a hit.

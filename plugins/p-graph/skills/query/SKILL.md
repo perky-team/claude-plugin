@@ -32,6 +32,10 @@ node "${CLAUDE_PLUGIN_ROOT}/tools/pgraph.mjs" status
 - If the status line ends with `- rebuild pending (schema upgrade)`, the stored graph was dropped
   because the code's schema is newer than the one on disk. The next query (or `/p-graph:sync`)
   rebuilds it from scratch — say so, and expect that first run to be slower than usual.
+- In that state, a query run with the refresh skipped (`--stale-ok` or `PGRAPH_AUTOREFRESH=0`)
+  exits `4` and prints `{"error":"graph_erased"}` instead of rows. The graph holds nothing, so
+  **this is not an empty answer** — run `/p-graph:sync` and ask again, and never report it as
+  "no callers".
 
 ## Step 2 — Map the question to command(s)
 

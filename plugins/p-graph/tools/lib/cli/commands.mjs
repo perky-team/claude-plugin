@@ -1,9 +1,25 @@
 import { indexFull, indexChanged, gitChangedFiles, headSha } from '../index/build.mjs';
 import { ensureFresh, computeActionable, driftCount } from '../freshness.mjs';
 
+// A query on an erased graph cannot answer, so it must not look like it did.
+// Exit code, so a script can branch on it without reading any text.
+const ERASED_EXIT = 4;
+const ERASED_MSG = 'the graph was erased by a schema upgrade and was not rebuilt, '
+  + 'because auto-refresh is off (--stale-ok or PGRAPH_AUTOREFRESH=0). '
+  + 'It holds nothing, so this query cannot answer. Run: pgraph index --full';
+
 export async function runCommand(ctx) {
-  await ensureFresh(ctx); // no-op for non-query commands; refreshes a stale graph before a query
+  const fresh = await ensureFresh(ctx); // no-op for non-query commands; refreshes a stale graph before a query
   const { command, opts, root, store, ignorePatterns, out, emitJson, die } = ctx;
+
+  // Every query would return zero rows AND zero gaps here — byte-identical to a
+  // true "nothing calls this" answer, and a banner on stderr is invisible to a
+  // --json consumer. Refuse in both modes instead: a JSON body that carries only
+  // an error, and a non-zero exit for both modes.
+  if (fresh?.erased) {
+    if (opts.json) emitJson({ error: 'graph_erased', message: ERASED_MSG });
+    return die(ERASED_MSG, ERASED_EXIT);
+  }
 
   if (command === 'index') {
     const res = opts.full

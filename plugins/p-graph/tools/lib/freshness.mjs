@@ -11,8 +11,12 @@ const staleBanner = (n) =>
   `⚠ p-graph STALE: ${n} files changed since index; results may be wrong. Run /p-graph:sync`;
 const UNKNOWN_BANNER =
   `⚠ p-graph STALE: cannot verify freshness (not a git checkout); results may be wrong. Run /p-graph:sync`;
+// "a different version", not "an older" one: this banner also prints when the
+// stored graph is NEWER than the code (a plugin rollback), and it must not print
+// for a graph this process just erased — that graph holds nothing at all, which
+// is a different problem with a different answer. See `erased` below.
 const SCHEMA_STALE_BANNER =
-  `⚠ p-graph STALE: graph was built by an older version; results may be wrong. Run /p-graph:sync`;
+  `⚠ p-graph STALE: graph was built by a different version of p-graph; results may be wrong. Run /p-graph:sync`;
 
 // Only files the graph actually indexes count as drift. git reports every changed
 // path, but indexChanged skips ignored and non-source files — counting the raw
@@ -58,10 +62,22 @@ async function doReindex(ctx) {
 
 // Called before every query command. Refreshes the graph if it has drifted and
 // auto-refresh is enabled; otherwise (or on any failure) answers from the current
-// graph and prints a staleness banner. Never throws — a query must always answer.
+// graph and prints a staleness banner. Never throws.
+//
+// Returns `{ erased: true }` when the graph tables are gone and nothing rebuilt
+// them, so the caller must refuse to answer instead of printing an empty answer.
+// Returns nothing in every other case, including a merely stale graph — that one
+// still answers, with a banner.
 export async function ensureFresh(ctx) {
   const { command, opts, root, store, ignorePatterns, pgraphDir, warn } = ctx;
   if (!QUERY_COMMANDS.has(command)) return;
+
+  // openStore drops the graph tables the moment any command opens a database
+  // written by an older version, so the graph is empty right now. It stays empty
+  // until a rebuild refills it and raises the stored schema version — which is
+  // why both facts are needed: `graphErased` stays true on the store even after
+  // a successful rebuild in this same process.
+  const erased = () => Boolean(store.graphErased) && (store.schemaStale?.() ?? false);
 
   // A schema upgrade must rebuild even when git can't report drift at all (a
   // non-git checkout, or git missing): openStore already dropped the graph
@@ -79,11 +95,21 @@ export async function ensureFresh(ctx) {
   // was written in an older node/qname shape, so it's wrong until reindexed.
   if (drift === 0 && !schemaStale) return; // fresh — fast path
 
-  if (!autorefreshEnabled(opts)) { warn(schemaStale ? SCHEMA_STALE_BANNER : staleBanner(drift)); return; } // opt-out
+  // Opt-out (--stale-ok or PGRAPH_AUTOREFRESH=0). The user asked for no rebuild,
+  // so there is none — but an erased graph has no stale answer to give either, so
+  // report it instead of a banner the caller can print above an empty answer.
+  if (!autorefreshEnabled(opts)) {
+    if (erased()) return { erased: true };
+    warn(schemaStale ? SCHEMA_STALE_BANNER : staleBanner(drift));
+    return;
+  }
 
   try {
     const { acquired, result } = await withReindexLock(pgraphDir, {}, () => doReindex(ctx));
     if (acquired && result?.refreshed) return; // fresh graph, no banner
   } catch { /* fall through to banner */ }
-  warn(schemaStale && drift === 0 ? SCHEMA_STALE_BANNER : staleBanner(drift)); // timed out, partial, or errored
+  // Timed out, partial, or errored. A rebuild was tried and did not finish, so an
+  // erased graph is still erased.
+  if (erased()) return { erased: true };
+  warn(schemaStale && drift === 0 ? SCHEMA_STALE_BANNER : staleBanner(drift));
 }

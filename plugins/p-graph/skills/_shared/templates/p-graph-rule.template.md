@@ -51,6 +51,10 @@ while it is there.**
 `pgraph` reindexes any changed files first, so a query never answers from a stale
 graph and manual syncing is normally unnecessary. To skip the refresh (answer from
 the graph as-is), pass `--stale-ok` or set `PGRAPH_AUTOREFRESH=0`; when the graph
-is stale you'll get a one-line `⚠ p-graph STALE` note on stderr. `/p-graph:sync`
+is stale you'll get a one-line `⚠ p-graph STALE` note on stderr. With the refresh
+skipped right after a plugin upgrade, a query can exit `4` with
+`{"error":"graph_erased"}`: the old graph was erased and not rebuilt, so it holds
+nothing. **That is not an empty answer — never report "no callers" for it.** Run
+`/p-graph:sync` and ask again. `/p-graph:sync`
 is still available for an explicit full rebuild (`index --full`) and to warm the
 graph after a pull.
