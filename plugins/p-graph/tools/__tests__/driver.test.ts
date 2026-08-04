@@ -36,4 +36,30 @@ describe('tags driver', () => {
     // A marker at the end, so a truncated signature never reads as complete.
     expect(foo.signature.endsWith('…[truncated]')).toBe(true);
   }, 20000);
+
+  // The cap cuts on a UTF-16 code unit, not a whole character. An astral
+  // character (anything outside the Basic Multilingual Plane, like most
+  // emoji) is stored as a surrogate pair — two code units. If the cut lands
+  // between them, the kept half is a lone high surrogate, which is not valid
+  // text on its own: written out as UTF-8 (how SQLite stores TEXT) it turns
+  // into the "�" replacement character right before the marker.
+  it('does not split a surrogate pair when it cuts the line', async () => {
+    const scm = `(function_declaration name: (identifier) @name) @definition.function`;
+    const prefix = 'function foo() { ';
+    // Placed so the pair's two code units land exactly on the cut boundary
+    // (288 = 300 - the 12-code-unit marker) with the current, unfixed cap.
+    const before = 'x'.repeat(288 - prefix.length - 1);
+    const longLine = `${prefix}${before}\u{1F600}${'x'.repeat(20)} }`;
+    const { nodes } = await extract({
+      file: 'a.ts', lang: 'ts', langId: 'typescript', scm, source: longLine,
+    });
+    const foo = nodes.find((n) => n.name === 'foo');
+    expect(foo).toBeTruthy();
+    expect(foo.signature.length).toBeLessThanOrEqual(300);
+    expect(foo.signature.endsWith('…[truncated]')).toBe(true);
+    // No lone surrogate anywhere in the kept text — the whole emoji must be
+    // either fully in or fully out.
+    const kept = foo.signature.slice(0, foo.signature.length - '…[truncated]'.length);
+    expect(/[\uD800-\uDFFF]/.test(kept)).toBe(false);
+  }, 20000);
 });

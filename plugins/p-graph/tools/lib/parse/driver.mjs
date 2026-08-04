@@ -13,8 +13,17 @@ const nodeId = (file, qname, kind, ord) =>
 // so a truncated signature is never mistaken for a complete one.
 const SIGNATURE_CAP = 300;
 const TRUNCATION_MARKER = '…[truncated]';
-const capSignature = (line) =>
-  line.length <= SIGNATURE_CAP ? line : line.slice(0, SIGNATURE_CAP - TRUNCATION_MARKER.length) + TRUNCATION_MARKER;
+const capSignature = (line) => {
+  if (line.length <= SIGNATURE_CAP) return line;
+  let cut = SIGNATURE_CAP - TRUNCATION_MARKER.length;
+  // A code-unit cut can land inside a surrogate pair (an astral character,
+  // like most emoji, is stored as two UTF-16 code units). If the kept half
+  // ends on a high surrogate, its partner just got cut off, so back up one
+  // more unit — the whole character goes, not half of it.
+  const lastCode = line.charCodeAt(cut - 1);
+  if (lastCode >= 0xD800 && lastCode <= 0xDBFF) cut -= 1;
+  return line.slice(0, cut) + TRUNCATION_MARKER;
+};
 
 // Go's predeclared builtin functions (universe block). A plain call to one of
 // these belongs to no package, so it must not be package-qualified.
