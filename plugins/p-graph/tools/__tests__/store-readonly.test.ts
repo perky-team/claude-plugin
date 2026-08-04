@@ -3,7 +3,8 @@ import { mkdtempSync, rmSync, writeFileSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { openStore } from '../lib/destinations/local-sqlite.mjs';
+import { DatabaseSync } from 'node:sqlite';
+import { openStore, openReadOnlyConnection } from '../lib/destinations/local-sqlite.mjs';
 import { indexFull } from '../lib/index/build.mjs';
 
 // Denies write access to `dir` itself (create/delete entries), leaving every
@@ -74,6 +75,41 @@ describe('read-only store open', () => {
       undo();
     }
   }, 20000);
+
+  // node:sqlite's URI support (the "immutable=1" fallback above) is
+  // undocumented, and this environment only has one Node version installed
+  // (24.14, which does honor it), so there is no way here to run this on a
+  // real Node that rejects it. Standing in for that: a DatabaseSync subclass
+  // that throws only when asked to open the URI form, and opens for real
+  // (through the actual node:sqlite) for a plain path — the exact shape of
+  // "this Node does not honor the URI, but a normal open still works".
+  class RejectsImmutableUri extends DatabaseSync {
+    constructor(location, opts) {
+      if (typeof location === 'string' && location.includes('?immutable=1')) {
+        throw new Error('simulated: this Node does not support the immutable URI');
+      }
+      super(location, opts);
+    }
+  }
+
+  it('falls back to a plain read-only open when the immutable URI is not honored', () => {
+    const db = openReadOnlyConnection(RejectsImmutableUri, dbPath);
+    try {
+      expect(db.prepare('SELECT name FROM nodes WHERE name = ?').get('foo')).toBeTruthy();
+    } finally {
+      db.close();
+    }
+  });
+
+  it('still gives one clear error when the database is genuinely unreadable, instead of a fake empty answer', () => {
+    class AlwaysFails extends DatabaseSync {
+      // eslint-disable-next-line no-unused-vars
+      constructor(_location, _opts) { throw new Error('boom: cannot open this database'); }
+    }
+    // Both the URI attempt and the plain-path fallback fail — the function
+    // must let that failure through, not swallow it into an empty store.
+    expect(() => openReadOnlyConnection(AlwaysFails, dbPath)).toThrow(/boom/);
+  });
 
   it('opens a pre-6 database read-only and still answers queries that do not need the new columns', async () => {
     // A schema-4 DB has no edges.dst_bare/lang/external and no field_types

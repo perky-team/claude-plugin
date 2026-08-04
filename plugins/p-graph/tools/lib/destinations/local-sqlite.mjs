@@ -845,23 +845,49 @@ function attachReadHelpers(store, db, hasFts) {
   store.schemaStale = () => Number(store.getMeta('schema_version')) !== SCHEMA_VERSION;
 }
 
+// A database in WAL mode needs to create a "-shm" shared-memory file next
+// to it even just to read — SQLite's own rule, not a p-graph choice (see
+// sqlite.org/wal.html). That is exactly what a read-only DIRECTORY cannot
+// provide (unlike a merely read-only FILE, nothing beside it can be created
+// either). The "immutable" URI query parameter tells SQLite the file will
+// never change for this connection's lifetime, which skips that requirement
+// — it reads the main database file directly, no "-shm"/"-wal" involved
+// (sqlite.org/uri.html).
+//
+// node:sqlite does not document URI support at any version — confirmed to
+// work on Node 24.14, not confirmed on Node 22.5, this plugin's own stated
+// floor (loadDatabaseSync's error names it). So the URI is tried, never
+// trusted: if opening it throws for any reason, fall back to a plain
+// read-only open of the file path, which every node:sqlite version
+// supports. That plain open cannot skip the "-shm" file, so it still fails
+// on a read-only directory on a Node that rejects the URI — there is no
+// third way to read WAL data without writing anywhere at all — but it keeps
+// every OTHER read-only case (a read-only FILE, a normal open) working
+// instead of a hard crash on every older Node. If even the plain open
+// fails, this throws that failure rather than returning a fake, empty
+// store — a genuinely unreadable database must give one clear error, not
+// answer from nothing.
+//
+// Exported so a test can check the fallback itself, by passing a stub
+// DatabaseSync that throws only for the URI form — the one thing this file
+// cannot make Node 22.5 actually do in this environment.
+export function openReadOnlyConnection(DatabaseSync, dbPath) {
+  // ":memory:" is a special name, not a filesystem path — it cannot become
+  // a URI, and it never needs "-shm" either.
+  if (dbPath === ':memory:') return new DatabaseSync(dbPath, { readOnly: true });
+  try {
+    return new DatabaseSync(`${pathToFileURL(dbPath).href}?immutable=1`, { readOnly: true });
+  } catch {
+    return new DatabaseSync(dbPath, { readOnly: true });
+  }
+}
+
 // Open an already-initialized DB for reads only — no WAL pragma, no DDL, no FTS
 // creation, no meta writes (all of which would fail on a read-only handle).
 // Used as a fallback when the normal (writable, WAL) open fails, e.g. on a
 // read-only filesystem, so a query can still answer (and the refresh degrades).
 function openReadOnly(DatabaseSync, dbPath) {
-  // A database in WAL mode needs to create a "-shm" shared-memory file next
-  // to it even just to read — SQLite's own rule, not a p-graph choice (see
-  // sqlite.org/wal.html). That is exactly what this fallback cannot rely on:
-  // it exists for the case a normal writable open already failed, which
-  // includes a read-only DIRECTORY (unlike a merely read-only FILE, nothing
-  // beside it can be created either). The "immutable" URI query parameter
-  // tells SQLite the file will never change for this connection's lifetime,
-  // which skips that requirement — it reads the main database file directly,
-  // no "-shm"/"-wal" involved (sqlite.org/uri.html). Only a real file path can
-  // become such a URI; ":memory:" is a special name, not a filesystem path.
-  const location = dbPath === ':memory:' ? dbPath : `${pathToFileURL(dbPath).href}?immutable=1`;
-  const db = new DatabaseSync(location, { readOnly: true });
+  const db = openReadOnlyConnection(DatabaseSync, dbPath);
   let hasFts = false;
   try { db.prepare('SELECT 1 FROM nodes_fts LIMIT 1').get(); hasFts = true; } catch { hasFts = false; }
 
