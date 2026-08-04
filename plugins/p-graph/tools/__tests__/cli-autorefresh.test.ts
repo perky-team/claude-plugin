@@ -128,4 +128,37 @@ describe('cli auto-refresh', () => {
     expect(after.indexed_sha).toBe(before.indexed_sha);
     expect(r.stderr).not.toContain('refreshing');
   }, 30000);
+
+  // `status` used to count every changed path git reports, including files
+  // the index never reads at all (a doc edit) and .pgraph/ itself — which is
+  // untracked right after `index --full` creates it. Every corpus in the
+  // evaluation read "drift 1" straight after a full index for exactly this
+  // reason. `computeActionable` (freshness.mjs) already filters to the files
+  // a refresh would actually reparse; `status` must count the same way.
+  it('does not count a non-source edit or an untracked file as drift', () => {
+    initRepo();
+    run(['index', '--full']); // creates .pgraph/, still untracked at this point
+    writeFileSync(join(dir, 'README.md'), '# hello');
+    writeFileSync(join(dir, 'notes.txt'), 'not source');
+    const st = JSON.parse(run(['status', '--json']).stdout);
+    expect(st.drift).toBe(0);
+  }, 30000);
+
+  // Every git call in build.mjs runs even in a non-git tree, and git's own
+  // "fatal: not a git repository" line used to leak straight through — not
+  // just into this test's output, but onto the plugin's own stderr on every
+  // real invocation. p-graph's own STALE banner already tells the user what
+  // matters; git's raw complaint underneath it is noise.
+  it('never leaks git\'s own "fatal:" line in a non-git tree', () => {
+    dir = mkdtempSync(join(tmpdir(), 'pg-'));
+    mkdirSync(join(dir, '.git'));    // empty dir: findRepoRoot stops here, git commands fail
+    mkdirSync(join(dir, '.pgraph'));
+    writeFileSync(join(dir, 'a.ts'), 'export function foo() { bar(); }\nexport function bar() {}');
+
+    const idx = run(['index', '--full']);
+    expect(idx.stderr).not.toContain('fatal:');
+
+    const st = run(['status']);
+    expect(st.stderr).not.toContain('fatal:');
+  }, 30000);
 });

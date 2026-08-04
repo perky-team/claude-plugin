@@ -1,5 +1,5 @@
 import { indexFull, indexChanged, gitChangedFiles, headSha } from '../index/build.mjs';
-import { ensureFresh } from '../freshness.mjs';
+import { ensureFresh, computeActionable, driftCount } from '../freshness.mjs';
 
 export async function runCommand(ctx) {
   await ensureFresh(ctx); // no-op for non-query commands; refreshes a stale graph before a query
@@ -30,7 +30,11 @@ export async function runCommand(ctx) {
   if (command === 'status') {
     const st = store.status();
     const change = gitChangedFiles(root, st.indexed_sha);
-    st.drift = change ? change.modified.length + change.deleted.length : null;
+    // Only files a refresh would actually reparse count as drift — the same
+    // filter ensureFresh uses. Raw git output also lists files the index
+    // never reads (a doc edit) and .pgraph/ itself, untracked right after
+    // `index --full` creates it, which used to read as permanent drift.
+    st.drift = change ? driftCount(computeActionable(change, ignorePatterns)) : null;
     // status never calls ensureFresh, but openStore already dropped the graph
     // tables on a schema upgrade — say so, or "0 nodes" reads like an empty
     // repo instead of a rebuild waiting on the next query.

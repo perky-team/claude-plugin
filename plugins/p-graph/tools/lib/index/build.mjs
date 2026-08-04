@@ -6,9 +6,19 @@ import { toPosix, isIgnored } from '../config.mjs';
 import { resolveLang, SUPPORTED_EXTS } from '../parse/index.mjs';
 import { extract } from '../parse/driver.mjs';
 
+// `stdio` drops git's own stderr instead of piping it: in a non-git tree (or
+// any other git failure) every one of these calls fails, and git's own
+// "fatal: not a git repository" line would otherwise print straight to this
+// process's real stderr — not just returned on the caught error, but visible
+// on the terminal (and in the test output) even though the failure is always
+// caught and handled here. p-graph's own STALE banner already says what the
+// user needs; git's raw complaint underneath it is noise.
+const GIT_STDIO = ['ignore', 'pipe', 'ignore'];
+
 export function headSha(root) {
-  try { return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf-8' }).trim(); }
-  catch { return null; }
+  try {
+    return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf-8', stdio: GIT_STDIO }).trim();
+  } catch { return null; }
 }
 
 function walk(root, dir, ignorePatterns, acc) {
@@ -127,7 +137,8 @@ export function parseGitChanges(diffText, porcelainText) {
 }
 
 export function gitChangedFiles(root, indexedSha) {
-  const run = (args) => execFileSync('git', args, { cwd: root, encoding: 'utf-8' }).trimEnd();
+  const run = (args) =>
+    execFileSync('git', args, { cwd: root, encoding: 'utf-8', stdio: GIT_STDIO }).trimEnd();
   try {
     const diffText = indexedSha ? run(['diff', '--name-status', `${indexedSha}..HEAD`]) : '';
     const porcelainText = run(['status', '--porcelain']);
