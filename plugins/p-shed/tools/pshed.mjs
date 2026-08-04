@@ -99,14 +99,30 @@ export function pollMsFrom(args) {
   return Math.round(n);
 }
 
+// Set process.exitCode and return — never call process.exit() here.
+//
+// A write to a PIPE is asynchronous in Node (a write to a FILE is not), so exiting on
+// the next line tears the process down with bytes still queued on the stream. Measured
+// on a live board: a `--json` listing delivered 853 212 bytes to a file and 65 536 —
+// exactly one pipe buffer — through a pipe. The truncated text fails JSON.parse, a
+// careful consumer catches that and reports "no data", so a corrupt read is
+// indistinguishable from an empty one: a watchdog polling `pshed status | ...` reads a
+// scheduler whose every job has tripped its breaker as a scheduler with no jobs at all.
+// Returning instead lets the event loop flush the stream; the exit code survives.
+//
+// The bug is invisible on Windows, where pipe writes are synchronous — see
+// __tests__/stdout-pipe.test.ts, which must be run under WSL to mean anything.
+//
+// Callers MUST `return emitJson(...)` / `return die(...)` — these no longer stop
+// execution on their own. __tests__/no-hard-exit.test.ts pins both halves.
 export function emitJson(obj, exitCode = 0) {
   process.stdout.write(JSON.stringify(obj) + '\n');
-  process.exit(exitCode);
+  process.exitCode = exitCode;
 }
 
 export function die(message, exitCode = 1) {
   process.stderr.write(message + '\n');
-  process.exit(exitCode);
+  process.exitCode = exitCode;
 }
 
 const KNOWN = ['tick', 'run', 'install-cron', 'remove-cron', 'set-job', 'rm-job', 'reset-breaker', 'pause', 'resume', 'profile', 'status', 'stop', 'wait-idle', 'deploy'];
@@ -119,11 +135,11 @@ let deployChild = null;
 async function main() {
   if (process.argv[2] === '--version') {
     process.stdout.write(`${readVersion()}\n`);
-    process.exit(0);
+    return;
   }
   const command = process.argv[2];
   const args = parseArgs(process.argv.slice(3));
-  if (!KNOWN.includes(command)) die(`unknown command: ${command}`, 1);
+  if (!KNOWN.includes(command)) return die(`unknown command: ${command}`, 1);
   const root = findRoot(process.cwd());
 
   try {
@@ -299,14 +315,14 @@ async function main() {
         ];
         for (const j of changed) for (const [f, c] of Object.entries(j.changes)) lines.push([j.id, f, String(c.from), String(c.to)].join('\t'));
         process.stdout.write(lines.join('\n') + '\n');
-        return process.exit(0);
+        return;
       }
       return emitJson({ action: 'profile', ...profile, known, jobs: changed }, 0);
     }
 
     if (command === 'status') {
       const status = collectStatus(root, { installed: isTickInstalled(root) });
-      if (args.human) { process.stdout.write(formatHuman(status) + '\n'); return process.exit(0); }
+      if (args.human) { process.stdout.write(formatHuman(status) + '\n'); return; }
       return emitJson(status, 0);
     }
 
@@ -345,7 +361,8 @@ async function main() {
       };
       if (args.json) return emitJson(report, res.idle ? 0 : 1);
       process.stdout.write(formatWaitIdle(report) + '\n');
-      return process.exit(res.idle ? 0 : 1);
+      process.exitCode = res.idle ? 0 : 1;
+      return;
     }
 
     // deploy: the indivisible dance. Its report goes to STDERR on purpose — stdout and
@@ -424,12 +441,14 @@ async function main() {
         }
         const report = { action: 'deploy', ...res };
         process.stderr.write(args.json ? JSON.stringify(report) + '\n' : formatDeploy(report) + '\n');
-        process.exit(deployExitCode(res));
+        process.exitCode = deployExitCode(res);
+        return;
       } catch (e) {
         if (e instanceof ValidationError) {
           const err = { error: { code: 'validation', message: e.message } };
           process.stderr.write(args.json ? JSON.stringify(err) + '\n' : `deploy: ${e.message}\n`);
-          process.exit(2);
+          process.exitCode = 2;
+          return;
         }
         // Anything else that escapes the block above — most reachably, readJobs()
         // throwing on a hand-edited jobs.yml that no longer parses as YAML, before
@@ -442,7 +461,8 @@ async function main() {
         const message = e?.message ?? String(e);
         const err = { error: { code: 'internal', message } };
         process.stderr.write(args.json ? JSON.stringify(err) + '\n' : `deploy: ${message}\n`);
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
     }
 

@@ -87,3 +87,78 @@ describe('CLI exit safety: never process.exit() with global fetch', () => {
     });
   }
 });
+
+/**
+ * A second, stronger invariant for the plugins that have adopted option 1 above:
+ * `process.exit()` must not appear at all, and every `emitJson` / `die` call site must
+ * stop execution on its own.
+ *
+ * The failure this pins is data loss, not a crash. A write to a PIPE is asynchronous in
+ * Node (a write to a FILE is not), so `process.exit()` on the next line tears the
+ * process down with bytes still queued. Measured on a live 318-item board:
+ * `ptasks list --json` delivered 853 212 bytes to a file and 65 536 — exactly one pipe
+ * buffer — through a pipe. The truncated text fails JSON.parse; a careful consumer
+ * catches that and reports "no data", so a corrupt read is indistinguishable from an
+ * empty one and a guard reading it says all-clear.
+ *
+ * The behavioural proof lives in each plugin's `__tests__/stdout-pipe.test.ts`. Those
+ * only fail on POSIX — pipe writes are synchronous on Windows, so the bug is invisible
+ * there (see .claude/CLAUDE.md on running the suites under WSL). THIS test is static, so
+ * it holds the line on every platform, which is why both exist.
+ *
+ * Once emitJson stops exiting, a bare call no longer stops anything: control falls
+ * through to the next statement. Every call must therefore be `return emitJson(...)`, or
+ * be immediately followed by a `return` (p-tasks' `loadResolved` emits an error envelope
+ * and returns null so its callers can bail).
+ */
+const EXIT_CODE_PLUGINS = [
+  'p-chat',   // adopted first, for the Windows undici crash
+  'p-tasks',
+  'p-shed',
+  'p-wiki',
+];
+// Deliberately NOT listed yet, and each still carries the truncation bug:
+//   p-graph   — die() hard-exits; emitJson() writes without any exit code at all
+//   p-observe — main().then((code) => process.exit(code ?? 0))
+// Add them here when they migrate; leaving them out is a known gap, not an oversight.
+
+describe('CLI exit safety: emitJson must not hard-exit', () => {
+  for (const plugin of EXIT_CODE_PLUGINS) {
+    const files = runtimeSources(join(PLUGINS_DIR, plugin));
+
+    it(`${plugin} has runtime sources to check`, () => {
+      expect(files.length).toBeGreaterThan(0);
+    });
+
+    it(`${plugin} contains no process.exit() call`, () => {
+      const hits: string[] = [];
+      for (const file of files) {
+        const rel = file.replace(/\\/g, '/');
+        stripComments(readFileSync(file, 'utf-8')).split('\n').forEach((line, i) => {
+          if (/\bprocess\.exit\s*\(/.test(line)) hits.push(`${rel}:${i + 1}: ${line.trim()}`);
+        });
+      }
+      expect(hits, `set process.exitCode instead — a hard exit truncates a piped write:\n${hits.join('\n')}`).toEqual([]);
+    });
+
+    it(`${plugin} returns from every emitJson / die call site`, () => {
+      const offenders: string[] = [];
+      for (const file of files) {
+        const rel = file.replace(/\\/g, '/');
+        const lines = stripComments(readFileSync(file, 'utf-8')).split('\n');
+        lines.forEach((raw, i) => {
+          const line = raw.trim();
+          if (!/\b(emitJson|die)\s*\(/.test(line)) return;
+          if (/^(export\s+)?function\s+(emitJson|die)\b/.test(line)) return;  // the definitions
+          if (/\breturn\s+(emitJson|die)\s*\(/.test(line)) return;
+          // Also fine: emit, then return on the next statement — how an error envelope is
+          // reported by a helper whose caller has to bail (loadResolved).
+          const next = lines.slice(i + 1).find((l) => l.trim() !== '');
+          if (next && /^return\b/.test(next.trim())) return;
+          offenders.push(`${rel}:${i + 1}: ${line}`);
+        });
+      }
+      expect(offenders, `these calls would fall through instead of ending the command:\n${offenders.join('\n')}`).toEqual([]);
+    });
+  }
+});

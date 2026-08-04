@@ -133,6 +133,24 @@ Pure scheduler/launcher. Key decisions:
   run) but trip the same breaker. Quiet skips consume the schedule slot and write
   NO history-log line — state (`lastGuard`) + `status` only. `run <id>` respects
   the guard (`--no-guard` bypasses) and stays stateless.
+- **Never `process.exit()` in the CLI — set `process.exitCode` and return.** A write to a
+  PIPE is asynchronous in Node while a write to a FILE is synchronous, so exiting on the
+  next line tears the process down with bytes still queued. Measured on the live board:
+  a `--json` listing delivered 853 212 bytes to a file and 65 536 — exactly one pipe
+  buffer — through a pipe. The truncated text fails `JSON.parse`, a careful consumer
+  catches that and reports "no data", so a **corrupt read is indistinguishable from an
+  empty one**: a watchdog polling `pshed status | …` reads a scheduler whose every job
+  has tripped its breaker as a scheduler with no jobs. `emitJson`/`die` therefore only
+  set the code, and every call site must `return` them. The same rule reached p-chat
+  first, from a different failure (a hard exit while undici held a keep-alive socket
+  aborted the process on Windows) — see `plugins/p-chat/CLAUDE.md`.
+  - **This bug is INVISIBLE on Windows**, where pipe writes are synchronous. The
+    behavioural proof (`__tests__/stdout-pipe.test.ts`) is green on win32 no matter how
+    broken the code is, and only goes red under WSL — the exact trap `.claude/CLAUDE.md`
+    exists for. `tests/cli-exit-safety.test.ts` pins the mechanism statically so at
+    least *that* half holds on every platform.
+  - `deploy` and `wait-idle` set `process.exitCode` too, and their reports stay on
+    **stderr** — unchanged, and load-bearing: stdout belongs to the deployed command.
 - Deps vendored via `scripts/vendor-deps.mjs` (js-yaml only), same pattern as p-tasks.
 - **`wait-idle` waits; the TICK still never does.** The "not now, next tick" rule above
   governs the scheduler: a held concurrency group is a skip, never a queue or a lock, and
