@@ -11,6 +11,14 @@
 ;; `const A = class{}, B = class{}` gives two definitions instead of one.
 (variable_declarator name: (identifier) @name (class)) @definition.class
 
+;; A function passed as a call ARGUMENT — the same rule ts.scm carries, kept in
+;; step so a `.mjs` file and a `.ts` file do not answer differently for identical
+;; code. It is not a declaration, so nothing used to name it and every call inside
+;; it had no caller. The capture sits on the FUNCTION, not on the enclosing call,
+;; and the driver drops any of these that a NAMED definition encloses — see
+;; CALLBACK_DEF_TYPES there for why.
+(call_expression arguments: (arguments [(arrow_function) (function_expression) (generator_function)] @definition.function))
+
 ;; references
 (call_expression function: (identifier) @reference.call)
 (call_expression function: (member_expression property: (property_identifier) @reference.call))

@@ -23,6 +23,18 @@
 ;; `const A = class{}, B = class{}` gives two definitions instead of one.
 (variable_declarator name: (identifier) @name (class)) @definition.class
 
+;; A function passed as a call ARGUMENT. It is not a declaration, so nothing used
+;; to name it and every call inside it had no caller — and in TypeScript that is
+;; where nearly all test code lives (`describe('x', () => …)`, `it('y', async () =>
+;; …)`). 94% of this repo's own TypeScript call sites had no caller before this.
+;;
+;; The capture sits on the FUNCTION, not on the enclosing call: the definition's
+;; span has to be the callback's own body, or a call written elsewhere in the same
+;; call would look like it belongs to the callback. The driver drops any of these
+;; that a NAMED definition encloses — see CALLBACK_DEF_TYPES there for why — and
+;; names the survivors after the call beside them.
+(call_expression arguments: (arguments [(arrow_function) (function_expression) (generator_function)] @definition.function))
+
 ;; references
 (call_expression function: (identifier) @reference.call)
 (call_expression function: (member_expression property: (property_identifier) @reference.call))

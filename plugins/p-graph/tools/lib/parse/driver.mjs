@@ -673,6 +673,53 @@ function selfCallOwner(c, lang, defs, enclosing) {
   return owner && OWNER_KINDS.has(owner.kind) ? owner : null;
 }
 
+// The node types the "function passed as a call argument" capture can produce.
+// In TS/JS a definition is only ever one of these through that one capture, so
+// the node type is what tells a callback definition apart from every other one.
+//
+// WHY THEY ARE NOT ALL KEPT. An inline `xs.map(x => target() + x)` written inside
+// a named function is ALREADY attributed to that function, which is both right and
+// useful. Indexing every call-argument function would replace that caller with an
+// anonymous arrow, and `impact` would stop there — nothing calls an arrow that is
+// passed as a value. So a callback is indexed only when no named definition
+// encloses it. A callback inside another callback is kept: `it` inside `describe`
+// should attribute to `it`, and the innermost-parent pick gives that for free once
+// both are definitions.
+const CALLBACK_DEF_TYPES = new Set(['arrow_function', 'function_expression', 'generator_function']);
+
+// The name a call-argument function goes by. It has none of its own, but the call
+// beside it usually carries a string: `it('case', …)` -> `it:case`, which reads as
+// the test's name in `callers` output — what a human wants to see. With no string
+// first argument the line is the only thing separating two callbacks passed to the
+// same function, so use that: `beforeEach@42`.
+//
+// Neither shape can collide with an identifier, because no identifier in these
+// grammars holds a `:` or a `@`. That is what makes the whole feature additive: a
+// call can never resolve TO one of these definitions, so no resolver pass and no
+// certainty rule had to change.
+//
+// The label is flattened and capped. A test name can be a multi-line template
+// literal, and a newline inside a qname would break one line of `callers` output
+// into two. Two tests whose names share the first 80 characters get the same qname,
+// which is harmless — the node id carries an `ord` that separates them.
+function callbackDefName(cb) {
+  const args = cb.parent;                       // (arguments …)
+  const call = args?.parent;                    // (call_expression …)
+  let fn = call?.childForFieldName?.('function');
+  // `it.runIf(cond)('case', …)` calls the RESULT of a call, so the name of the
+  // thing being called has to be read one level in.
+  while (fn?.type === 'call_expression') fn = fn.childForFieldName?.('function');
+  const callee = fn?.type === 'identifier' ? fn.text
+    : fn?.type === 'member_expression' ? (fn.childForFieldName?.('property')?.text ?? null)
+      : null;
+  const first = args?.namedChild?.(0);
+  const label = first && (first.type === 'string' || first.type === 'template_string')
+    ? first.text.slice(1, -1).replace(/\s+/g, ' ').trim().slice(0, 80)
+    : '';
+  const base = callee ?? 'callback';
+  return label ? `${base}:${label}` : `${base}@${cb.startPosition.row + 1}`;
+}
+
 // `pyRepoModules` is what an index run knows and a single file cannot: every
 // Python module path the repo can import ({ paths, byFile }, see pyModuleIndex in
 // index/build.mjs). Without it the Python import rules fall back to the older,
@@ -715,12 +762,19 @@ export async function extract({ file, lang, langId, scm, source, pyRepoModules =
       if (!recovered) continue; // too broken to name — a wrong owner is worse
       localPath = recovered;
     }
+    // A callback has no name of its own, and the `@name` captures inside its span
+    // belong to something else: a nested `function helper()` would otherwise name
+    // the callback `helper`, and the real one would become `helper.helper`. So the
+    // name is read from the call beside it and nameCap is skipped.
+    const isCallback = (lang === 'ts' || lang === 'js') &&
+      CALLBACK_DEF_TYPES.has(d.node?.type ?? '');
+    const ownName = isCallback ? callbackDefName(d.node) : null;
     // The outermost name inside this definition is its own. The column has to
     // break a line tie or the pick is left to capture order: in
     // `const Widget = class { render() {} };` both `Widget` and `render` are
     // `@name` captures on line 1 inside the same span, and the leftmost is the
     // one the definition is called.
-    const nameCap = localPath ? null : nameCaps
+    const nameCap = (localPath || ownName) ? null : nameCaps
       .filter((n) => within(n, d))
       .sort((a, b) => (a.startLine - b.startLine) || (a.startCol - b.startCol))[0];
     // `namespace a::b { … }` is one node that names two namespaces. Split it so
@@ -730,8 +784,9 @@ export async function extract({ file, lang, langId, scm, source, pyRepoModules =
       localPath = nameCap.text.split('::').join('.');
     }
     defs.push({
-      kind, localPath,
-      name: localPath ? localPath.slice(localPath.lastIndexOf('.') + 1) : (nameCap?.text ?? '(anon)'),
+      kind, localPath, isCallback,
+      name: localPath ? localPath.slice(localPath.lastIndexOf('.') + 1)
+        : (ownName ?? nameCap?.text ?? '(anon)'),
       startLine: d.startLine, endLine: d.endLine,
       startCol: d.startCol, endCol: d.endCol,
       signature: capSignature(source.split('\n')[d.startLine - 1]?.trim() ?? ''),
@@ -755,6 +810,16 @@ export async function extract({ file, lang, langId, scm, source, pyRepoModules =
   const dedupedDefs = [...bySpan.values()];
   defs.length = 0;
   defs.push(...dedupedDefs);
+
+  // Keep only the callbacks no named definition encloses — see CALLBACK_DEF_TYPES
+  // for what that buys and what it protects. Runs after the span dedup, so
+  // "encloses" is asked of one definition per span.
+  if (defs.some((d) => d.isCallback)) {
+    const kept = defs.filter((d) => !d.isCallback ||
+      !defs.some((p) => !p.isCallback && within(d, p)));
+    defs.length = 0;
+    defs.push(...kept);
+  }
 
   // Outermost first, so a parent's qname is always built before its children's.
   // The columns have to break the line ties: `namespace a { namespace b { void
