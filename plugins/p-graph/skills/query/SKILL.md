@@ -130,6 +130,10 @@ than hiding them.
 `status` ends with `unattributed calls N/M`. A high share means treat every structural answer in
 that repo as a lead, not as proof.
 
+A caller named `it:something`, `describe:something` or `beforeEach@42` is a TypeScript or
+JavaScript function passed to another call — almost always a test or a test hook. Read it as "this
+call is made by that test", and give the `file:line` beside it, which is the place to look.
+
 If the user asks "did I find every call site?" or "is this safe to change?", the honest answer is:
 here is what the graph is sure of, here is what it guessed, here is where it gave up — now confirm
 with a text search.

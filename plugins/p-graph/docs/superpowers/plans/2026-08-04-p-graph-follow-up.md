@@ -44,23 +44,17 @@ implementation resolves to it as a guess; with two or more it becomes a gap. The
 honest answer is "these N types could receive this call", and the graph cannot
 say that yet.
 
-### 3. TypeScript call-argument function bodies are not definitions
-
-`describe` / `it` callbacks, so 394 of nest's 1,727 files produce no symbols, and
-a majority of resolved edges there have no source symbol. They do surface, as
-`outside any indexed symbol` gap rows — but they have no caller to name.
-
-### 4. Two repo packages sharing a base name collapse into one qname space
+### 3. Two repo packages sharing a base name collapse into one qname space
 
 So a call can resolve to the wrong package's symbol. The `count(DISTINCT ft.type)
 = 1` guard in Pass F is what stops that from becoming a *certain* wrong row today
 (`receiver-types.test.ts` covers it), but the collapse itself is still there.
 
-### 5. `gitChangedFiles` cannot see a file created and deleted without a commit
+### 4. `gitChangedFiles` cannot see a file created and deleted without a commit
 
 So a stale row survives until the next `--full`.
 
-### 6. Smaller, all recorded in `.superpowers/sdd/progress.md`
+### 5. Smaller, all recorded in `.superpowers/sdd/progress.md`
 
 - An assertion in `alias-resolution.test.ts` that no longer tells the two
   variable-key shapes apart.
@@ -192,6 +186,35 @@ callee is a closure held in a variable (`runTest := func(...) *T`), which is not
 function declaration and so has no recorded result — all three are in the gap
 report. A chain through a method call (`t := c.Begin()`) is not followed either: the
 receiver's own type is the question being asked.
+
+**A function passed as a call argument was not a definition** (the old item 3). So a
+call inside a `describe` / `it` callback had no caller at all, and in TypeScript that
+is where nearly all test code lives. Such a function is now indexed — but only when no
+named definition encloses it, because an inline `xs.map(x => …)` inside a named
+function should keep reporting that function — and it is named after the call beside
+it: `it:reads the config`, or `beforeEach@42` when the call passes no string.
+
+| call sites with no caller | before | after |
+|---|---|---|
+| this repo (380 files) | 20,124 / 28,347 (71%) | **1,354 (4.8%)** |
+| sindresorhus/got | 11,454 / 14,329 (80%) | **1,598 (11.2%)** |
+| nestjs/nest | 28,448 / 38,315 (74%) | **1,409 (3.7%)** |
+| nest `createNestApplication` | 6 callers, 184 gap rows | **189 callers, 0 gap rows** |
+
+Precision did not move: `measure.mjs` run with both versions gives the same 1,620
+resolved / 1,411 certain / 209 guessed over the 22 symbols, exit 0 both times. Nothing
+already answered moved either — on three repos, 0 nodes disappeared, 0 kept an id
+while changing a field, 0 resolved edge changed target or certainty. The 5 nest rows
+that stopped resolving were 5 false certain rows: `on: (event, callback) => callback()`
+used to link to a `const callback` declared inside a different `describe` 400 lines
+away, and giving that constant a real scope is what refuses it.
+
+Costs: a full index on nest takes 17% longer and the database grows about a third
+(twice the nodes); an incremental index and every query are unchanged. Two shapes are
+still not indexed — a function inside an object literal passed as an argument
+(`foo({ onDone: () => … })`), and a callback inside a named function, which is the
+deliberate half of the rule. Full write-up in
+`2026-08-05-p-graph-ts-callback-defs-results.md`.
 
 **Three defects that broke a command or a number** (the old items 5, 6 and 7):
 

@@ -1,6 +1,6 @@
 {
   "name": "p-graph",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Local code knowledge graph (TS/JS, Go, C++, Python) with bundled pgraph CLI. Skills: init, sync, help, query.",
   "author": {
     "name": "Andrey Sukharev",

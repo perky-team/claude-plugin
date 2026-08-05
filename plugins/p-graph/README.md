@@ -135,6 +135,24 @@ Two shapes are refused outright rather than guessed:
 - **A receiver whose type is known but lives outside the repo.** A field typed `bytes.Buffer` calling `Fetch` gives a gap row, not a link to the one repo method named `Fetch`. The refusal does not wait for a name clash — knowing the type is not a repo type is enough. A field typed as a repo *interface* is refused the same way: which implementation runs is a runtime decision, so the graph will not pick one. That is why hugo's real `w.delegate.WriteRune(r)` call site is named in the gap banner instead of resolved.
 - **A member call whose target has no owner.** A call written `x.m()`, `x->m()` or `this.m()` can only reach a symbol whose owner is a class, struct or interface. That is what stops one ten-line arrow function named `end`, declared inside a single method body, from answering all 825 `.end()` calls in got. Go is exempt: Go writes a package call as a member access too (`fmt.Println`), and a Go method carries its receiver in its `qname` instead of having an owner node.
 
+#### A function passed as a call argument is a definition too
+
+In TypeScript and JavaScript, a function handed to another call — `describe('x', () => …)`, `it('y', async () => …)`, `beforeEach(() => …)` — is indexed as a definition, so a call written inside it has a caller. Without this, nearly all test code sat outside every symbol: 94% of this repo's own TypeScript call sites had no caller, 80% of got's and 74% of nest's.
+
+Such a definition is named after the call beside it. `it('reads the config', …)` reads as `it:reads the config`, and a call that passes no string reads as `beforeEach@42`. In a `callers` list that is the test's own name:
+
+```
+function describe:Get URL (Express Application).it:should be able to get the IPv6 address  integration/nest-application/get-url/e2e/express.spec.ts:22  it('should be able to get the IPv6 address', async () => {
+```
+
+Three things this deliberately does **not** do:
+
+- **A callback inside a named function is not indexed.** An inline `xs.map(x => target() + x)` written inside `named` still reports `named` as the caller. That is the useful answer, and `impact` can keep walking from it — nothing calls an arrow that is passed as a value.
+- **It cannot be the target of a call.** No identifier can hold a `:` or a `@`, so no call resolves to one of these definitions. They add callers, never edges.
+- **It does not rename anything.** A `const helper = …` written inside a `describe` keeps the bare `qname` it always had. Only nested callbacks are qualified by their outer callback.
+
+The cost, measured on nestjs/nest: a full index takes 17% longer and the database grows by about a third, because the graph holds twice the nodes. An incremental index and every query are unchanged. `search` gains rows for test callbacks; for a plain symbol name the real definition still comes first.
+
 #### What it measures at
 
 Every number below comes from [the results document](./docs/superpowers/plans/2026-08-01-p-graph-correct-answers-results.md), which lists the seven corpora and their commits. Read the sample sizes, not just the fractions.
@@ -187,7 +205,7 @@ One shape the measured set did not contain was found afterwards and fixed: a pla
 
 **1. A receiver typed from a function's return value.** `x := reflect.ValueOf(...)` and `buf := bp.GetBuffer()` record no type: the type is stated in the callee's signature, and the graph does not read across files for it. The call falls back to the unique bare name, so it becomes a guess. This is the largest remaining source of wrong rows. `collections.Namespace.Index` in hugo still prints 26 caller rows where `gopls` says 3, and all 25 false ones have this shape.
 
-**2. A real method with a real owner, called on an untyped value in TypeScript or Python.** The owner rule cannot help here: the target really is a method of a real class, and the receiver's type is simply unknown. got's `setHeader` keeps 89 false rows, requests' `RequestsCookieJar.set` 22, and `.update` 15. Fixing these needs a type table for TypeScript and Python, the way Go has one.
+**2. A real method with a real owner, called on an untyped value in TypeScript or Python.** The owner rule cannot help here: the target really is a method of a real class, and the receiver's type is simply unknown. Reading TypeScript annotations and Python constructors cut this down a lot (see the paragraph above), and what is left is small but not gone: got's `setHeader` keeps 3 guessed rows of 5, requests' `RequestsCookieJar.update` 10 of 11, and `.set` 6 of 22. Closing the rest needs type *inference* rather than type reading — a contextual callback type in TypeScript, an attribute type in Python.
 
 Neither weakness can put a wrong row into the certain list. Every wrong row from both is printed under `UNVERIFIED`.
 
@@ -228,7 +246,7 @@ Three groups are reported separately, so the list stays short enough to read:
 
 `--json` returns every row with its `reason` and `reachable` fields.
 
-`callers` also cannot show a caller row for a call made outside any indexed symbol — at module scope, or inside a callback that is not a definition. Those call sites are resolved in the graph but have no source symbol, so they appear in the gap report as `outside any indexed symbol` instead of vanishing.
+`callers` also cannot show a caller row for a call made outside any indexed symbol — at module scope, or inside a function the graph does not index as a definition, such as one written in an object literal (`foo({ onDone: () => … })`). Those call sites are resolved in the graph but have no source symbol, so they appear in the gap report as `outside any indexed symbol` instead of vanishing. A call inside a test callback used to land here; it does not any more — see "A function passed as a call argument is a definition too" above.
 
 `impact` reports the whole **frontier** — gaps naming the target *and* gaps naming anything the walk already reached, which is where it stopped. It also refuses to follow a guessed edge, and counts how many it refused (`skipped_guesses` in `--json`), so an empty `impact` never hides the difference between "nothing depends on this" and "the only ways in were guesses". `trace` says so too: a missing path prints `(no path — but N/M call sites are unattributed, so a real path may be invisible to the graph)`. `status` carries the repo-wide share as `unattributed calls N/M`. With `--json`, `callers`/`callees`/`impact` return `{ <command>: [rows], gaps: [gap rows] }`; `context` returns three gap lists — `gaps_in`, `gaps_out`, and `gaps` (the two merged with duplicates removed, since a wrapper-delegation call site can appear in both directions).
 

@@ -27,17 +27,20 @@ Two rules carry the whole design, and both were forced by measurement:
 
 Same fixture, real CLI, before and after:
 
-```
-BEFORE
-  callers of target():
-    function named  probe.ts:2
-    ⚠ 1 call site missing from this answer:
-        probe.ts:6  outside any indexed symbol -> target
+`pgraph callers target`, before — copied from the terminal, not retyped:
 
-AFTER
-  callers of target():
-    function describe:suite.it:case  probe.ts:6  it('case', () => { target(); });
-    function named                   probe.ts:2  export function named(xs: number[]) {
+```
+function named  probe.ts:2  export function named(xs: number[]) {
+⚠ 1 call site missing from this answer:
+    probe.ts:6  outside any indexed symbol -> target
+  Confirm with a text search before treating this answer as complete.
+```
+
+And after:
+
+```
+function describe:suite.it:case  probe.ts:6  it('case', () => { target(); });    // call-argument arrow at module scope
+function named  probe.ts:2  export function named(xs: number[]) {
 ```
 
 Line 3's inline arrow still attributes to `named`. Line 6 has a caller. No banner.
@@ -52,13 +55,12 @@ The handoff predicted this exactly.
 | gap rows | 184, all `no-caller` | **0** |
 
 190 call sites reach the symbol; 189 distinct callers, because two calls from one test
-callback are one caller. The rows now read as tests and hooks:
+callback are one caller. The rows now read as tests and hooks — two real ones, each on
+one line:
 
 ```
-describe:Get URL (Express Application).it:should be able to get the IPv6 address
-   integration/nest-application/get-url/e2e/express.spec.ts:22
-describe:Media Type Versioning (fastify).describe:with the global default version: "1".before@348
-   integration/versioning/e2e/media-type-versioning-fastify.spec.ts:348
+function describe:Get URL (Express Application).it:should be able to get the IPv6 address  integration/nest-application/get-url/e2e/express.spec.ts:22  it('should be able to get the IPv6 address', async () => {
+function describe:Media Type Versioning (fastify).describe:with the global default version: "1".before@348  integration/versioning/e2e/media-type-versioning-fastify.spec.ts:348  before(async () => {
 ```
 
 `nest isUndefined`: 55 callers / 2 gap rows → 57 callers / 0 gap rows.
