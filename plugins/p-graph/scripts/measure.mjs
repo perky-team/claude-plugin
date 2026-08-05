@@ -115,6 +115,7 @@ const REASONS = [
   'the line writes <module>.<Name> and the target sits in that module (Python)',
   'the calling file imports the target file',
   'the source assigns the receiver a constructor of the target\'s own class',
+  'the source states the receiver\'s declared type, and that type owns the method (TypeScript)',
 ];
 
 // Rows with no mechanical reason that were READ and found correct. Keyed by
@@ -175,6 +176,17 @@ async function main() {
       const head = recv.split('.')[0];
       return new RegExp(`\\b${head}\\s*=\\s*[\\w.]*\\b${owner}\\s*\\(`).test(srcOf(file));
     };
+    // Does this file state `recv: Owner` anywhere — a parameter or a variable
+    // declarator annotated with the target's own class? This is the TypeScript
+    // counterpart of ownerAssignedIn: nest's TestingModule is never constructed
+    // with `new`, it comes back from `Test.createTestingModule(...).compile()`, so
+    // the only fact the source states is the declared type (`let testModule:
+    // TestingModule;`), which is exactly what Task 2's type reader reads.
+    const ownerAnnotatedIn = (file, recv, owner) => {
+      if (!owner || !/^[A-Z]/.test(owner)) return false;
+      const head = recv.split('.').pop();
+      return new RegExp(`\\b${head}\\s*:\\s*${owner}\\b`).test(srcOf(file));
+    };
     const pkgOf = (file) => store.db.prepare(
       `SELECT substr(qname,1,instr(qname,'.')-1) p FROM nodes
        WHERE file = ? AND instr(qname,'.') > 0 LIMIT 1`).get(file)?.p ?? null;
@@ -202,7 +214,9 @@ async function main() {
           // type is written in the source, so read the source for it rather than
           // trusting the resolver's own table. The owner is the target's qname minus
           // its last segment, and the constructor may be module-qualified.
-          || Boolean(qualified && e.dst.includes('.') && ownerAssignedIn(e.file, qualified[1], e.dst));
+          || Boolean(qualified && e.dst.includes('.') && ownerAssignedIn(e.file, qualified[1], e.dst))
+          || ((e.lang === 'ts' || e.lang === 'js') && qualified
+              && ownerAnnotatedIn(e.file, qualified[1], pkg));
         if (ok) { withReason++; continue; }
         const note = ACCEPTED.get(`${repo} ${sym} ${e.file}`);
         const row = `${repo} ${sym}  ${e.file}:${e.line} -> ${e.dst} (${e.dfile})  | ${text.trim().slice(0, 90)}`;

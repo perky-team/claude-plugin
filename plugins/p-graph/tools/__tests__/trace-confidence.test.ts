@@ -20,10 +20,13 @@ const write = (rel, src) => {
 };
 const run = (args) => execFileSync('node', [CLI, ...args], { cwd: dir, encoding: 'utf-8' });
 
-// Both hops are guesses: a TS call on a value has no receiver type, so each one
-// links only through the unique-bare-name fallback. `impact` on the sink already
-// refuses to follow them, so `trace` printing the same path as a plain fact made
-// the two commands answer opposite things about one graph.
+// The first hop is certain: `m: Middle` states its type, so Pass F links `m.hop()`
+// to `Middle.hop` as a recorded fact, not a guess. The second hop stays a guess —
+// `new Target().reallyUniqueSink()` calls a method on a `new` expression's result
+// directly, not on a bound name, so there is no key for a field-type row to attach
+// to and it can only fall back to the unique-bare-name match. `impact` on the sink
+// already refuses to follow an unresolved-type guess, so `trace` printing the same
+// path as a plain fact made the two commands answer opposite things about one graph.
 const TWO_GUESSED_HOPS = `class Middle {
   hop() { new Target().reallyUniqueSink(); }
 }
@@ -40,13 +43,14 @@ describe('trace says how sure each hop is', () => {
 
     const json = JSON.parse(run(['trace', 'entry', 'Target.reallyUniqueSink', '--json']));
     expect(json.path).toEqual(['entry', 'Middle.hop', 'Target.reallyUniqueSink']);
-    // One flag per arrow, so a reader can tell WHICH hop is unsure.
-    expect(json.guessed_hops).toEqual([true, true]);
+    // One flag per arrow, so a reader can tell WHICH hop is unsure. The first hop
+    // is now certain (Middle is a stated type), the second is still a guess.
+    expect(json.guessed_hops).toEqual([false, true]);
     expect(json.certain).toBe(false);
 
     const text = run(['trace', 'entry', 'Target.reallyUniqueSink']);
-    expect(text).toContain('entry -(guess)-> Middle.hop -(guess)-> Target.reallyUniqueSink');
-    expect(text).toContain('UNVERIFIED: 2 of 2 hops');
+    expect(text).toContain('entry -> Middle.hop -(guess)-> Target.reallyUniqueSink');
+    expect(text).toContain('UNVERIFIED: 1 of 2 hops');
   }, 30000);
 
   it('leaves a fully certain path unmarked', () => {
