@@ -61,8 +61,7 @@ describe('suite', () => {
   it('does not borrow the name of a definition written inside it', async () => {
     // The driver names a definition after the outermost `@name` capture inside
     // its span. For a callback that capture belongs to something else — a nested
-    // `function helper()` — so the callback would be called `helper` and the real
-    // one would become `helper.helper`.
+    // `function helper()` — so the callback would be called `helper`.
     write('src/inner.ts', `export function target() { return 1; }
 it('case', () => {
   function helper() { target(); }
@@ -71,7 +70,48 @@ it('case', () => {
 `);
     const store = await indexed();
 
-    expect(qnames(store.callers('target'))).toEqual(['it:case.helper']);
+    // `helper` keeps the BARE qname it had before this feature existed — see the
+    // next test for why that matters — and the callback is named after its call.
+    expect(qnames(store.callers('target'))).toEqual(['helper']);
+    expect(names(store.callers('helper'))).toEqual(['it:case']);
+    store.close();
+  }, 30000);
+
+  it('does not qualify a declaration written inside it', async () => {
+    // A callback is not a namespace, and a qname must not move because of this
+    // feature: Pass A calls a bare-name match CERTAIN when exactly one node in the
+    // language carries that qname, so moving a test helper under `describe:…`
+    // makes an ambiguous name look unique and unlocks a FALSE certain row.
+    //
+    // Measured on this repo before the rule was added: `io.test.ts` asks for
+    // `readJobState`, which it imports from `lib/io.mjs`. Two TypeScript test
+    // helpers shared that bare name, so the call was honestly unresolved. Moving
+    // one of them under its `describe` left the other unique, and three call sites
+    // linked CERTAINLY to an unrelated helper in another test file.
+    write('lib/io.mjs', 'export function readJobState() { return 1; }\n');
+    write('a.test.ts', `const readJobState = () => 2;
+describe('a', () => {
+  it('one', () => { readJobState(); });
+});
+`);
+    write('b.test.ts', `describe('b', () => {
+  const readJobState = () => 3;
+  it('two', () => { readJobState(); });
+});
+`);
+    write('c.test.ts', `describe('c', () => {
+  it('three', () => { readJobState(); });
+});
+`);
+    const store = await indexed();
+
+    // Each test file's own helper still answers its own call — that is Pass L,
+    // reading lexical scope, and it is knowledge.
+    expect(store.callees('it:one').map((r) => r.file)).toEqual(['a.test.ts']);
+    expect(store.callees('it:two').map((r) => r.file)).toEqual(['b.test.ts']);
+    // c.test.ts has no helper of its own and imports nothing. Two TypeScript
+    // nodes still carry the bare qname `readJobState`, so the graph must refuse.
+    expect(store.callees('it:three')).toEqual([]);
     store.close();
   }, 30000);
 

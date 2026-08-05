@@ -832,12 +832,24 @@ export async function extract({ file, lang, langId, scm, source, pyRepoModules =
   for (const def of defs) {
     // The innermost definition around this one — see innermostFirst.
     const parent = defs.filter((p) => within(def, p)).sort(innermostFirst)[0];
+    // The nearest enclosing definition that is NOT a callback, this one included.
+    // Always set before any child of this def is reached, because defs are sorted
+    // outermost first.
+    def.nonCallbackAncestor = def.isCallback ? (parent?.nonCallbackAncestor ?? null) : def;
+    // A callback is not a namespace. It qualifies a nested callback — so a test
+    // reads `describe:suite.it:case` — but it must NOT qualify a real declaration
+    // written inside it. A qname that moves changes which names look unique, and
+    // Pass A calls a unique bare qname CERTAIN: measured on this repo, moving one
+    // test helper under its `describe` left a second one unique and produced three
+    // false certain rows pointing at an unrelated test file. So a declaration keeps
+    // exactly the qname it had before this feature existed.
+    const qnameParent = def.isCallback ? parent : (parent?.nonCallbackAncestor ?? null);
     // C++ writes the owner into the declarator (`PgStore::Get`), so the
     // definition names its own path and nesting only adds what encloses it.
     const local = def.localPath ?? def.name;
-    if (parent) {
+    if (qnameParent) {
       // Nesting already carries any package prefix through the parent's qname.
-      def.qname = `${parent.qname}.${local}`;
+      def.qname = `${qnameParent.qname}.${local}`;
     } else if (goCtx) {
       // Go: package-qualify top-level symbols, receiver-qualify methods, so the
       // resolver can distinguish e.g. filesink.New from udpsink.New. `name`
