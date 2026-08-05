@@ -140,3 +140,62 @@ describe('formatHuman', () => {
     expect(formatHuman(status)).not.toContain('[operator]');
   });
 });
+
+// `lastSkip: api-overload` reads as "it was skipped", not as "it will not run again for
+// 23 hours" — and the second is the one an operator acts on. Since a quota skip no longer
+// consumes the slot, those really are two different states and status has to name them.
+describe('a pending retry is distinguishable from waiting for the next slot', () => {
+  const NOW = new Date(2026, 7, 4, 9, 5).getTime();
+
+  function skipped(extra: Record<string, unknown>) {
+    writeJobs(root, { version: 1, defaults: {}, jobs: [{ id: 'a', schedule: '20 6 * * *', enabled: true, prompt: 'go' }] });
+    writeJobState(root, 'a', {
+      lastRun: NOW - 60_000, lastExit: 1, pid: null, consecutiveFailures: 0,
+      lastSkipReason: 'api-overload', lastSkipAt: NOW, ...extra,
+    });
+    return collectStatus(root);
+  }
+
+  it('carries retryNotBefore and consecutiveSkips into the JSON', () => {
+    const status = skipped({ retryNotBefore: NOW + 7 * 60_000, consecutiveSkips: 3 });
+    expect(status.jobs[0]).toMatchObject({ retryNotBefore: NOW + 7 * 60_000, consecutiveSkips: 3 });
+  });
+
+  it('names the moment a retry is still pending', () => {
+    const status = skipped({ retryNotBefore: new Date(2026, 7, 4, 9, 12).getTime(), consecutiveSkips: 3 });
+    const row = formatHuman(status, NOW).split('\n').find((l) => l.startsWith('a\t'))!;
+    expect(row).toContain('api-overload retry 09:12');
+  });
+
+  it('says the retry is due now once the backoff has elapsed', () => {
+    const status = skipped({ retryNotBefore: NOW - 1000, consecutiveSkips: 2 });
+    const row = formatHuman(status, NOW).split('\n').find((l) => l.startsWith('a\t'))!;
+    expect(row).toContain('api-overload retry-now');
+  });
+
+  it('says next-slot for a skip with no retry pending — which is every pre-upgrade state file', () => {
+    const status = skipped({});   // no retryNotBefore: lastRun was advanced by the old code
+    const row = formatHuman(status, NOW).split('\n').find((l) => l.startsWith('a\t'))!;
+    expect(row).toContain('api-overload next-slot');
+    expect(row).not.toContain('retry');
+  });
+
+  it('still shows the reset time from the limit message alongside the retry', () => {
+    const status = skipped({
+      lastSkipReason: 'usage-limit', lastSkipResetAt: '11am',
+      retryNotBefore: new Date(2026, 7, 4, 11, 0).getTime(), consecutiveSkips: 1,
+    });
+    const row = formatHuman(status, NOW).split('\n').find((l) => l.startsWith('a\t'))!;
+    expect(row).toContain('usage-limit retry 11:00');
+    expect(row).toContain('resets 11am');
+  });
+
+  it('leaves a job that never skipped alone', () => {
+    writeJobs(root, { version: 1, defaults: {}, jobs: [{ id: 'a', schedule: '* * * * *', enabled: true, prompt: 'go' }] });
+    writeJobState(root, 'a', { lastRun: NOW, lastExit: 0, pid: null, consecutiveFailures: 0 });
+    const status = collectStatus(root);
+    expect(status.jobs[0].retryNotBefore).toBeUndefined();
+    const row = formatHuman(status, NOW).split('\n').find((l) => l.startsWith('a\t'))!;
+    expect(row).toContain('\t-\t'); // the lastSkip column stays a plain dash
+  });
+});

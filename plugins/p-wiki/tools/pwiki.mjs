@@ -61,14 +61,31 @@ function parseArgs(argv) {
   return opts;
 }
 
+// Set process.exitCode and return — never call process.exit() here.
+//
+// A write to a PIPE is asynchronous in Node (a write to a FILE is not), so exiting on
+// the next line tears the process down with bytes still queued on the stream. Measured
+// on a live board: a `--json` listing delivered 853 212 bytes to a file and 65 536 —
+// exactly one pipe buffer — through a pipe. `pwiki get --format=json` on a long page and
+// `pwiki search`/`lint --format=json` on a large wiki cross that threshold easily. The
+// truncated text fails JSON.parse, a careful consumer catches that and reports "no
+// data", so a corrupt read is indistinguishable from an empty one.
+// Returning instead lets the event loop flush the stream; the exit code survives.
+//
+// The bug is invisible on Windows, where pipe writes are synchronous — see
+// __tests__/stdout-pipe.test.ts, which must be run under WSL to mean anything.
+//
+// Callers MUST `return emitJson(...)` / `return die(...)` — these no longer stop
+// execution on their own, which is why the command dispatch below lives inside a
+// function rather than at module top level. __tests__/no-hard-exit.test.ts pins both.
 function emitJson(obj, code = 0) {
   process.stdout.write(JSON.stringify(obj) + '\n');
-  process.exit(code);
+  process.exitCode = code;
 }
 
 function die(msg, code = 1) {
   process.stderr.write(`pwiki: ${msg}\n`);
-  process.exit(code);
+  process.exitCode = code;
 }
 
 function collectArray(args, key) {
@@ -150,7 +167,7 @@ async function resolveConfluenceBlock(transport, email, token, { site, space, pa
   const http = createHttpClient({ baseUrl: site, email, token, transport });
   const spaceRes = await http.get(`/wiki/api/v2/spaces?keys=${encodeURIComponent(space)}`);
   const spaceObj = spaceRes.body?.results?.[0];
-  if (!spaceObj) emitJson({ error: { code: 'config-invalid', message: `space ${space} not found` } }, 1);
+  if (!spaceObj) return emitJson({ error: { code: 'config-invalid', message: `space ${space} not found` } }, 1);
 
   let rootPageId;
   let rootTitle;
@@ -162,8 +179,8 @@ async function resolveConfluenceBlock(transport, email, token, { site, space, pa
     const cql = `title = "${parent.replace(/"/g, '\\"')}" AND space = "${space}"`;
     const r = await http.get(`/wiki/rest/api/search?cql=${encodeURIComponent(cql)}&limit=2`);
     const hits = r.body?.results ?? [];
-    if (hits.length === 0) emitJson({ error: { code: 'config-invalid', message: `parent page "${parent}" not found in space ${space} — create it in UI first` } }, 1);
-    if (hits.length > 1) emitJson({ error: { code: 'config-invalid', message: `parent page title ambiguous (${hits.length} matches) — pass numeric ID instead` } }, 1);
+    if (hits.length === 0) return emitJson({ error: { code: 'config-invalid', message: `parent page "${parent}" not found in space ${space} — create it in UI first` } }, 1);
+    if (hits.length > 1) return emitJson({ error: { code: 'config-invalid', message: `parent page title ambiguous (${hits.length} matches) — pass numeric ID instead` } }, 1);
     rootPageId = hits[0].content?.id ?? hits[0].id;
     rootTitle = hits[0].content?.title ?? parent;
   }
@@ -183,9 +200,9 @@ async function resolveConfluenceBlock(transport, email, token, { site, space, pa
 export async function initConfluence(args, _opts = {}) {
   const email = process.env.PWIKI_CONFLUENCE_EMAIL;
   const token = process.env.PWIKI_CONFLUENCE_TOKEN;
-  if (!email || !token) die('PWIKI_CONFLUENCE_EMAIL and PWIKI_CONFLUENCE_TOKEN required', 1);
+  if (!email || !token) return die('PWIKI_CONFLUENCE_EMAIL and PWIKI_CONFLUENCE_TOKEN required', 1);
   const root = findWikiRoot(process.cwd());
-  if (!root) die('not inside a p-wiki repo (no docs/wiki/CLAUDE.md found)', 1);
+  if (!root) return die('not inside a p-wiki repo (no docs/wiki/CLAUDE.md found)', 1);
 
   const transport = _opts.transport ?? makeRealTransport();
   const destinations = {};
@@ -194,7 +211,7 @@ export async function initConfluence(args, _opts = {}) {
 
   if (args.confluence) {
     const site = args.site, space = args.space, parent = args.parent;
-    if (!site || !space || !parent) die('--site, --space, and --parent required', 1);
+    if (!site || !space || !parent) return die('--site, --space, and --parent required', 1);
     destinations.confluence = await resolveConfluenceBlock(transport, email, token, { site, space, parent, titlePrefix: args['title-prefix'] });
     primaryName = 'confluence';
   } else {
@@ -209,23 +226,23 @@ export async function initConfluence(args, _opts = {}) {
 
   if (args['mirror-confluence']) {
     const site = args['mirror-site'], space = args['mirror-space'], parent = args['mirror-parent'];
-    if (!site || !space || !parent) die('--mirror-confluence requires --mirror-site, --mirror-space, --mirror-parent', 1);
+    if (!site || !space || !parent) return die('--mirror-confluence requires --mirror-site, --mirror-space, --mirror-parent', 1);
     destinations['confluence-mirror'] = await resolveConfluenceBlock(transport, email, token, { site, space, parent, titlePrefix: args['mirror-title-prefix'] });
     mirrors.push('confluence-mirror');
   }
 
   const config = { primary: primaryName, mirrors, destinations };
   const v = validateConfig(config);
-  if (!v.ok) emitJson({ error: { code: 'internal', message: v.error } }, 3);
+  if (!v.ok) return emitJson({ error: { code: 'internal', message: v.error } }, 3);
   writeConfig(root, config);
-  emitJson({ ok: true, configPath: 'docs/wiki/.pwiki.json', primary: primaryName, mirrors }, 0);
+  return emitJson({ ok: true, configPath: 'docs/wiki/.pwiki.json', primary: primaryName, mirrors }, 0);
 }
 
 export async function getPage(args, _opts = {}) {
   const path = args._[0];
-  if (!path) die('get: <path> required', 1);
+  if (!path) return die('get: <path> required', 1);
   const res = resolveDestination({ cwd: process.cwd(), transport: _opts.transport ?? makeRealTransport() });
-  if (!res) die('not inside a p-wiki repo', 1);
+  if (!res) return die('not inside a p-wiki repo', 1);
 
   const srcName = typeof args.source === 'string' ? args.source : undefined;
   let dest;
@@ -233,7 +250,7 @@ export async function getPage(args, _opts = {}) {
     dest = res.primary;
   } else {
     const idx = res.sourceNames.indexOf(srcName);
-    if (idx === -1) emitJson({ error: { code: 'unknown-source', message: `unknown source: ${srcName}` } }, 1);
+    if (idx === -1) return emitJson({ error: { code: 'unknown-source', message: `unknown source: ${srcName}` } }, 1);
     dest = res.sources[idx];
   }
 
@@ -247,23 +264,22 @@ export async function getPage(args, _opts = {}) {
     // as 'internal'/exit 3. Confluence transport errors DO carry .status/.code, so
     // we re-throw those and let mapErrorToCode handle them.
     const msg = e?.message ?? String(e);
-    if (/^page not found:/.test(msg)) emitJson({ error: { code: 'page-not-found', message: msg } }, 1);
-    if (/not a confluence:\/\//.test(msg)) emitJson({ error: { code: 'bad-path', message: msg } }, 1);
+    if (/^page not found:/.test(msg)) return emitJson({ error: { code: 'page-not-found', message: msg } }, 1);
+    if (/not a confluence:\/\//.test(msg)) return emitJson({ error: { code: 'bad-path', message: msg } }, 1);
     throw e;
   }
 
   if ((args.format ?? 'text') === 'json') {
-    emitJson({ path: page.path, frontmatter: page.frontmatter, body: page.body }, 0);
+    return emitJson({ path: page.path, frontmatter: page.frontmatter, body: page.body }, 0);
   }
   process.stdout.write(serializeFrontmatter(page.frontmatter, page.body));
-  process.exit(0);
 }
 
 export async function searchCommand(args, _opts = {}) {
   const query = args._[0];
-  if (!query) die(`search: <query> required`, 1);
+  if (!query) return die(`search: <query> required`, 1);
   const res = resolveDestination({ cwd: process.cwd(), transport: _opts.transport ?? makeRealTransport() });
-  if (!res) die(`not inside a p-wiki repo`, 1);
+  if (!res) return die(`not inside a p-wiki repo`, 1);
 
   const opts = {
     type: typeof args.type === 'string' ? args.type.split(',').map(s => s.trim()).filter(Boolean) : [],
@@ -290,7 +306,7 @@ export async function searchCommand(args, _opts = {}) {
 
   const limit = opts.limit;
   const trimmed = results.slice(0, limit);
-  emitJson({ query, total: trimmed.length, results: trimmed, warnings }, 0);
+  return emitJson({ query, total: trimmed.length, results: trimmed, warnings }, 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -387,26 +403,26 @@ async function verifySource(name, block, root, transport) {
 
 export async function sourceAdd(args, _opts = {}) {
   const name = args._[0];
-  if (!name) emitJson({ error: { code: 'bad-args', message: 'source add: <name> required' } }, 1);
+  if (!name) return emitJson({ error: { code: 'bad-args', message: 'source add: <name> required' } }, 1);
   const root = findWikiRoot(process.cwd());
-  if (root === null) die('not inside a p-wiki repo', 1);
+  if (root === null) return die('not inside a p-wiki repo', 1);
 
   let cfg;
   try {
     cfg = readConfig(root) ?? JSON.parse(JSON.stringify(DEFAULT_FS_CONFIG));
   } catch (e) {
-    emitJson({ error: { code: 'config-invalid', message: `cannot read .pwiki.json: ${e?.message ?? String(e)}` } }, 1);
+    return emitJson({ error: { code: 'config-invalid', message: `cannot read .pwiki.json: ${e?.message ?? String(e)}` } }, 1);
   }
   // One name, one role: a name already in destinations is the primary, a mirror, or an
   // existing source, and silently repurposing it would change where writes go.
   if (cfg?.destinations?.[name]) {
-    emitJson({ error: { code: 'source-exists', message: `destinations.${name} already exists — pick another name` } }, 1);
+    return emitJson({ error: { code: 'source-exists', message: `destinations.${name} already exists — pick another name` } }, 1);
   }
 
   const built = typeof args['from-config'] === 'string'
     ? blockFromConfig(args['from-config'], args, root)
     : buildSourceBlock(args);
-  if (built.error) emitJson({ error: { code: 'bad-args', message: built.error } }, 1);
+  if (built.error) return emitJson({ error: { code: 'bad-args', message: built.error } }, 1);
 
   const next = {
     ...cfg,
@@ -414,7 +430,7 @@ export async function sourceAdd(args, _opts = {}) {
     destinations: { ...cfg.destinations, [name]: built.block },
   };
   const v = validateConfig(next);
-  if (!v.ok) emitJson({ error: { code: 'config-invalid', message: v.error } }, 1);
+  if (!v.ok) return emitJson({ error: { code: 'config-invalid', message: v.error } }, 1);
 
   // Verify before writing: a wrong path or repo name would otherwise sit in the config
   // and only surface later, as empty search results in an unrelated session.
@@ -424,7 +440,7 @@ export async function sourceAdd(args, _opts = {}) {
       await verifySource(name, built.block, root, _opts.transport ?? makeRealTransport());
       verified = true;
     } catch (e) {
-      emitJson({
+      return emitJson({
         error: {
           code: 'source-unreachable',
           message: `${e?.message ?? String(e)} — fix the details, or pass --no-verify to add it anyway`,
@@ -434,32 +450,37 @@ export async function sourceAdd(args, _opts = {}) {
   }
 
   writeConfig(root, next);
-  emitJson({ ok: true, name, kind: built.block.kind, sources: next.sources, verified }, 0);
+  return emitJson({ ok: true, name, kind: built.block.kind, sources: next.sources, verified }, 0);
 }
 
 const isMain = process.argv[1] && resolve(fileURLToPath(import.meta.url)) === resolve(process.argv[1]);
 
-if (isMain) {
+// The dispatch lives in a FUNCTION, not at module top level, purely so that every
+// `return emitJson(...)` / `return die(...)` below is legal. It used to be top-level
+// code that relied on emitJson calling process.exit() to stop; now that emitJson only
+// sets the exit code (see its comment — a hard exit truncates a piped write), a bare
+// call would fall through into the next command's block.
+async function main() {
 
 if (process.argv.slice(2)[0] === '--version') {
   process.stdout.write(`${readVersion()}\n`);
-  process.exit(0);
+  return;
 }
 
 const command = process.argv[2];
 const args = parseArgs(process.argv.slice(3));
 
 const KNOWN = ['new', 'set', 'promote', 'search', 'lint', 'backlinks', 'index', 'reindex', 'init', 'sync', 'get', 'source'];
-if (!KNOWN.includes(command)) die(`unknown command: ${command}`, 1);
+if (!KNOWN.includes(command)) return die(`unknown command: ${command}`, 1);
 
 try {
   if (command === 'new') {
     const type = args._[0];
-    if (!TYPES.includes(type)) die(`unknown type: ${type}`, 1);
-    if (!args.title) die(`--title required`, 1);
+    if (!TYPES.includes(type)) return die(`unknown type: ${type}`, 1);
+    if (!args.title) return die(`--title required`, 1);
 
     const res = resolveDestination({ cwd: process.cwd(), transport: makeRealTransport() });
-    if (!res) die(`not inside a p-wiki repo`, 1);
+    if (!res) return die(`not inside a p-wiki repo`, 1);
     const dest = res.primary;
 
     let slug = args.slug ?? kebab(args.title);
@@ -478,8 +499,8 @@ try {
       };
       body = templateBody(type, { title: args.title });
     } else if (type === 'source') {
-      if (!args['source-url']) die(`--source-url required for type=source`, 1);
-      if (!args['source-type']) die(`--source-type required for type=source`, 1);
+      if (!args['source-url']) return die(`--source-url required for type=source`, 1);
+      if (!args['source-type']) return die(`--source-type required for type=source`, 1);
       frontmatter = {
         id: slug, type, title: args.title,
         created: today(), updated: today(),
@@ -490,7 +511,7 @@ try {
       };
       body = templateBody(type, { title: args.title });
     } else if (type === 'query') {
-      if (!args.question) die(`--question required for type=query`, 1);
+      if (!args.question) return die(`--question required for type=query`, 1);
       frontmatter = {
         id: slug, type, title: args.title,
         created: today(), status: 'filed', tags,
@@ -521,9 +542,9 @@ try {
     });
 
     if (r.created) {
-      emitJson({ path: r.path, id: r.id, slug: r.slug, created: true }, 0);
+      return emitJson({ path: r.path, id: r.id, slug: r.slug, created: true }, 0);
     } else {
-      emitJson({
+      return emitJson({
         created: false,
         'existing-path': r.existingPath,
         'date-suffix-slug': r.dateSuffixSlug,
@@ -533,9 +554,9 @@ try {
 
   if (command === 'set') {
     const path = args._[0];
-    if (!path) die(`set: <path> required`, 1);
+    if (!path) return die(`set: <path> required`, 1);
     const res = resolveDestination({ cwd: process.cwd(), transport: makeRealTransport() });
-    if (!res) die(`not inside a p-wiki repo`, 1);
+    if (!res) return die(`not inside a p-wiki repo`, 1);
     const dest = res.primary;
     const mutations = {};
 
@@ -543,7 +564,7 @@ try {
       mutations.setFields = {};
       for (const f of (Array.isArray(args.field) ? args.field : [args.field])) {
         const eq = f.indexOf('=');
-        if (eq < 0) die(`--field expects name=value`, 1);
+        if (eq < 0) return die(`--field expects name=value`, 1);
         mutations.setFields[f.slice(0, eq)] = parseFieldValue(f.slice(eq + 1));
       }
     }
@@ -556,7 +577,7 @@ try {
     if (args['mark-compiled']) mutations.markCompiled = true;
     if (args['conflict-since'] !== undefined) {
       const cs = String(args['conflict-since']);
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(cs)) die('set: --conflict-since expects YYYY-MM-DD', 1);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(cs)) return die('set: --conflict-since expects YYYY-MM-DD', 1);
       mutations.setFields = { ...(mutations.setFields ?? {}), 'conflict-since': cs };
     }
     if (args['clear-conflict']) {
@@ -566,29 +587,29 @@ try {
 
     try {
       const r = await dest.mutatePage(path, mutations);
-      emitJson(r, 0);
+      return emitJson(r, 0);
     } catch (e) {
-      die(e.message, 1);
+      return die(e.message, 1);
     }
   }
 
   if (command === 'promote') {
     const path = args._[0];
-    if (!path) die(`promote: <path> required`, 1);
-    if (args.to !== 'concept') die(`promote: only --to=concept supported in v1`, 1);
+    if (!path) return die(`promote: <path> required`, 1);
+    if (args.to !== 'concept') return die(`promote: only --to=concept supported in v1`, 1);
     const res = resolveDestination({ cwd: process.cwd(), transport: makeRealTransport() });
-    if (!res) die(`not inside a p-wiki repo`, 1);
+    if (!res) return die(`not inside a p-wiki repo`, 1);
     const dest = res.primary;
 
     let source;
-    try { source = await dest.readPage(path); } catch (e) { die(e.message, 1); }
-    if (source.frontmatter.type !== 'query') die(`promote: source must be type=query`, 1);
+    try { source = await dest.readPage(path); } catch (e) { return die(e.message, 1); }
+    if (source.frontmatter.type !== 'query') return die(`promote: source must be type=query`, 1);
 
     const informedBy = source.frontmatter['informed-by'] ?? [];
     const slug = stripDatePrefix(source.frontmatter.id);
     const targetPath = `docs/wiki/pages/concept/${slug}.md`;
     if (await dest.pageExists({ type: 'concept', slug })) {
-      emitJson({ 'existing-path': targetPath }, 2);
+      return emitJson({ 'existing-path': targetPath }, 2);
     }
 
     // Union sources from informed-by pages
@@ -609,7 +630,7 @@ try {
       bumpUpdated: true,
     };
     await dest.mutatePage(targetPath, mutations);
-    emitJson({ from: path, to: targetPath, sources: sourcesArr }, 0);
+    return emitJson({ from: path, to: targetPath, sources: sourcesArr }, 0);
   }
 
   if (command === 'search') {
@@ -622,29 +643,29 @@ try {
 
   if (command === 'source') {
     const sub = args._[0];
-    if (sub !== 'add') die(`unknown source subcommand: ${sub ?? '(none)'} — only "add" exists`, 1);
+    if (sub !== 'add') return die(`unknown source subcommand: ${sub ?? '(none)'} — only "add" exists`, 1);
     await sourceAdd({ ...args, _: args._.slice(1) });
   }
 
   if (command === 'lint') {
     const res = resolveDestination({ cwd: process.cwd(), transport: makeRealTransport() });
-    if (!res) die(`not inside a p-wiki repo`, 1);
+    if (!res) return die(`not inside a p-wiki repo`, 1);
     const dest = res.primary;
     const r = await dest.lint({});
     const format = args.format ?? 'text';
     if (format === 'json') {
-      emitJson(r, 0);
+      return emitJson(r, 0);
     } else {
       process.stdout.write(formatLintReport(r));
-      process.exit(0);
+      return;
     }
   }
 
   if (command === 'backlinks') {
     const path = args._[0];
-    if (!path) die(`backlinks: <path> required`, 1);
+    if (!path) return die(`backlinks: <path> required`, 1);
     const res = resolveDestination({ cwd: process.cwd(), transport: makeRealTransport() });
-    if (!res) die(`not inside a p-wiki repo`, 1);
+    if (!res) return die(`not inside a p-wiki repo`, 1);
     const dest = res.primary;
 
     const maxSuggestions = args['max-suggestions'] !== undefined
@@ -653,26 +674,26 @@ try {
     const force = args.force === true || args.force === 'true';
     try {
       const r = await dest.applyBacklinks({ targetPath: path, maxSuggestions, force });
-      if (r.suspicious) emitJson(r, 2);
-      emitJson(r, 0);
+      if (r.suspicious) return emitJson(r, 2);
+      return emitJson(r, 0);
     } catch (e) {
-      die(e.message, 1);
+      return die(e.message, 1);
     }
   }
 
   if (command === 'init') {
-    if (!args.confluence && !args['mirror-confluence']) die('use the /p-wiki:init skill for FS scaffolding; only --confluence is supported here', 1);
+    if (!args.confluence && !args['mirror-confluence']) return die('use the /p-wiki:init skill for FS scaffolding; only --confluence is supported here', 1);
     await initConfluence(args);
   }
 
   if (command === 'index') {
     const res = resolveDestination({ cwd: process.cwd(), transport: makeRealTransport() });
-    if (!res) die(`not inside a p-wiki repo`, 1);
+    if (!res) return die(`not inside a p-wiki repo`, 1);
     const dest = res.primary;
     const format = args.format ?? 'json';
 
     if (format === 'text') {
-      if (dest.kind !== 'fs') die('index --format=text is only supported for filesystem wikis; use --format=json', 1);
+      if (dest.kind !== 'fs') return die('index --format=text is only supported for filesystem wikis; use --format=json', 1);
       // Render without writing. Build the same input the destination's
       // regenerateIndex builds, but pipe to stdout instead of writing.
       const allPages = await dest.listPages({ in: 'pages' });
@@ -694,29 +715,29 @@ try {
         groups[k].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
       }
       process.stdout.write(renderIndex(groups));
-      process.exit(0);
+      return;
     }
     const r = await dest.regenerateIndex();
     const root = findWikiRoot(process.cwd());
     const bundle = await buildBundle(dest);
     writeFileSync(join(root, 'docs', 'wiki', 'index.json'), JSON.stringify(bundle, null, 2) + '\n', 'utf-8');
-    emitJson(r, 0);
+    return emitJson(r, 0);
   }
 
   if (command === 'reindex') {
     const res = resolveDestination({ cwd: process.cwd(), transport: makeRealTransport() });
-    if (!res) die('not inside a p-wiki repo', 1);
+    if (!res) return die('not inside a p-wiki repo', 1);
     const idx = await res.primary.regenerateIndex();                       // writes index.md
     const root = findWikiRoot(process.cwd());
     const bundle = await buildBundle(res.primary);
     writeFileSync(join(root, 'docs', 'wiki', 'index.json'), JSON.stringify(bundle, null, 2) + '\n', 'utf-8');
-    emitJson({ index: idx, bundle: { pages: bundle.pages.length, path: 'docs/wiki/index.json' } });
+    return emitJson({ index: idx, bundle: { pages: bundle.pages.length, path: 'docs/wiki/index.json' } });
   }
 
   if (command === 'sync') {
     const env = { cwd: process.cwd(), transport: makeRealTransport() };
     const res = resolveDestination(env);
-    if (!res) die(`not inside a p-wiki repo`, 1);
+    if (!res) return die(`not inside a p-wiki repo`, 1);
 
     const format = args.format ?? 'text';
     const results = [];
@@ -747,14 +768,18 @@ try {
         process.stderr.write(`[sync] mirror ${name} failed: ${e?.message ?? e}\n`);
       }
     }
-    if (format === 'json') emitJson({ ok: worstExit === 0, mirrors: results }, worstExit);
-    process.exit(worstExit);
+    if (format === 'json') return emitJson({ ok: worstExit === 0, mirrors: results }, worstExit);
+    process.exitCode = worstExit;
+    return;
   }
 } catch (err) {
   const code = mapErrorToCode(err);
   const payload = { error: { code, message: err?.message ?? String(err) } };
   process.stdout.write(JSON.stringify(payload) + '\n');
-  process.exit(code === 'schema-violation' || code === 'slug-taken' || code === 'target-exists' || code === 'config-invalid' ? 2 : code === 'internal' ? 3 : 1);
+  process.exitCode = code === 'schema-violation' || code === 'slug-taken' || code === 'target-exists' || code === 'config-invalid' ? 2 : code === 'internal' ? 3 : 1;
+  return;
 }
 
-} // end isMain
+} // end main
+
+if (isMain) main();

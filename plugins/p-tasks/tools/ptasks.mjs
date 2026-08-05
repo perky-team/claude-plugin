@@ -59,14 +59,28 @@ export function findRoot(cwd) {
   }
 }
 
+// Set process.exitCode and return — never call process.exit() here.
+//
+// A write to a PIPE is asynchronous in Node (a write to a FILE is not), so exiting on
+// the next line tears the process down with bytes still queued on the stream. Measured
+// on a live 318-item board: `ptasks list --json` delivered 853 212 bytes to a file and
+// 65 536 — exactly one pipe buffer — through a pipe. The truncated text fails
+// JSON.parse, a careful consumer catches that and reports "no data", so a corrupt read
+// is indistinguishable from an empty backlog: a guard reading it says all-clear.
+// Returning instead lets the event loop flush the stream; the exit code survives.
+// (p-chat reached the same rule from a different failure — a hard exit while undici
+// still held a keep-alive socket aborted the process on Windows.)
+//
+// Callers MUST `return emitJson(...)` / `return die(...)` — these no longer stop
+// execution on their own. __tests__/no-hard-exit.test.ts pins both halves.
 export function emitJson(obj, code = 0) {
   process.stdout.write(JSON.stringify(obj) + '\n');
-  process.exit(code);
+  process.exitCode = code;
 }
 
 export function die(msg, code = 1) {
   process.stderr.write(`ptasks: ${msg}\n`);
-  process.exit(code);
+  process.exitCode = code;
 }
 
 const PLUGIN_ROOT = process.env.CLAUDE_PLUGIN_ROOT ?? dirname(dirname(fileURLToPath(import.meta.url)));
@@ -95,21 +109,27 @@ function arrayify(v) {
   return [];
 }
 
-// Read config + build destinations, emitting a clean JSON error envelope (and
-// exiting) on a malformed or structurally-invalid config instead of crashing
-// with a raw stack trace. emitJson() calls process.exit, so on the error paths
-// control never returns to the caller.
+// Read config + build destinations, emitting a clean JSON error envelope on a malformed
+// or structurally-invalid config instead of crashing with a raw stack trace.
+//
+// Returns NULL on those error paths. It used to rely on emitJson() calling process.exit,
+// so control never came back and every caller could destructure the result blind; now
+// that emitJson only sets the exit code, each caller MUST check for null and return —
+// `const { primary } = loadResolved(...)` on a null would throw a TypeError and turn a
+// clean `config-invalid` envelope into a stack trace.
 function loadResolved({ root, transport }) {
   let cfg;
   try {
     cfg = readConfig(root);
   } catch (e) {
-    return emitJson({ error: { code: e?.code ?? 'config-invalid', message: e?.message ?? String(e) } }, 1);
+    emitJson({ error: { code: e?.code ?? 'config-invalid', message: e?.message ?? String(e) } }, 1);
+    return null;
   }
   try {
     return resolveDestination({ root, config: cfg, transport });
   } catch (e) {
-    return emitJson({ error: { code: e?.code ?? 'config-invalid', message: e?.message ?? String(e) } }, 1);
+    emitJson({ error: { code: e?.code ?? 'config-invalid', message: e?.message ?? String(e) } }, 1);
+    return null;
   }
 }
 
@@ -126,7 +146,9 @@ export async function addCommand({ root, args, transport }) {
     return emitJson({ error: { code: 'invalid-kind', message: `kind must be one of ${KINDS.join('/')}` } }, 1);
   }
 
-  const { primary } = loadResolved({ root, transport });
+  const resolved = loadResolved({ root, transport });
+  if (!resolved) return;                       // config-invalid envelope already emitted
+  const { primary } = resolved;
   await primary.ensureStructure();
 
   const blockedBy = arrayify(args['blocked-by']);
@@ -178,7 +200,9 @@ export async function setCommand({ root, args, transport }) {
   const id = args._[0];
   if (!id) return emitJson({ error: { code: 'internal', message: 'id required' } }, 1);
 
-  const { primary } = loadResolved({ root, transport });
+  const resolved = loadResolved({ root, transport });
+  if (!resolved) return;                       // config-invalid envelope already emitted
+  const { primary } = resolved;
   await primary.ensureStructure();
   // Resolve the target by key (read-your-writes) rather than via listItems: a
   // Jira JQL search lags writes, so an issue created moments ago may be absent
@@ -244,7 +268,9 @@ export async function setCommand({ root, args, transport }) {
 }
 
 export async function nextCommand({ root, args, transport }) {
-  const { primary } = loadResolved({ root, transport });
+  const resolved = loadResolved({ root, transport });
+  if (!resolved) return;                       // config-invalid envelope already emitted
+  const { primary } = resolved;
   await primary.ensureStructure();
   const items = await primary.listItems();
   const warns = [];
@@ -273,7 +299,9 @@ export async function guardCommand({ root, args, transport }) {
     return die('--exclude-origin requires a prefix', 1);
   }
 
-  const { primary } = loadResolved({ root, transport });
+  const resolved = loadResolved({ root, transport });
+  if (!resolved) return;                       // config-invalid envelope already emitted
+  const { primary } = resolved;
   await primary.ensureStructure();
   const items = await primary.listItems();
   const warns = [];
@@ -294,12 +322,20 @@ export async function guardCommand({ root, args, transport }) {
   }
   // One short line, because p-shed records the LAST line of a guard's stdout as
   // `lastGuard.reason` and shows it in `pshed status`.
+  //
+  // The exit code is the load-bearing part of this command — p-shed's guard contract is
+  // 0 = launch, 75 = quiet skip, anything else = a breaker-counted error — so it is set,
+  // not exited on, for the same reason as everywhere else in this file. The line is far
+  // too short to be truncated by a pipe, but a `process.exit()` surviving here would be
+  // an invitation to reintroduce the pattern.
   process.stdout.write(`${g.reason}\n`);
-  process.exit(g.exit);
+  process.exitCode = g.exit;
 }
 
 export async function summaryCommand({ root, args, transport }) {
-  const { primary } = loadResolved({ root, transport });
+  const resolved = loadResolved({ root, transport });
+  if (!resolved) return;                       // config-invalid envelope already emitted
+  const { primary } = resolved;
   await primary.ensureStructure();
   const items = await primary.listItems();
   const parentId = args._[0];
@@ -312,7 +348,9 @@ export async function summaryCommand({ root, args, transport }) {
 }
 
 export async function listCommand({ root, args, transport }) {
-  const { primary } = loadResolved({ root, transport });
+  const resolved = loadResolved({ root, transport });
+  if (!resolved) return;                       // config-invalid envelope already emitted
+  const { primary } = resolved;
   await primary.ensureStructure();
   const items = await primary.listItems();
   const parentId = args._[0];
@@ -380,6 +418,7 @@ export async function initFs({ root }) {
 
 export async function syncCommand({ root, args, transport }) {
   const resolved = loadResolved({ root, transport });
+  if (!resolved) return;                       // config-invalid envelope already emitted
   try {
     const results = await syncAll(resolved);
     const exitCode = results.some(r => r.errors.length > 0) ? 1 : 0;
@@ -395,12 +434,12 @@ if (isMain) {
   (async () => {
     if (process.argv[2] === '--version') {
       process.stdout.write(`${readVersion()}\n`);
-      process.exit(0);
+      return;
     }
     const command = process.argv[2];
     const args = parseArgs(process.argv.slice(3));
     const KNOWN = ['init', 'add', 'set', 'next', 'guard', 'summary', 'list', 'sync'];
-    if (!KNOWN.includes(command)) die(`unknown command: ${command}`, 1);
+    if (!KNOWN.includes(command)) return die(`unknown command: ${command}`, 1);
     if (command === 'init') {
       const root = findRoot(process.cwd());
       await initWithArgs({ root, args });
@@ -441,6 +480,6 @@ if (isMain) {
       await syncCommand({ root, args });
       return;
     }
-    die(`command ${command} not implemented yet`, 1);
+    return die(`command ${command} not implemented yet`, 1);
   })();
 }

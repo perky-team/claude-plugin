@@ -44,7 +44,7 @@ Tool: `node tools/pshed.mjs <command>` (all support `--json`; exit `0` ok / `1` 
 |---|---|---|
 | `jobs.yml` | git | `version`, `defaults` (may carry `profile:`), `jobs[]{ id, schedule, enabled, cwd?, prompt, timeoutSec?, permissionMode?, allowedTools?, model?, effort?, maxConsecutiveFailures?, guard?, guardTimeoutSec?, concurrencyGroup? }`, optional `profiles{}` (see Speed profiles) |
 | `config.json` | gitignore | `{ nodeBin, claudeBin, profileFile? }` (resolved at init; `profileFile` is the path — absolute, or relative to the repo root — of the file holding the active profile name) |
-| `state/<id>.json` | gitignore | per-job `{ lastRun, lastExit, pid, consecutiveFailures, consecutiveGuardFailures?, lastGuard?, breakerTripped?, breakerReason?, breakerAt?, lastSkipReason?, lastSkipAt?, lastSkipResetAt? }` — one file per job (no shared state file). `lastSkip*` records the most recent skip (`lastSkipReason` is `usage-limit` or `api-overload`) and is cleared once the job runs for real again; `lastGuard` records the most recent guard check (`{ at, outcome, exit, reason? }` — `reason` is the last non-empty line of the guard's stdout, collapsed to one line and capped at 120 chars; absent when the guard printed nothing) |
+| `state/<id>.json` | gitignore | per-job `{ lastRun, lastExit, pid, consecutiveFailures, consecutiveGuardFailures?, lastGuard?, breakerTripped?, breakerReason?, breakerAt?, lastSkipReason?, lastSkipAt?, lastSkipResetAt?, consecutiveSkips?, retryNotBefore? }` — one file per job (no shared state file). `lastSkip*` records the most recent skip (`lastSkipReason` is `usage-limit` or `api-overload`) and is cleared once the job runs for real again; `retryNotBefore` (epoch ms) is the earliest moment a quota/overload skip may relaunch and `consecutiveSkips` counts the run of them — both absent unless a retry is pending, and both cleared by any path that consumes the slot; `lastGuard` records the most recent guard check (`{ at, outcome, exit, reason? }` — `reason` is the last non-empty line of the guard's stdout, collapsed to one line and capped at 120 chars; absent when the guard printed nothing) |
 | `logs/<date>.jsonl` | gitignore | one record per run (see below); auto-rotated (7-day retention) |
 | `run/<id>.pid` | gitignore | duplicate-guard pidfile |
 | `run/<id>.pause` | gitignore | per-job pause marker (contents = a human-readable reason). A job's own run writes it to stop being scheduled; `pause --id/--group` writes the same file with a leading `#pshed origin=operator` line. Presence pauses, so a bare `touch` works and an empty marker is a valid self-pause |
@@ -66,7 +66,8 @@ kinds of row, distinguished by which fields they carry — a consumer should bra
 | `exit`, `timedOut` | always | process exit (`null` when killed by the timeout) |
 | `outcome` | always | `success` \| `failure` \| `skipped` \| `guard-error` |
 | `reason` | `skipped` | `usage-limit` (subscription/credits) or `api-overload` (429/529/5xx) |
-| `resetAt` | when parsed | reset time lifted out of a limit message |
+| `resetAt` | when parsed | reset time lifted out of a limit message, verbatim |
+| `retryAt` | `skipped` | epoch ms the job may relaunch — the reset time when one parsed, otherwise the backoff |
 | `guarded` | guarded jobs | the launch passed a guard |
 | `raw` | non-success | truncated tail of the run's output (self-reveal, 2 KB) |
 | `usage` | result JSON parsed | what the run cost — see below |
@@ -344,9 +345,27 @@ When a run fails **only** because the Claude subscription usage limit is exhaust
 because of a transient API overload (`429`/`529`, `rate_limit_error`, `overloaded_error`),
 that is quota/infra — not a code failure. p-shed classifies each finished run and, for
 these, records a `skipped-usage-limit` (with a reset time when the message carries one)
-that **does not move the breaker counter**. The next scheduled tick simply retries when
-the window resets; no `reset-breaker` is needed. `status` shows a job's last skip in the
-`lastSkip` column so a stuck-on-limit job is visible.
+that **does not move the breaker counter**. No `reset-breaker` is needed.
+
+**The skip does not consume the job's slot.** `lastRun` is left where it was, so the job
+stays due and retries — for every schedule density, not just for a minutely job. It used
+to be advanced, which meant a `20 6 * * *` job that came back `api-overload` at 09:05 was
+not due again until 06:20 the *next morning*: a transient blip cost a full day. A pending
+retry also keeps the job due past `isDue`'s 24-hour catch-up window, so a weekly schedule
+does not lose a whole week to a long outage.
+
+Staying due is bounded, so a minutely job cannot hammer a quota that is known to be
+exhausted. `retryNotBefore` holds the earliest moment the job may relaunch: the reset time
+when the limit message carried a parseable one, otherwise an exponential backoff starting
+at one minute and capped at 30. Each further skip raises `consecutiveSkips` and lengthens
+the wait; the first real run (success *or* failure), and any guard verdict that consumes
+the slot, clears both. A tick held back this way is reported as `skipped-retry-wait` and
+writes no state and no history row.
+
+`status` names which of the two states a job is in — `api-overload retry 09:12` while the
+backoff is pending, `retry-now` once it has elapsed, and `usage-limit next-slot` for a
+skip with no retry outstanding (which is also how a state file written before this feature
+reads, correctly: its `lastRun` really was advanced).
 
 Both skip the same way, but they are **reported apart** — the log's `reason` and the
 state's `lastSkipReason` are `usage-limit` for a subscription/credits limit and

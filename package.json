@@ -2,6 +2,10 @@
   "name": "perky-team-claude-plugin-tests",
   "private": true,
   "type": "module",
+  "//engines": "Test harness only — the shipped plugins still support Node 22.5. The suite needs 24 because node:sqlite honors the file:…?immutable=1 URI there and not on 22, which p-graph's read-only-directory test depends on. See .claude/CLAUDE.md.",
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",

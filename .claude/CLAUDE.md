@@ -32,9 +32,31 @@ after that it is instant):
   `tar --exclude=./node_modules --exclude=./.git -cf - . | (cd ~/pshed && tar -xf -)` —
   and `npm install` there.
 - **WSL's system node may be far too old** (Ubuntu 22.04 ships v12; vitest needs 18+).
-  Unpack a portable node into `~/.local/node` rather than touching the system or
-  requiring sudo:
-  `curl -fsSL https://nodejs.org/dist/v22.13.1/node-v22.13.1-linux-x64.tar.xz | tar -xJ -C ~/.local/node --strip-components=1`
+  Unpack a portable node rather than touching the system or requiring sudo:
+  `curl -fsSL https://nodejs.org/dist/v24.19.0/node-v24.19.0-linux-x64.tar.xz | tar -xJ -C ~/.local/node24 --strip-components=1`
+- To tell a real regression from a pre-existing failure, run the same test file against
+  the merge-base: `git archive <merge-base> --format=tar` into a second WSL directory and
+  reuse the same `node_modules`.
+
+## Run the suite on Node 24+, on BOTH platforms
+
+**Node 22 gives a false failure that looks like a p-graph bug and is not.** Measured, not
+assumed: `node:sqlite` on v22.13.1 does not honor the `file:…?immutable=1` URI — the open
+throws `unable to open database file` — while v24.19.0 does. p-graph's read-only store
+falls back to a plain read-only open when the URI is rejected, and that fallback still
+needs to create a `-shm` file, so `store-readonly.test.ts` ("answers a query correctly when
+.pgraph is a read-only directory") fails on Node 22 on **both** Windows and Linux. The test
+is right and the code is right; only the runtime is wrong. There is no third way — reading
+WAL data without writing anywhere at all is exactly what `immutable=1` is for.
+
+Node 22 also makes the suite roughly twice as slow (137 s vs 64 s under WSL), which pushes
+spawn-heavy e2e files (`p-shed/cli-deploy-e2e`, `p-graph/cli-autorefresh`) over their
+timeouts under full-run CPU contention — failures that vanish when the file is run alone.
+Chasing those wastes a lot of time.
+
+Note the asymmetry: this floor is for the **test suite**, not for the shipped plugins.
+p-graph's own stated runtime floor is Node 22.5, and on Node 22 it degrades honestly — only
+the read-only-directory case is unavailable.
 - To tell a real regression from a pre-existing failure, run the same test file against
   the merge-base: `git archive <merge-base> --format=tar` into a second WSL directory and
   reuse the same `node_modules`.

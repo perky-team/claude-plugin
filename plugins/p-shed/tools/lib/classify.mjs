@@ -207,14 +207,86 @@ export function classifySkipReason(out, err) {
 }
 
 // Best-effort: pull a human reset time out of a limit message ("resets 3am",
-// "reset at 2026-01-02 15:00"). Returns the matched string or undefined — purely
-// informational (shown in status/logs); scheduling is unaffected either way. The
-// capture excludes CR/LF explicitly (a `.` would exclude LF but keep CR, so a
-// Windows CRLF tail — every headless run has one — would otherwise defeat it).
+// "reset at 2026-01-02 15:00"). Returns the matched string or undefined — this is the
+// REPORTING form, shown verbatim in status/logs. `parseResetTime` below turns the same
+// capture into a timestamp for scheduling. The capture excludes CR/LF explicitly (a `.`
+// would exclude LF but keep CR, so a Windows CRLF tail — every headless run has one —
+// would otherwise defeat it).
 export function parseResetAt(out, err) {
   const m = /reset[s]?\s+(?:at\s+)?([^\r\n.·∙|]{1,40})/i.exec(textOf(out, err));
   const v = m && m[1].trim();
   return v || undefined;
+}
+
+// The next local occurrence of a wall-clock time, relative to `now`. Seconds are zeroed:
+// a limit message never carries them, and inventing them would make the retry land a
+// fraction of a minute off the reset.
+function nextOccurrence(now, hour, minute) {
+  const d = new Date(now);
+  d.setHours(hour, minute, 0, 0);
+  if (d.getTime() <= now) d.setDate(d.getDate() + 1);
+  return d.getTime();
+}
+
+// The same "after the word reset" context parseResetAt captures, but WITHOUT stopping at
+// a period. parseResetAt ends the capture at `.` so a sentence's full stop never lands in
+// the reported string — correct for reporting, wrong for parsing: an ISO timestamp
+// carries its milliseconds behind a dot, and truncating there drops the trailing `Z`, so
+// `2026-08-04T19:15:00.000Z` becomes `…T19:15:00` and Date.parse reads it as LOCAL time.
+// Measured on a UTC+3 machine that is a three-hour error, silently. Scoped to 60 chars so
+// an unrelated timestamp later in the output can never be mistaken for the reset.
+function resetScope(out, err) {
+  const m = /reset[s]?\s+(?:at\s+)?([^\r\n·∙|]{1,60})/i.exec(textOf(out, err));
+  return (m && m[1].trim()) || undefined;
+}
+
+const ISO_RE = /\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?/;
+
+// -> epoch ms | undefined. The SCHEDULING form of parseResetAt: a real timestamp the
+// backoff can defer to, instead of the free text a human reads.
+//
+// Every branch is bounded by the same sanity window — the result must land inside
+// (now, now + 48h] — because the input is a message, not an API field. That window is
+// what rejects V8's creative readings of a bare capture ("3" parses as the year 2003) and
+// any stale date echoed from an unrelated line. Absolute forms are tried FIRST, so
+// "2026-01-02 15:00" is read as that date rather than having its "15:00" mistaken for
+// today. A miss is not a failure — the caller falls back to the exponential backoff,
+// which is what makes a best-effort parse acceptable input to a scheduling decision at
+// all: being wrong costs one extra skip, never a lost slot.
+export function parseResetTime(out, err, now = Date.now()) {
+  const scope = resetScope(out, err);
+  if (!scope) return undefined;
+  const withinWindow = (t) => (Number.isFinite(t) && t > now && t <= now + 48 * 60 * 60_000 ? t : undefined);
+
+  const iso = ISO_RE.exec(scope);
+  if (iso) {
+    const t = withinWindow(Date.parse(iso[0]));
+    if (t !== undefined) return t;
+  }
+
+  // A non-ISO absolute form ("Jan 2 2026 15:00"). Uses the reporting capture, which stops
+  // at the sentence period — the right boundary once milliseconds are out of the picture.
+  const reported = parseResetAt(out, err);
+  if (reported) {
+    const t = withinWindow(Date.parse(reported));
+    if (t !== undefined) return t;
+  }
+
+  const ampm = /\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i.exec(scope);
+  if (ampm) {
+    let hour = Number(ampm[1]) % 12;
+    if (/pm/i.test(ampm[3])) hour += 12;
+    const minute = Number(ampm[2] ?? 0);
+    if (hour <= 23 && minute <= 59) return withinWindow(nextOccurrence(now, hour, minute));
+  }
+
+  const hhmm = /\b(\d{1,2}):(\d{2})\b/.exec(scope);
+  if (hhmm) {
+    const hour = Number(hhmm[1]);
+    const minute = Number(hhmm[2]);
+    if (hour <= 23 && minute <= 59) return withinWindow(nextOccurrence(now, hour, minute));
+  }
+  return undefined;
 }
 
 // For self-reveal logging: the combined output, trimmed and tail-truncated, so a

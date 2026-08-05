@@ -1,6 +1,6 @@
 {
   "name": "p-tasks",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Two-level task tracker (task → sub-task) with FS and Jira destinations, one-way primary→mirrors sync. Items carry optional work-item fields (acceptance, files, kind, origin, resolution). CLI command `ptasks guard` answers \"is there work?\" as a p-shed guard (exit 0 launch / 75 quiet, --exclude-origin skips items parked on a human), reusing next's selection rules. Skills: init, add, set, next, summary, list, sync.",
   "author": {
     "name": "Andrey Sukharev",

@@ -244,13 +244,19 @@ describe('pwiki source add --from-config (Confluence block, fake transport)', ()
     stdoutSpy.mockRestore();
   });
 
+  // emitJson/die no longer call process.exit() — a hard exit truncates a piped write
+  // (see pwiki.mjs) — so a finished command returns normally and leaves its code in
+  // process.exitCode. The exit spy above stays: if a process.exit() ever creeps back in,
+  // it throws and the test says so instead of silently passing.
+  //
+  // The code is read and CLEARED on every call. Left set, it would be inherited by this
+  // vitest worker's own exit and turn a green run red.
   const call = async (fn: () => Promise<unknown>, expectedExit: number) => {
-    try {
-      await fn();
-      throw new Error('expected the command to exit');
-    } catch (e: any) {
-      expect(e.message).toBe(`exit:${expectedExit}`);
-    }
+    process.exitCode = undefined;
+    await fn();
+    const actual = process.exitCode ?? 0;
+    process.exitCode = undefined;
+    expect(actual).toBe(expectedExit);
   };
 
   it('copies the whole Confluence block, ids included, and the copy reads a page', async () => {

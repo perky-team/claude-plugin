@@ -45,6 +45,14 @@ export function collectStatus(root, { installed = null, deps = {} } = {}) {
       // through logs. Undefined when the last run was real.
       lastSkipReason: st.lastSkipReason,
       lastSkipResetAt: st.lastSkipResetAt,
+      // A quota skip no longer consumes the slot, so "skipped" is now two states, not
+      // one: retrying under a backoff, or waiting for the next scheduled slot. Raw ms
+      // rather than a computed boolean because collectStatus takes no `now` — formatHuman
+      // does, and a JSON consumer can compare timestamps itself. Both absent on a state
+      // file written before this existed, which reads as the second state — correctly,
+      // since the old code had already advanced lastRun.
+      retryNotBefore: st.retryNotBefore,
+      consecutiveSkips: st.consecutiveSkips,
       // Guard freshness ("checked 40 s ago") + its failure counter. Undefined / 0
       // for guardless jobs.
       lastGuard: st.lastGuard,
@@ -76,6 +84,13 @@ export function collectStatus(root, { installed = null, deps = {} } = {}) {
   };
 }
 
+// Local wall-clock HH:MM. An operator comparing this against a cron schedule reads local
+// time, and the retry moment is only ever minutes-to-hours away, so a date adds noise.
+function hhmm(ms) {
+  const d = new Date(ms);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
 // Plain-text table for `status --human`. `now` is injectable so the guard-age
 // column is testable.
 export function formatHuman(status, now = Date.now()) {
@@ -99,8 +114,20 @@ export function formatHuman(status, now = Date.now()) {
   lines.push('');
   lines.push(['id', 'enabled', 'running', 'paused', 'origin', 'breaker', 'fails', 'lastExit', 'lastSkip', 'guard'].join('\t'));
   for (const j of status.jobs) {
+    // `lastSkip: api-overload` reads as "it was skipped" — not as "it will not run again
+    // for 23 hours", and the second is the one an operator acts on. Name which of the two
+    // states the job is in: retrying (and when), retry already due, or genuinely waiting
+    // for its next scheduled slot. `resets X` stays alongside: it is what the LIMIT
+    // MESSAGE said, while the retry time is what the scheduler will actually do — they
+    // differ whenever the message carried no usable time and the backoff took over.
     const skip = j.lastSkipReason
-      ? (j.lastSkipResetAt ? `${j.lastSkipReason} (resets ${j.lastSkipResetAt})` : j.lastSkipReason)
+      ? [
+          j.lastSkipReason,
+          j.retryNotBefore == null
+            ? 'next-slot'
+            : (j.retryNotBefore > now ? `retry ${hhmm(j.retryNotBefore)}` : 'retry-now'),
+          ...(j.lastSkipResetAt ? [`(resets ${j.lastSkipResetAt})`] : []),
+        ].join(' ')
       : '-';
     // Guard freshness, plus the guard's own reason when it printed one — a quiet slot
     // leaves no history row, so this column is the only place an operator can read why
