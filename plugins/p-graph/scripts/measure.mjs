@@ -182,7 +182,14 @@ async function main() {
     // with `new`, it comes back from `Test.createTestingModule(...).compile()`, so
     // the only fact the source states is the declared type (`let testModule:
     // TestingModule;`), which is exactly what Task 2's type reader reads.
-    const ownerAnnotatedIn = (file, recv, owner) => {
+    // Same derivation as ownerAssignedIn above: the class that owns a target is
+    // the segment right before the LAST dot, not the first one. For a plain
+    // `Conn.query` that is the same segment either way, but for a
+    // namespace-qualified target like `NS.Conn.query` the first segment is the
+    // namespace, not the class — taking it (as this used to, via the Go-only
+    // `pkg` variable) would look for `recv: NS` in the source and never match.
+    const ownerAnnotatedIn = (file, recv, dstQname) => {
+      const owner = dstQname.slice(0, dstQname.lastIndexOf('.')).split('.').pop();
       if (!owner || !/^[A-Z]/.test(owner)) return false;
       const head = recv.split('.').pop();
       return new RegExp(`\\b${head}\\s*:\\s*${owner}\\b`).test(srcOf(file));
@@ -215,8 +222,8 @@ async function main() {
           // trusting the resolver's own table. The owner is the target's qname minus
           // its last segment, and the constructor may be module-qualified.
           || Boolean(qualified && e.dst.includes('.') && ownerAssignedIn(e.file, qualified[1], e.dst))
-          || ((e.lang === 'ts' || e.lang === 'js') && qualified
-              && ownerAnnotatedIn(e.file, qualified[1], pkg));
+          || ((e.lang === 'ts' || e.lang === 'js') && qualified && e.dst.includes('.')
+              && ownerAnnotatedIn(e.file, qualified[1], e.dst));
         if (ok) { withReason++; continue; }
         const note = ACCEPTED.get(`${repo} ${sym} ${e.file}`);
         const row = `${repo} ${sym}  ${e.file}:${e.line} -> ${e.dst} (${e.dfile})  | ${text.trim().slice(0, 90)}`;

@@ -125,6 +125,50 @@ function build(): any { return null; }
     s.close();
   }, 30000);
 
+  it('does not treat a function\'s own generic type parameter as a stated type', async () => {
+    write('app.ts', `export class T {
+  logic() { return 1; }
+}
+export function f<T>(x: T) {
+  return x.logic();
+}
+`);
+    const s = await indexed();
+
+    // f's <T> is a placeholder for whatever type its caller passes in — not the
+    // class also named T. A name collision like this must never turn into a
+    // CERTAIN edge: that is exactly the false-knowledge bug this feature exists
+    // to remove. A guessed edge (the honest bare-name fallback) is fine; a
+    // certain one is not.
+    const rows = s.callers('T.logic');
+    expect(rows.some((r) => r.qname === 'f' && r.guess === 0)).toBe(false);
+
+    s.close();
+  }, 30000);
+
+  it('does not treat a class or method type parameter as a stated type either', async () => {
+    write('app.ts', `export class T {
+  logic() { return 1; }
+}
+export class Box<T> {
+  put(x: T) { return x.logic(); }
+}
+export class Crate {
+  put2<T>(x: T) { return x.logic(); }
+}
+`);
+    const s = await indexed();
+
+    // The same collision, but bound by a generic class and by a generic method
+    // instead of a generic function — the walk that refuses the name must not
+    // stop at the nearest function.
+    const rows = s.callers('T.logic');
+    expect(rows.some((r) => r.qname === 'Box.put' && r.guess === 0)).toBe(false);
+    expect(rows.some((r) => r.qname === 'Crate.put2' && r.guess === 0)).toBe(false);
+
+    s.close();
+  }, 30000);
+
   it('refuses a guess when the annotation names a type from outside the repo', async () => {
     write('app.ts', `import { ServerResponse } from 'node:http';
 export class Sink {

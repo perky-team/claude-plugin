@@ -187,6 +187,29 @@ function goInitTypeNode(expr) {
   return null;
 }
 
+// True when some declaration enclosing `node` binds `name` as a type
+// parameter — a placeholder that stands for whatever type the caller passes,
+// not a real type. `class Box<T> { put(x: T) {} }`, `function f<T>(x: T) {}`
+// and even one generic method inside an otherwise plain class
+// (`class C { m<T>(x: T) {} }`) each carry their own `type_parameters` field
+// holding `type_parameter` nodes with a `name` field — confirmed by parsing a
+// fixture and printing the tree (see the fix report). A class, a function AND
+// a method can all be generic, so this walks every ancestor up to the root
+// instead of stopping at the nearest function: stopping early would still let
+// `class Box<T> { put(x: T) { return x.logic(); } }` treat `T` as the class
+// named `T` two lines above.
+function tsBindsAsTypeParam(node, name) {
+  for (let n = node; n; n = n.parent) {
+    const typeParams = n.childForFieldName?.('type_parameters');
+    if (!typeParams) continue;
+    for (let i = 0; i < typeParams.namedChildCount; i++) {
+      const p = typeParams.namedChild(i);
+      if (p.type === 'type_parameter' && p.childForFieldName?.('name')?.text === name) return true;
+    }
+  }
+  return false;
+}
+
 // The type a TypeScript declaration states, as written. A TS qname carries no
 // package or module prefix — a top-level class `Conn` has the qname `Conn` — so the
 // name as written is already the qname to look up, and no qualification is needed.
@@ -194,18 +217,28 @@ function goInitTypeNode(expr) {
 // Returns null for every shape a method call cannot be resolved through: a union, a
 // function type, an array, a literal, `any`. A row is only worth writing when it
 // names ONE type, because that is what the resolver's guards require.
+//
+// Also returns null when the bare name is bound as a generic type parameter
+// rather than a real type (`function f<T>(x: T)`): otherwise a parameter named
+// after an in-scope type variable is indistinguishable from one that really is
+// typed as some repo class of the same name, and `T.logic()` would resolve as
+// CERTAIN off nothing but a name collision — the exact false-knowledge bug
+// this whole feature exists to remove.
 function tsStatedTypeName(declNode) {
   const ann = declNode?.childForFieldName?.('type');          // `c: Conn`
   const t = ann?.type === 'type_annotation' ? ann.namedChild(0) : ann;
+  // A dotted name (`foo.Bar`) is never a type parameter — a type parameter is
+  // always one bare identifier — so only the two bare-name shapes need the check.
+  const named = (name) => (tsBindsAsTypeParam(declNode, name) ? null : name);
   if (t) {
     // `Conn`, and `Conn | null` is deliberately not one type.
-    if (t.type === 'type_identifier') return t.text;
+    if (t.type === 'type_identifier') return named(t.text);
     // `foo.Bar` — a namespace-qualified type. TS qnames are dotted the same way.
     if (t.type === 'nested_type_identifier') return t.text.replace(/\s/g, '');
     // `Conn<T>`: the generic arguments do not change which class owns the method.
     if (t.type === 'generic_type') {
       const base = t.childForFieldName?.('name');
-      if (base?.type === 'type_identifier') return base.text;
+      if (base?.type === 'type_identifier') return named(base.text);
       if (base?.type === 'nested_type_identifier') return base.text.replace(/\s/g, '');
     }
     return null;
@@ -215,7 +248,7 @@ function tsStatedTypeName(declNode) {
   const value = declNode?.childForFieldName?.('value');
   if (value?.type === 'new_expression') {
     const ctor = value.childForFieldName?.('constructor');
-    if (ctor?.type === 'identifier') return ctor.text;
+    if (ctor?.type === 'identifier') return named(ctor.text);
   }
   return null;
 }
