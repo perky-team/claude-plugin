@@ -1140,7 +1140,32 @@ export async function extract({ file, lang, langId, scm, source, pyRepoModules =
         // The declaration is the parameter or the declarator, not the name node.
         const decl = b.node.parent;
         const type = tsStatedTypeName(decl);
-        if (type) fieldTypes.push({ key: b.key, type, file });
+        if (type) { fieldTypes.push({ key: b.key, type, file }); continue; }
+        // No type stated. In TypeScript a parameter without one is typed by the
+        // signature it is passed to — a library's callback, most of the time — so
+        // the type is decided somewhere this repo cannot read. Record that fact:
+        // the resolver then refuses the bare-name fallback instead of answering
+        // with the one repo method that shares the name. On sindresorhus/got that
+        // guess printed 89 wrong rows for `setHeader`, every one of them
+        // `response.setHeader(...)` inside `server.all('/x', (request, response) =>
+        // …)`.
+        //
+        // Parameters only, and TypeScript only. A `const` or `let` with no
+        // annotation takes its type from an initialiser this rule cannot read —
+        // nest writes `const module = await Test.createTestingModule(…).compile()`,
+        // and refusing there would throw away 190 rows that are all correct.
+        // JavaScript annotates nothing at all, so the rule would refuse every
+        // member call in a .js file.
+        //
+        // "No annotation" means no annotation NODE, not an annotation this reader
+        // cannot use. `w: any` is a stated fact — the author said the value can be
+        // anything — and so are a union and a function type. Refusing those would
+        // remove a lead the source never contradicted; refusing an unannotated
+        // parameter removes a guess the source cannot support.
+        const isParam = decl?.type === 'required_parameter' || decl?.type === 'optional_parameter' ||
+          decl?.type === 'arrow_function';
+        const annotated = Boolean(decl?.childForFieldName?.('type'));
+        if (lang === 'ts' && isParam && !annotated) fieldTypes.push({ key: b.key, type: '#param', file });
       }
     }
   }

@@ -189,3 +189,65 @@ export function send(res: ServerResponse) {
     s.close();
   }, 30000);
 });
+
+// got printed 89 wrong rows for one method, every one `response.setHeader(...)`
+// where `response` is an unannotated callback parameter typed by the library's own
+// signature. Nothing in the repo states that type, so a bare-name guess there is
+// not a lead, it is noise.
+describe('an unannotated TypeScript parameter', () => {
+  it('refuses the bare-name guess, and reports the call site', async () => {
+    write('lib.ts', `export class Sink {
+  setHeader(k: string, v: string) {}
+}
+`);
+    write('test.ts', `import { serve } from 'some-library';
+export function run() {
+  serve('/x', (request, response) => {
+    response.setHeader('a', 'b');
+  });
+}
+`);
+    const s = await indexed();
+
+    expect(s.callers('Sink.setHeader')).toEqual([]);
+    expect(s.gapsFor('Sink.setHeader').length).toBeGreaterThan(0);
+
+    s.close();
+  }, 30000);
+
+  it('leaves JavaScript alone, where nothing is ever annotated', async () => {
+    write('lib.js', `export class Sink {
+  setHeader(k, v) {}
+}
+`);
+    write('use.js', `import { serve } from 'some-library';
+export function run() {
+  serve('/x', (request, response) => {
+    response.setHeader('a', 'b');
+  });
+}
+`);
+    const s = await indexed();
+
+    // Refusing here would gut JavaScript: no parameter carries a type, so every
+    // member call on one would be refused. The row stays, marked a guess.
+    expect(s.callers('Sink.setHeader')).toMatchObject([{ guess: 1 }]);
+
+    s.close();
+  }, 30000);
+
+  it('still resolves a call on an annotated parameter beside an unannotated one', async () => {
+    write('app.ts', `export class Conn {
+  query(q: string) { return q; }
+}
+export function read(c: Conn, other) {
+  return c.query('1');
+}
+`);
+    const s = await indexed();
+
+    expect(s.callers('Conn.query')).toMatchObject([{ qname: 'read', guess: 0 }]);
+
+    s.close();
+  }, 30000);
+});
