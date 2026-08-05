@@ -44,17 +44,52 @@ implementation resolves to it as a guess; with two or more it becomes a gap. The
 honest answer is "these N types could receive this call", and the graph cannot
 say that yet.
 
-### 3. Two repo packages sharing a base name collapse into one qname space
+### 3. A call on a parameter reaches a same-named function in another file, CERTAINLY
+
+Pass L refuses a cross-file bare-name match when the calling file holds a
+*definition* of that name. A parameter is not a definition, so it shadows
+nothing: `textOf(it)` inside `applyFilterList(items, filter, textOf)` links to
+`function textOf` in another plugin and is marked certain, and `r()` inside
+`new Promise((r) => …)` links to a `const r` in an unrelated test file.
+
+Measured on this repo: **6 false certain rows** of this shape. The facts needed to
+refuse are already extracted — `tsVarKeys` in the driver holds every TS/JS binding
+with the span it is visible in — they are simply not consulted by the resolver.
+Python has the same gap through `pyVarKeys`.
+
+### 4. The TypeScript/JavaScript language gate can manufacture uniqueness
+
+Every resolver pass requires the same language on both ends, so a `.ts` test can
+never reach the `.mjs` function it imports. That alone is only lost recall, and it
+is reported as a gap. The harm is second-order: with the right target invisible, a
+single same-language candidate anywhere in the repo looks unique, and Pass A takes
+it and calls it CERTAIN.
+
+Measured on this repo: **5 false certain rows**, all `writeConfig` — three plugins
+each import their own `.mjs` `writeConfig`, and every call lands on one `.ts` test
+helper in a fourth plugin. Repo-wide, **3,048 unresolved calls** (2,964 of them
+ts→js) name a target that exists only in the other language, so this is also the
+largest single class of lost recall here.
+
+Both items are pre-existing and were found by the quality pass in
+`2026-08-05-p-graph-ts-callback-defs-results.md`, which audited all 4,514 certain
+rows of this repo — 11 false, 0.24%.
+
+### 5. Two repo packages sharing a base name collapse into one qname space
 
 So a call can resolve to the wrong package's symbol. The `count(DISTINCT ft.type)
 = 1` guard in Pass F is what stops that from becoming a *certain* wrong row today
 (`receiver-types.test.ts` covers it), but the collapse itself is still there.
 
-### 4. `gitChangedFiles` cannot see a file created and deleted without a commit
+### 6. `gitChangedFiles` cannot see a change staged and then reverted without a commit
 
-So a stale row survives until the next `--full`.
+So a stale row survives until the next `--full`. Wider than first recorded: it is not
+only a file created and deleted, it is any edit that leaves the tree matching HEAD
+again. Reproduced on got and nest by the quality pass, with the pre-change code
+too — the row count it leaves behind grows with the node count per file (1 node
+before this work, 6 after).
 
-### 5. Smaller, all recorded in `.superpowers/sdd/progress.md`
+### 7. Smaller, all recorded in `.superpowers/sdd/progress.md`
 
 - An assertion in `alias-resolution.test.ts` that no longer tells the two
   variable-key shapes apart.

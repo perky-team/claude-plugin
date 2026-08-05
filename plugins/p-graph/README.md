@@ -189,6 +189,11 @@ Two changes moved those rows. Reading a Go callee's declared result removed 27 f
 
 "At most" is exact about what is known: every certain row is audited, so a false row can only be among the guesses, and 315 is their ceiling.
 
+**Do not read `0 of 1,411` as a promise about your repo.** It is a fact about those seven repositories and those 22 symbols. All 4,514 certain rows of the repository p-graph itself lives in were later audited the same way, and **11 were false — 0.24%**. Both causes are named in `docs/superpowers/plans/2026-08-04-p-graph-follow-up.md` (items 3 and 4) and neither is visible in the seven measured repos:
+
+- **A call on a parameter.** `textOf(it)` inside `applyFilterList(items, filter, textOf)` reaches a `function textOf` in another folder and is called certain. Reading lexical scope refuses a name the calling file *defines*, and a parameter is not a definition.
+- **A mixed `.ts` / `.mjs` repo.** Every rule needs the same language on both ends, so a `.ts` test cannot reach the `.mjs` function it imports. That much is only lost recall, and it is reported. The harm is that with the right target invisible, one same-language candidate anywhere in the repo looks unique and is taken as certain.
+
 **No certain row in that set was false. Every false row is marked a guess.** Treat a guess as a lead and check it.
 
 **Re-check it yourself**, in one command — it clones the same seven repositories at the same commits, indexes them, and audits every certain row:
@@ -251,6 +256,8 @@ Three groups are reported separately, so the list stays short enough to read:
 `impact` reports the whole **frontier** — gaps naming the target *and* gaps naming anything the walk already reached, which is where it stopped. It also refuses to follow a guessed edge, and counts how many it refused (`skipped_guesses` in `--json`), so an empty `impact` never hides the difference between "nothing depends on this" and "the only ways in were guesses". `trace` says so too: a missing path prints `(no path — but N/M call sites are unattributed, so a real path may be invisible to the graph)`. `status` carries the repo-wide share as `unattributed calls N/M`. With `--json`, `callers`/`callees`/`impact` return `{ <command>: [rows], gaps: [gap rows] }`; `context` returns three gap lists — `gaps_in`, `gaps_out`, and `gaps` (the two merged with duplicates removed, since a wrapper-delegation call site can appear in both directions).
 
 One thing the reports cannot fix: `callers`, `callees` and `impact` match a bare `name` as well as a `qname`, so `callers Get` merges the callers of *every* symbol named `Get`. Ask by `qname` (`callers store.Postgres.Get`) whenever a name is shared.
+
+For a callback definition, asking by `qname` does not separate them either: a module-scope `beforeEach` on line 9 gives the qname `beforeEach@9` in every file that has one — 40 of them in this repo. The `file:line` printed beside each row is what identifies a hook, not its name.
 
 > The Go `qname` format changed in schema version 2, schema version 3 added the struct-field-type table plus the field-selector call resolution above, schema version 5 made a call on the enclosing receiver (`s.M()`, `this.M()`, `self.M()`) receiver-qualified, and schema version 6 added the `dst_bare`/`lang`/`external` columns on `edges` and the `#embed` rows in `field_types` that the guards above rely on. Schema version 7 (current) added the `guess` and `member` columns on `edges` — the marking the whole answer format now rests on — and receiver-qualified a Go method on a generic type. A schema bump before 6 left an old `.pgraph/graph.db` in place and relied on the next `index`/`/p-graph:sync` to fully rebuild it. From schema 6 on, a new column can never be added to a table that already exists, so a bump instead **drops the graph tables as soon as the store is opened** — the graph is empty until the next query or sync rebuilds it. `status` reports this as `- rebuild pending (schema upgrade)` until then. Upgrading to this version therefore costs every existing user one full reindex.
 

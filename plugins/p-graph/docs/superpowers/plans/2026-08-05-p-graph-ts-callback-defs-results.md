@@ -242,10 +242,134 @@ diffing every resolved edge against the same tree, and reading the ones that mov
 
 | | files | passed | skipped |
 |---|---|---|---|
-| p-graph alone (Windows) | 60 | 297 | 0 |
+| p-graph alone (Windows) | 60 | 300 | 0 |
 | whole repo, Windows | 253 | 2,392 | 23 |
 | whole repo, WSL Ubuntu 24.04, Node 24.19.0 | 253 | 2,400 | 15 |
 
-Ten new tests in `ts-callback-defs.test.ts`. Both rules are mutation-verified: removing
-the enclosing-definition filter fails tests 1 and 6; restoring the naive qname rule
-fails tests 3 and 4. No existing test needed its expectation changed.
+Thirteen new tests in `ts-callback-defs.test.ts`. Every rule is mutation-verified:
+removing the enclosing-definition filter fails the trap tests, restoring the naive
+qname rule fails the two qname tests, and the naive character cut fails the surrogate
+test. No existing test needed its expectation changed.
+
+---
+
+# The quality pass
+
+Run after the work above was already committed, to find what the feature tests and
+the before/after diffs could not. Four rounds, each hunting a named failure rather
+than exercising a feature. It found four things: two defects in this work (both
+fixed), and two pre-existing defects that had never been measured.
+
+## Round 1 — invariants
+
+| # | Hunted | Result |
+|---|---|---|
+| 1.2 | two full indexes of one tree disagree | **PASS** on got and nest — every node id and every call edge identical |
+| 1.1a | an incremental index after an edit disagrees with a full one | **PASS** on got and nest, identical |
+| 1.1b | an incremental index after a new file disagrees with a full one | **PASS** on got and nest, identical |
+| 1.1d | a committed add and delete leaves anything behind | **PASS** — after delete + commit + index the graph is byte-identical to the clean baseline, on got and nest |
+| 1.1c | a file staged and then removed without a commit | **FAIL, pre-existing** — 6 stale nodes and 12 stale edges survive. Reproduced with the pre-change code (1 stale node, the same 12 edges), so this work only widens a known hole: follow-up item 4, cleared by the next `--full` |
+| 1.3 | a callback definition leaking where a real symbol is expected | **PASS** — 0 call edges resolve to a callback, 0 non-function nodes are named like one, 0 member calls reach a callback-owned symbol |
+
+Two things 1.3 surfaced that look wrong and are not. An object-literal method
+(`{ start() {}, stop() {} }`) inside a test legitimately has a callback as its owner —
+and `memberOwnerSql` treats a callback owner exactly like no owner, so `x.start()`
+still cannot reach it, as before. And a callback name can hold a dot, because the test
+name does: `describe('lint.runChecks', …)`.
+
+## Round 2 — 22 real TypeScript and JavaScript shapes
+
+Every shape indexed for real and every name it produced read by hand: `.tsx`,
+`test.each`, three nesting levels, two same-named tests in one file, a name past the
+cap, a template literal with interpolation, `describe.skip` / `it.only`, an async
+function expression, a generator, an IIFE, a callback in an object literal, one in an
+array, a class static block, a decorator argument, an empty body, a member call, a
+default-parameter arrow, a class field arrow, a promise chain, a returned callback, a
+bare arrow parameter.
+
+**It found a real defect.** Reading only the last part of a member expression turned
+`describe.skip('my suite', …)` into `skip:my suite`, which reads as a suite named
+"skip"; `it.only` became `only:` and `test.each` became `each:`. All three are everyday
+test shapes. Fixed by using the whole dotted path when every part of it is a plain
+name. The first fix then broke `promise.then(…).catch(…)` — both callbacks became
+`callback@2` — which the same shape probe caught, so a chain whose head is not a name
+keeps the method: `catch@2`, `finally@2`, `map@2`.
+
+## Round 3 — are the answers right, on THIS repo
+
+**3.1 — every certain row audited, which had never been done here.** `measure.mjs`
+only ever checked 22 symbols on seven other repositories. The same mechanical reasons,
+applied to all 4,514 certain call edges in this repo:
+
+| | rows |
+|---|---|
+| target is in the calling file | 3,990 |
+| the calling file imports the target file | 476 |
+| no mechanical reason — read by hand | 48 |
+
+Of those 48: **37 correct** — 34 are `out` and `warn` reached through `ctx` under the
+same name (`const { out, die } = ctx`), and 3 are behind a dynamic `import()` the check
+cannot see. **11 are FALSE, and marked certain.** Every one is identical before and
+after this work, so all 11 are pre-existing:
+
+| rows | the call | the graph's answer | why it is wrong |
+|---|---|---|---|
+| 5 | `writeConfig(dir, cfg)` in p-tasks and p-wiki tests, each importing it from its own `../lib/config.mjs` | a test-local helper in **p-shed** | the right target is `.mjs` (lang js) and the caller is `.ts`, so the language gate hides it; the only ts candidate is a foreign test helper, which then looks unique |
+| 3 | `out()` in a p-observe test, where `out` is a property of a returned object | a `function out()` in a **p-tasks** test | same language gate, plus: a destructured object property is not a definition, so nothing shadows the name |
+| 2 | `r()` inside `new Promise((r) => …)` — `r` is the arrow's own parameter | a `const r = …` in a **p-graph** test | a parameter is not a definition, so Pass L sees nothing to shadow with |
+| 1 | `textOf(it)` where `textOf` is a parameter of `applyFilterList(items, filter, textOf)` | `function textOf` in **p-shed** | the same parameter cause, and here both files are `.mjs`, so the language gate is not involved |
+
+So **11 of 4,514 certain rows are false on this repo (0.24%)**, from two causes that the
+README does not name:
+
+1. **A call on a local binding that is not a definition** — a parameter, or a
+   destructured property. Pass L refuses a cross-file match when the calling file holds
+   a *definition* of that name, but a parameter is not one, so the name still reaches a
+   unique top-level function elsewhere and is called certain. The facts needed to refuse
+   are already extracted (`tsVarKeys` holds every TS/JS binding with its scope span);
+   they are simply not consulted by the resolver.
+2. **The TypeScript/JavaScript language gate can manufacture uniqueness.** Every pass
+   requires the same language on both ends. When the right target is `.mjs` and the
+   caller is `.ts`, the right one is invisible — and if exactly one same-language
+   candidate exists anywhere in the repo, it is taken and marked certain.
+
+Neither is caused by this work; both are now measured. The README's "no certain row was
+false" is measured on seven other repositories and **does not hold here**.
+
+**3.2 — silent misses, the failure a code graph is bought to prevent.** 13 real symbols,
+every textual call site in the repo classified:
+
+| | |
+|---|---|
+| call sites in the source | 240 |
+| found in the answer | 33 |
+| named as a gap | 207 |
+| **silent** | **0** |
+
+Nothing is dropped without being reported. The 33/207 split is the language gate again:
+most call sites of a `.mjs` function from a `.ts` test are honestly reported rather than
+answered.
+
+## Round 4 — robustness
+
+An empty file, a whitespace-only file, a file that is one callback, a file with a syntax
+error mid-way, 2,000 callbacks in one file, a 10,000-character test name, a name of only
+whitespace, quotes and escapes in a name, emoji and CJK, a call with no string argument.
+**No crash, no corrupt graph.** The syntax-error file still yields the definitions before
+the break. 2,000 callbacks index in 762 ms for the whole eleven-file set.
+
+**It found the second defect in this work.** The 80-character name cap cut by UTF-16 code
+units, so an emoji at the cap kept half of itself — the same bug this repo already fixed
+for the signature cap. Worth recording how nearly it was missed: the round's own check
+read the name back **out of SQLite**, which silently substitutes a lone surrogate half,
+so the check reported zero damage while the function really was producing it. The
+regression test asserts on what the driver returns, not on what the database stored.
+
+## One wart, not fixed
+
+A callback qname can repeat across files: `beforeEach@9` is the qname of 40 different
+hooks here, because 40 test files open with a module-scope `beforeEach` on line 9. 52
+callback qnames are duplicated, covering 271 of 3,204 callback nodes. This is the same
+property the README already documents for ordinary symbols (`write` ×28, `run` ×27), but
+it removes the escape hatch that paragraph offers: for a hook, asking by qname does not
+disambiguate either. The `file:line` printed beside every row is the identifier.
