@@ -80,3 +80,68 @@ export function outer(c: Conn) {
     s.close();
   }, 30000);
 });
+
+describe('a TypeScript type stated in the source', () => {
+  it('resolves a call on an annotated parameter, and calls it certain', async () => {
+    write('app.ts', `export class Conn {
+  query(q: string) { return q; }
+}
+export class Decoy {
+  query(q: string) { return q; }
+}
+export function read(c: Conn) {
+  return c.query('1');
+}
+`);
+    const s = await indexed();
+
+    // Two classes share the method name, so a bare name cannot answer this at all.
+    expect(s.callers('Conn.query')).toMatchObject([{ qname: 'read', guess: 0 }]);
+    expect(s.callers('Decoy.query')).toEqual([]);
+
+    s.close();
+  }, 30000);
+
+  it('resolves a call on an annotated variable and on a new expression', async () => {
+    write('app.ts', `export class Conn {
+  query(q: string) { return q; }
+}
+export function fromAnnotation() {
+  const c: Conn = build();
+  return c.query('1');
+}
+export function fromNew() {
+  const c = new Conn();
+  return c.query('1');
+}
+function build(): any { return null; }
+`);
+    const s = await indexed();
+
+    expect(s.callers('Conn.query').map((r) => r.qname).sort())
+      .toEqual(['fromAnnotation', 'fromNew']);
+    expect(s.callers('Conn.query').every((r) => r.guess === 0)).toBe(true);
+
+    s.close();
+  }, 30000);
+
+  it('refuses a guess when the annotation names a type from outside the repo', async () => {
+    write('app.ts', `import { ServerResponse } from 'node:http';
+export class Sink {
+  setHeader(k: string, v: string) {}
+}
+export function send(res: ServerResponse) {
+  res.setHeader('a', 'b');
+}
+`);
+    const s = await indexed();
+
+    // ServerResponse is not ours, so the one repo method named setHeader must not
+    // claim the call...
+    expect(s.callers('Sink.setHeader')).toEqual([]);
+    // ...and the call site is named instead of dropped.
+    expect(s.gapsFor('Sink.setHeader').length).toBeGreaterThan(0);
+
+    s.close();
+  }, 30000);
+});

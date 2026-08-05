@@ -187,6 +187,39 @@ function goInitTypeNode(expr) {
   return null;
 }
 
+// The type a TypeScript declaration states, as written. A TS qname carries no
+// package or module prefix — a top-level class `Conn` has the qname `Conn` — so the
+// name as written is already the qname to look up, and no qualification is needed.
+//
+// Returns null for every shape a method call cannot be resolved through: a union, a
+// function type, an array, a literal, `any`. A row is only worth writing when it
+// names ONE type, because that is what the resolver's guards require.
+function tsStatedTypeName(declNode) {
+  const ann = declNode?.childForFieldName?.('type');          // `c: Conn`
+  const t = ann?.type === 'type_annotation' ? ann.namedChild(0) : ann;
+  if (t) {
+    // `Conn`, and `Conn | null` is deliberately not one type.
+    if (t.type === 'type_identifier') return t.text;
+    // `foo.Bar` — a namespace-qualified type. TS qnames are dotted the same way.
+    if (t.type === 'nested_type_identifier') return t.text.replace(/\s/g, '');
+    // `Conn<T>`: the generic arguments do not change which class owns the method.
+    if (t.type === 'generic_type') {
+      const base = t.childForFieldName?.('name');
+      if (base?.type === 'type_identifier') return base.text;
+      if (base?.type === 'nested_type_identifier') return base.text.replace(/\s/g, '');
+    }
+    return null;
+  }
+  // `const c = new Conn()`. The initialiser names the type outright, which is the
+  // same fact Go reads from `x := &T{}`.
+  const value = declNode?.childForFieldName?.('value');
+  if (value?.type === 'new_expression') {
+    const ctor = value.childForFieldName?.('constructor');
+    if (ctor?.type === 'identifier') return ctor.text;
+  }
+  return null;
+}
+
 // The call a short declaration takes its value from: `x := reflect.ValueOf(v)`,
 // `buf := bp.GetBuffer()`, `y := Make()`. Returns the call node, or null when the
 // initializer is anything else. Parens and `new(T)` are already handled by
@@ -1064,6 +1097,18 @@ export async function extract({ file, lang, langId, scm, source, pyRepoModules =
           endLine: scope.endPosition.row + 1, endCol: scope.endPosition.column,
         },
       });
+    }
+    // A stated type goes in the same table as Go's and Python's, so the SAME
+    // resolver passes answer it: Pass F links `<type>.<method>`, and Pass B refuses
+    // the bare-name fallback when a type is recorded but leads nowhere — which is
+    // what an imported type from outside the repo does.
+    for (const [, binds] of tsVarKeys) {
+      for (const b of binds) {
+        // The declaration is the parameter or the declarator, not the name node.
+        const decl = b.node.parent;
+        const type = tsStatedTypeName(decl);
+        if (type) fieldTypes.push({ key: b.key, type, file });
+      }
     }
   }
   // The binding in scope at this point, innermost first: of two scopes that both
