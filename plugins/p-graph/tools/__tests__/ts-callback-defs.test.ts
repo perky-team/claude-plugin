@@ -133,7 +133,42 @@ it.runIf(process.platform !== 'win32')('case', () => { target(); });
 `);
     const store = await indexed();
 
-    expect(names(store.callers('target'))).toEqual(['runIf:case']);
+    expect(names(store.callers('target'))).toEqual(['it.runIf:case']);
+    store.close();
+  }, 30000);
+
+  it('keeps the whole dotted name of the call it was passed to', async () => {
+    // Reading only the last part of `describe.skip` gives `skip:my suite`, which
+    // reads as a suite named "skip". The same mistake turns `it.only` into `only:`
+    // and `test.each` into `each:` — all three are everyday test shapes.
+    write('src/modifiers.ts', `export function target() { return 1; }
+describe.skip('outer', () => {
+  it.only('focused', () => { target(); });
+});
+test.each([1, 2])('case %s', () => { target(); });
+app.get('/x', () => { target(); });
+`);
+    const store = await indexed();
+
+    expect(qnames(store.callers('target'))).toEqual([
+      'app.get:/x',
+      'describe.skip:outer.it.only:focused',
+      'test.each:case %s',
+    ]);
+    store.close();
+  }, 30000);
+
+  it('caps a long test name and flattens what it keeps', async () => {
+    // A qname is stored per node, so an essay of a test name must not become one.
+    const long = 'a'.repeat(200);
+    write('src/long.ts', `export function target() { return 1; }
+it('${long}', () => { target(); });
+`);
+    const store = await indexed();
+
+    const [row] = store.callers('target');
+    expect(row.name.startsWith('it:aaa')).toBe(true);
+    expect(row.name.length).toBe('it:'.length + 80);
     store.close();
   }, 30000);
 

@@ -687,6 +687,35 @@ function selfCallOwner(c, lang, defs, enclosing) {
 // both are definitions.
 const CALLBACK_DEF_TYPES = new Set(['arrow_function', 'function_expression', 'generator_function']);
 
+// The name a call was written on: the whole dotted path when every part of it is a
+// plain name (`describe`, `describe.skip`, `app.get`, `this.server.close`), else just
+// the method that was called (`map` out of `[1].map(…)`, `catch` out of a promise
+// chain). Null only when there is no name anywhere — then the caller falls back to
+// the line alone.
+//
+// The WHOLE path matters, not only the last part: `describe.skip('x', …)` read as its
+// last part gives `skip:x`, which reads as a suite named "skip", and the same mistake
+// turns `it.only` into `only:` and `test.each` into `each:`. All three are everyday
+// test shapes. But falling back to nothing when the head is not a plain name is worse
+// than the last part: `promise.then(…).catch(…)` would lose `catch` and two callbacks
+// on one line would end up with the same name. Capped, because a receiver chain can
+// be long.
+function calleePath(fn) {
+  const parts = [];
+  let n = fn;
+  while (n?.type === 'member_expression') {
+    const prop = n.childForFieldName?.('property');
+    if (prop?.type !== 'property_identifier') break;
+    parts.unshift(prop.text);
+    n = n.childForFieldName?.('object');
+  }
+  const head = n?.type === 'this' ? 'this' : n?.type === 'identifier' ? n.text : null;
+  if (!parts.length) return head;               // a plain `describe(…)`, or nothing
+  if (head === null) return parts[parts.length - 1];   // the method, without its receiver
+  const path = [head, ...parts].join('.');
+  return path.length > 60 ? parts[parts.length - 1] : path;
+}
+
 // The name a call-argument function goes by. It has none of its own, but the call
 // beside it usually carries a string: `it('case', …)` -> `it:case`, which reads as
 // the test's name in `callers` output — what a human wants to see. With no string
@@ -709,9 +738,7 @@ function callbackDefName(cb) {
   // `it.runIf(cond)('case', …)` calls the RESULT of a call, so the name of the
   // thing being called has to be read one level in.
   while (fn?.type === 'call_expression') fn = fn.childForFieldName?.('function');
-  const callee = fn?.type === 'identifier' ? fn.text
-    : fn?.type === 'member_expression' ? (fn.childForFieldName?.('property')?.text ?? null)
-      : null;
+  const callee = calleePath(fn);
   const first = args?.namedChild?.(0);
   const label = first && (first.type === 'string' || first.type === 'template_string')
     ? first.text.slice(1, -1).replace(/\s+/g, ' ').trim().slice(0, 80)
