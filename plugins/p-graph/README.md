@@ -110,6 +110,7 @@ Each symbol carries a bare `name` (used for search) and a qualified `qname`. A c
 
 - the call site wrote the qualified name itself (`filesink.New(...)`, `Table::Check(3)`), and exactly one symbol carries that `qname`; or
 - the graph knows the receiver's type. Go writes the type down, so four shapes count: a method's own receiver (`s.M()`), a struct field of that receiver (`s.store.Get()`), a parameter (`func f(st *store.Store) { st.Get() }`), and a local or package-level variable (`var st store.Store`); or
+- **a TypeScript declaration states the type.** `function read(c: Conn)` or `const c = new Conn()`, then `c.query(...)`. A parameter with **no** annotation in a `.ts` file states the opposite fact — its type comes from the signature it is passed to, usually a library's — so the call is refused and reported instead of guessed. An explicit `any` is an annotation, not a missing one, and keeps its guess.
 - **a Python name bound to a constructor.** `jar = RequestsCookieJar()` then `jar.set(...)`: the source names the class, so the call resolves to it. A constructor from outside the repo (`close_server = threading.Event()`) records that the type is not ours, and the call is refused and reported instead of guessing the one repo method that shares the name.
 - **the callee's signature says what the receiver is.** `c := store.Open()` then `c.Query(...)`: the call site names no type, but `Open` declares one result and the graph reads it. Only a single named result counts — `(T, error)` says nothing about one variable, and a callee outside the repo has no signature to read, which is exactly when a bare-name guess used to invent a caller; those calls are now refused and reported as gaps instead.
 - **the definition is in scope where the call is written.** A plain `walk(1)` in JavaScript, TypeScript, Python or C++ first looks for a `walk` in the calling file: one nested in a scope that holds the call site, else one at file top level. Scope is read, not guessed, so these rows are certain — and they come first, because a top-level function in those languages has a bare `qname`, which would otherwise let the rule above match a same-named function in a file the call site never heard of. Two definitions of one name in one scope resolve to neither. A call written on a value (`o.walk()`) is not covered by this: a function in scope is not a member of anything.
@@ -162,11 +163,11 @@ Of the resolved rows in that same set:
 | | Resolved rows | False | False rate |
 |---|---|---|---|
 | before this work | 2,767 | 1,188 | 42.9% |
-| now | 1,706 | at most 117 | 6.9% |
-| now, certain rows only | 1,391 | **0** | **0.0%** |
-| now, guessed rows only | 315 | at most 117 | 37.1% |
+| now | 1,619 | at most 31 | 1.9% |
+| now, certain rows only | 1,411 | **0** | **0.0%** |
+| now, guessed rows only | 208 | at most 31 | 14.9% |
 
-Two changes moved those rows. Reading a Go callee's declared result removed 27 false rows (24 on one hugo symbol, 3 on another) and turned 3,112 hugo rows from guesses into certain ones — repo-wide, certain call edges went 12,569 → 15,681 and guesses 5,002 → 2,030; on caddy 6,071 → 6,496 and 1,610 → 1,207. Reading a Python constructor then took `RequestsCookieJar.set` from 38 rows with 1 certain to 22 rows with **16 certain, every one a real `jar.set(...)`**, and moved its 16 `threading.Event().set()` call sites into the gap report; `requests.get` gained 20 more real rows, because `s = requests.Session()` now types `s`.
+Two changes moved those rows. Reading a Go callee's declared result removed 27 false rows (24 on one hugo symbol, 3 on another) and turned 3,112 hugo rows from guesses into certain ones — repo-wide, certain call edges went 12,569 → 15,681 and guesses 5,002 → 2,030; on caddy 6,071 → 6,496 and 1,610 → 1,207. Reading a Python constructor then took `RequestsCookieJar.set` from 38 rows with 1 certain to 22 rows with **16 certain, every one a real `jar.set(...)`**, and moved its 16 `threading.Event().set()` call sites into the gap report; `requests.get` gained 20 more real rows, because `s = requests.Session()` now types `s`. Reading TypeScript last took got's `setHeader` from 91 rows with 89 false to **5 rows**, moving 88 wrong ones into the gap report, and made 20 of nest's `createNestApplication` rows certain without losing any of its 190.
 
 "At most" is exact about what is known: every certain row is audited, so a false row can only be among the guesses, and 315 is their ceiling.
 

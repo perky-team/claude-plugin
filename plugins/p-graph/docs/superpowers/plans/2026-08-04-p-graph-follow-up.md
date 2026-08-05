@@ -21,8 +21,8 @@ caddyserver/caddy, google/leveldb, sindresorhus/got and psf/requests, with
 
 | | Before | Now |
 |---|---|---|
-| False rows among resolved | 42.9% | 6.9% |
-| False rows among **certain** | — | **0 of 1,391**; one shape the set did not contain was found later and fixed, see below |
+| False rows among resolved | 42.9% | 1.9% |
+| False rows among **certain** | — | **0 of 1,411**; one shape the set did not contain was found later and fixed, see below |
 | Silent misses | the original complaint | 2 of 1,724, both pre-existing |
 | `impact` on hugo | 15,555 ms | 399 ms |
 | caddy database | 105.6 MB | 10.5 MB |
@@ -31,54 +31,36 @@ caddyserver/caddy, google/leveldb, sindresorhus/got and psf/requests, with
 
 ## Ordered by how much wrongness each one still causes
 
-### 1. A type table for TypeScript
-
-**Now the single largest source of false rows: got's `setHeader`, 89 of them.**
-Measured shape: every one is `response.setHeader(...)` where `response` is an
-UNANNOTATED callback parameter, as in
-`server.all('/x', async (request, response) => ...)`. Its type lives in a library's
-declaration file, so there is nothing in the repo to read. Two independent moves:
-
-- **read TypeScript annotations** (`function f(c: Conn)`, `const c: Conn = ...`,
-  `foo(): Conn`) into the same table Go and Python now use. That adds certainty
-  wherever the source states a type.
-- **refuse a member call on an unannotated parameter, in `.ts` files only.** Under
-  `noImplicitAny` an unannotated parameter means its type is inferred from a library
-  signature, which is exactly the got case. This is the move that removes the 89
-  rows, and it must not apply to `.js`, where nothing is annotated.
-
-Python's half of this item is done - see the fixed section below.
-
-### 2. A C++ type table
+### 1. A C++ type table
 
 C++ is usable for calls written `Class::method(...)` — 11 of 11 correct on a real
 leveldb symbol. A member call on a value is about 40% of C++ calls and still
 cannot resolve.
 
-### 3. Interface dispatch
+### 2. Interface dispatch
 
 There are no `implements` edges. A call through an interface with one
 implementation resolves to it as a guess; with two or more it becomes a gap. The
 honest answer is "these N types could receive this call", and the graph cannot
 say that yet.
 
-### 4. TypeScript call-argument function bodies are not definitions
+### 3. TypeScript call-argument function bodies are not definitions
 
 `describe` / `it` callbacks, so 394 of nest's 1,727 files produce no symbols, and
 a majority of resolved edges there have no source symbol. They do surface, as
 `outside any indexed symbol` gap rows — but they have no caller to name.
 
-### 5. Two repo packages sharing a base name collapse into one qname space
+### 4. Two repo packages sharing a base name collapse into one qname space
 
 So a call can resolve to the wrong package's symbol. The `count(DISTINCT ft.type)
 = 1` guard in Pass F is what stops that from becoming a *certain* wrong row today
 (`receiver-types.test.ts` covers it), but the collapse itself is still there.
 
-### 6. `gitChangedFiles` cannot see a file created and deleted without a commit
+### 5. `gitChangedFiles` cannot see a file created and deleted without a commit
 
 So a stale row survives until the next `--full`.
 
-### 7. Smaller, all recorded in `.superpowers/sdd/progress.md`
+### 6. Smaller, all recorded in `.superpowers/sdd/progress.md`
 
 - An assertion in `alias-resolution.test.ts` that no longer tells the two
   variable-key shapes apart.
@@ -138,6 +120,33 @@ published), 1,353 certain, **0 false** — 1,345 checked mechanically, 8 read by
 
 
 
+
+
+**TypeScript type facts** (the old item 1). TS recorded no type at all, which cost
+both ways: 89 wrong rows on got's `setHeader`, and 190 correct rows on nest shown as
+unverified. Three changes, all reusing the existing resolver:
+
+- names a TS/JS scope binds are recorded with a scope key, and a member call on such
+  a name carries it;
+- the type the source states is read into the same table Go and Python use
+  (`c: Conn`, `NS.Conn`, `Conn<T>`, `const c = new Conn()`). A generic type parameter
+  is refused: `function f<T>(x: T)` must not link to a class also named `T`;
+- a parameter with **no annotation** in a `.ts` file records that its type is stated
+  elsewhere, so the bare-name fallback refuses. An explicit `any` is an annotation
+  and keeps its guess.
+
+| | before | after |
+|---|---|---|
+| got `setHeader` | 91 rows, 89 false | **5 rows**, 88 moved to the gap report |
+| nest `createNestApplication` | 190 rows, 0 certain | **190 rows, 20 certain** |
+| the 22 measured symbols | 1,706 resolved / 1,391 certain | **1,619 / 1,411** |
+| false rows | at most 117 (6.9%) | **at most 31 (1.9%)** |
+
+Recall cost, measured by indexing got and nest with and without the rule: got loses
+98 rows and every sampled one was false; **nest loses 10 correct rows** —
+`.map(wrapper => wrapper.getInstanceByContextId(…))`, where the parameter's type comes
+from an `as InstanceWrapper[]` cast on the array being mapped. All 10 are in the gap
+report. Reading a contextual type like that needs local inference and is not done.
 
 **A Python name bound to a constructor call** (half of the old item 2). `jar =
 RequestsCookieJar()` and `close_server = threading.Event()` are one shape to a
