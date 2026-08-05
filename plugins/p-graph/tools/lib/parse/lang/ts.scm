@@ -28,3 +28,23 @@
 (call_expression function: (member_expression property: (property_identifier) @reference.call))
 (new_expression constructor: (identifier) @reference.call)
 (import_statement source: (string) @reference.import)
+
+;; Names a TypeScript/JavaScript scope binds to a value. A call written on one of
+;; these can only be resolved once we know what the name holds, so the binding has
+;; to be recorded even when its type is not — see the driver, which keys the call on
+;; the binding and lets the resolver decide.
+;; The whole declaration is captured, not just its name: a type annotation and an
+;; initialiser both hang off it, and Task 2 reads them from the same node.
+;; No `(formal_parameters (identifier) @var.decl)` line here: in this grammar a
+;; plain parameter is never a bare identifier directly under formal_parameters —
+;; even an untyped one parses as a required_parameter wrapping the identifier. A
+;; pattern for a parent/child pair the grammar can never produce does not just
+;; match nothing, it fails to compile at all, and the whole query file (every
+;; other capture in it too) fails with it. `(required_parameter (identifier) ...)`
+;; below already reaches every ordinary parameter, typed or not.
+(required_parameter (identifier) @var.decl)
+(optional_parameter (identifier) @var.decl)
+(variable_declarator name: (identifier) @var.decl)
+;; `x => x.foo()` writes its one parameter without brackets, so it is a direct child
+;; of the arrow function rather than a formal_parameters list.
+(arrow_function parameter: (identifier) @var.decl)

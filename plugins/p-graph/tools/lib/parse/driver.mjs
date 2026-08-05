@@ -555,6 +555,16 @@ function pyModuleNames(caps, repoModules, ownPackage) {
 // using it (rather than the module) keeps an over-refusal inside that one class.
 const PY_SCOPE_NODES = new Set(['function_definition', 'class_definition', 'lambda', 'module']);
 
+// The TypeScript/JavaScript nodes that open a scope. `let` and `const` are
+// block-scoped, so a plain block counts; a function's parameters belong to the
+// function. Missing a node type here makes a scope too WIDE, which keeps today's
+// answer instead of inventing one — the same trade the Go set makes.
+const TS_SCOPE_NODES = new Set([
+  'statement_block', 'function_declaration', 'function_expression', 'arrow_function',
+  'method_definition', 'class_body', 'for_statement', 'for_in_statement',
+  'catch_clause', 'switch_case', 'switch_default', 'program',
+]);
+
 // The dotted object path a Python call was written on, head first:
 // `requests.cookies.RequestsCookieJar()` -> ['requests', 'cookies']. Returns null
 // as soon as the chain holds anything but plain names (a subscript, a call, a
@@ -1032,6 +1042,41 @@ export async function extract({ file, lang, langId, scm, source, pyRepoModules =
       });
     }
   }
+  // The same idea as the Python and Go binding maps: one entry per name per scope,
+  // so a call written on a name can be keyed and looked up later. The position is
+  // part of the key because one function can bind one name in several scopes.
+  const tsVarKeys = new Map(); // name -> [{ key, span }, ...]
+  if (lang === 'ts' || lang === 'js') {
+    for (const c of caps) {
+      if (c.name !== 'var.decl') continue;
+      let scope = c.node?.parent;
+      while (scope && !TS_SCOPE_NODES.has(scope.type)) scope = scope.parent;
+      if (!scope) continue;
+      const owner = defs.filter((d) => within(c, d)).sort(innermostFirst)[0];
+      const at = `@${c.node.startPosition.row + 1}:${c.node.startPosition.column}`;
+      const key = owner ? `${owner.id}#var:${c.text}${at}` : `${file}#var:${c.text}${at}`;
+      if (!tsVarKeys.has(c.text)) tsVarKeys.set(c.text, []);
+      tsVarKeys.get(c.text).push({
+        key,
+        node: c.node,
+        span: {
+          startLine: scope.startPosition.row + 1, startCol: scope.startPosition.column,
+          endLine: scope.endPosition.row + 1, endCol: scope.endPosition.column,
+        },
+      });
+    }
+  }
+  // The binding in scope at this point, innermost first: of two scopes that both
+  // hold one position, the inner one always starts later.
+  const tsBindingAt = (name, node) => {
+    const line = node.startPosition.row + 1, col = node.startPosition.column;
+    const hits = (tsVarKeys.get(name) ?? []).filter((b) =>
+      posLE(b.span.startLine, b.span.startCol, line, col) &&
+      posLE(line, col, b.span.endLine, b.span.endCol));
+    hits.sort((a, b) => b.span.startLine - a.span.startLine || b.span.startCol - a.span.startCol);
+    return hits[0] ?? null;
+  };
+  const tsVarKeyAt = (name, node) => tsBindingAt(name, node)?.key ?? null;
   // The key a call written on a plain Python name belongs to, or null when the name
   // is not bound in this scope (a module, or something we did not capture).
   const pyVarKeyAt = (name, node) => {
@@ -1127,6 +1172,16 @@ export async function extract({ file, lang, langId, scm, source, pyRepoModules =
           const obj = c.node.parent.childForFieldName?.('object');
           if (obj?.type === 'identifier') {
             const key = pyVarKeyAt(obj.text, obj);
+            if (key) { field_key = key; method = c.text; }
+          }
+        }
+        // `c.query(...)` in TypeScript: key the call on the receiver name, exactly
+        // as Go keys `db.Get()` and Python keys `jar.set()`. With a type recorded
+        // for that name the resolver answers it; with none, nothing changes.
+        else if ((lang === 'ts' || lang === 'js') && c.node?.parent?.type === 'member_expression') {
+          const obj = c.node.parent.childForFieldName?.('object');
+          if (obj?.type === 'identifier') {
+            const key = tsVarKeyAt(obj.text, obj);
             if (key) { field_key = key; method = c.text; }
           }
         }
