@@ -158,6 +158,22 @@ app.get('/x', () => { target(); });
     store.close();
   }, 30000);
 
+  it('cuts a capped name between characters, not through one', async () => {
+    // An emoji is two UTF-16 code units, so a cut at the cap can keep half of one.
+    // A lone half survives in JSON but SQLite substitutes it on write, so a check
+    // that reads the database back sees nothing wrong — this one reads the name.
+    const name = `${'a'.repeat(79)}🔥tail`;
+    write('src/surrogate.ts', `export function target() { return 1; }
+it('${name}', () => { target(); });
+`);
+    const store = await indexed();
+
+    const [row] = store.callers('target');
+    expect(row.name).toBe(`it:${'a'.repeat(79)}`);   // the emoji went whole
+    expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(row.name)).toBe(false);
+    store.close();
+  }, 30000);
+
   it('caps a long test name and flattens what it keeps', async () => {
     // A qname is stored per node, so an essay of a test name must not become one.
     const long = 'a'.repeat(200);

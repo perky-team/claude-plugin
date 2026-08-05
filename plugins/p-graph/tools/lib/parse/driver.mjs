@@ -13,16 +13,20 @@ const nodeId = (file, qname, kind, ord) =>
 // so a truncated signature is never mistaken for a complete one.
 const SIGNATURE_CAP = 300;
 const TRUNCATION_MARKER = '…[truncated]';
+// A code-unit cut can land inside a surrogate pair (an astral character, like most
+// emoji, is stored as two UTF-16 code units). If the kept half ends on a high
+// surrogate, its partner just got cut off, so back up one more unit — the whole
+// character goes, not half of it. Shared by the signature cap and the callback-name
+// cap: a lone half survives a JSON round trip but not a write to SQLite, which
+// silently substitutes it, so nothing downstream would report the damage.
+const sliceWholeChars = (s, len) => {
+  if (s.length <= len) return s;
+  const last = s.charCodeAt(len - 1);
+  return s.slice(0, last >= 0xD800 && last <= 0xDBFF ? len - 1 : len);
+};
 const capSignature = (line) => {
   if (line.length <= SIGNATURE_CAP) return line;
-  let cut = SIGNATURE_CAP - TRUNCATION_MARKER.length;
-  // A code-unit cut can land inside a surrogate pair (an astral character,
-  // like most emoji, is stored as two UTF-16 code units). If the kept half
-  // ends on a high surrogate, its partner just got cut off, so back up one
-  // more unit — the whole character goes, not half of it.
-  const lastCode = line.charCodeAt(cut - 1);
-  if (lastCode >= 0xD800 && lastCode <= 0xDBFF) cut -= 1;
-  return line.slice(0, cut) + TRUNCATION_MARKER;
+  return sliceWholeChars(line, SIGNATURE_CAP - TRUNCATION_MARKER.length) + TRUNCATION_MARKER;
 };
 
 // Go's predeclared builtin functions (universe block). A plain call to one of
@@ -730,7 +734,10 @@ function calleePath(fn) {
 // The label is flattened and capped. A test name can be a multi-line template
 // literal, and a newline inside a qname would break one line of `callers` output
 // into two. Two tests whose names share the first 80 characters get the same qname,
-// which is harmless — the node id carries an `ord` that separates them.
+// which is harmless — the node id carries an `ord` that separates them. The cut goes
+// through sliceWholeChars, so an emoji at the cap loses the whole character instead
+// of half of it.
+const CALLBACK_LABEL_CAP = 80;
 function callbackDefName(cb) {
   const args = cb.parent;                       // (arguments …)
   const call = args?.parent;                    // (call_expression …)
@@ -741,7 +748,7 @@ function callbackDefName(cb) {
   const callee = calleePath(fn);
   const first = args?.namedChild?.(0);
   const label = first && (first.type === 'string' || first.type === 'template_string')
-    ? first.text.slice(1, -1).replace(/\s+/g, ' ').trim().slice(0, 80)
+    ? sliceWholeChars(first.text.slice(1, -1).replace(/\s+/g, ' ').trim(), CALLBACK_LABEL_CAP)
     : '';
   const base = callee ?? 'callback';
   return label ? `${base}:${label}` : `${base}@${cb.startPosition.row + 1}`;
