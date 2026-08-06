@@ -3,6 +3,41 @@
 > Marketplace tag → p-flow plugin version → date → headline.
 > Authored 2026-05-27; backfilled from `v4.6.0` onward (the first p-flow release on the marketplace was `v3.1.0` with `plugins/p-flow 0.1.0` — a minimal `init` skill; see `git log v4.5.0..v4.6.0 -- plugins/p-flow/`).
 
+## `plugins/p-flow 1.10.0` (marketplace `v6.2.0`) — `requesting-code-review` runs headless under `P_FLOW_NONINTERACTIVE=1`
+
+- **New shared gate `skills/_shared/noninteractive.md`.** `P_FLOW_NONINTERACTIVE=1` — exactly `1` —
+  puts a skill in non-interactive mode. Any other value, including unset, empty, `0` and `true`, is
+  interactive: **every question is put exactly as before, in the same words**, and the gate is a
+  silent no-op. The narrow accepted value is deliberate — a typo degrades to the safe mode, asking a
+  human. The doc carries the gate and the one rule (never ask: apply a default documented next to
+  the question it replaces, or stop with a named reason; never invent an answer that is the user's
+  to decide); each host skill carries its own defaults.
+
+- **`requesting-code-review` is the first host, and can now run in a headless `claude -p` job** — a
+  p-shed worker, a CI step. Two defaults:
+  - **Preconditions.** The `specs/<slug>/specification.md` requirement is dropped; `<slug>` comes
+    from the parent p-tasks task title (the bridge's join key, confirmed via `p-tasks:list`), and
+    the reviewer's Goal is composed from that task's `--description`. Non-interactive mode
+    **requires p-tasks**: absent — or present with a `jira` destination whose writes need a human
+    yes — the run stops with a named reason instead of guessing or falling back to legacy. The Jira
+    check runs before the reviewer is dispatched, so a headless run does not burn a review it could
+    not record.
+  - **Triage.** Blockers and Suggestions are accepted (`fix`) and filed as `code-review:*` follow-up
+    sub-tasks; Nits are deferred with reason *nit declined (non-interactive default)* rather than
+    rejected. **`reject` is unavailable** — asserting that a reviewer was wrong is a judgement
+    reserved for a human — so nothing is dropped: every finding lands in p-tasks with a decision
+    attached, recorded through the same calls a human's triage uses. The audit trail has the same
+    shape either way.
+
+- **Nothing interactive changed.** With `P_FLOW_NONINTERACTIVE` unset the skill emits byte-identical
+  output and the same questions as 1.9.2. `code-reviewer.md` is untouched and stays mode-neutral, so
+  `subagent-driven-development`'s final broad review is unaffected. No new plugin dependency.
+
+- `allowed-tools` gains `Bash(test:*)` (the gate probe) and `Skill` (p-tasks dispatch). `Skill`
+  closes a pre-existing gap — §5 canonical mode already dispatched `p-tasks:add` without declaring
+  it. New suite `tests/p-flow-noninteractive.test.ts`; spec in
+  `docs/specs/2026-08-07-noninteractive-mode.md`.
+
 ## `plugins/p-flow 1.9.2` (marketplace `v5.16.2`) — native task-list works on current Claude Code (Task tools, not just legacy TodoWrite)
 
 - **`executing-plan` and `subagent-driven-development` no longer depend on the phased-out `TodoWrite`

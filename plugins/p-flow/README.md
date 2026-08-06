@@ -89,6 +89,17 @@ This bridge is **advisory and read-only** — unlike the p-tasks/p-wiki bridges 
 
 It prefers to **delegate**: `context7` for version-accurate library docs when installed, `/deep-research` for deep multi-source questions, and a bounded `WebSearch` / `WebFetch` for a quick scan otherwise. No plugin-manifest dependency — `context7` / `deep-research` are used when present, and the built-in web tools are the only hard capability. Contract: `skills/_shared/prior-art-bridge.md`.
 
+## Non-interactive mode (optional)
+
+Set `P_FLOW_NONINTERACTIVE=1` to run `requesting-code-review` inside a headless `claude -p` job — a p-shed worker, a CI step — where nobody can answer a question. Any other value, including unset, is interactive: **every question is put exactly as before, in the same words**. There is no partial mode.
+
+In non-interactive mode the skill never asks. It either applies a default written down next to the question it replaces, or stops with a named reason the job log carries. Two defaults are defined:
+
+- **Preconditions** — the `specs/<slug>/specification.md` requirement is dropped; `<slug>` comes from the parent p-tasks task title (the bridge's join key) and the reviewer's Goal is composed from that task's description. Non-interactive mode **requires p-tasks**: without it, or with a `jira` destination whose writes need a human yes, the run stops rather than guessing.
+- **Triage** — Blockers and Suggestions are accepted (`fix`) and filed as `code-review:*` follow-up sub-tasks; Nits are deferred with reason *nit declined (non-interactive default)*. `reject` is **unavailable** — asserting a reviewer was wrong is a judgement reserved for a human. Decisions are recorded through the same p-tasks calls a human's triage uses, so the audit trail has the same shape either way.
+
+Contract: `skills/_shared/noninteractive.md`.
+
 ## What `/p-flow:init` writes
 
 In the current git repo (or current working directory if not a git repo):
