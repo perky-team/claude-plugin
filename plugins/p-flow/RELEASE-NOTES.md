@@ -3,7 +3,7 @@
 > Marketplace tag → p-flow plugin version → date → headline.
 > Authored 2026-05-27; backfilled from `v4.6.0` onward (the first p-flow release on the marketplace was `v3.1.0` with `plugins/p-flow 0.1.0` — a minimal `init` skill; see `git log v4.5.0..v4.6.0 -- plugins/p-flow/`).
 
-## `plugins/p-flow 1.10.0` (marketplace `v6.2.0`) — `requesting-code-review` runs headless under `P_FLOW_NONINTERACTIVE=1`
+## `plugins/p-flow 1.10.0` (marketplace `v6.4.0`) — `requesting-code-review` runs headless under `P_FLOW_NONINTERACTIVE=1`
 
 - **New shared gate `skills/_shared/noninteractive.md`.** `P_FLOW_NONINTERACTIVE=1` — exactly `1` —
   puts a skill in non-interactive mode. Any other value, including unset, empty, `0` and `true`, is
