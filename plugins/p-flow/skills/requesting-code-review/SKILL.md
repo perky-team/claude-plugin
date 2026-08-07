@@ -23,9 +23,22 @@ Before precondition 3 and before triage, run the gate in `${CLAUDE_SKILL_DIR}/..
 2. There is a diff to review. Check: `git diff <base>...HEAD` shows non-empty output. If empty — say: *"No diff to review. Run after implementing some steps."*
 3. `specs/<slug>/specification.md` exists. Determine `<slug>` from the current branch name (strip the `<type>/` prefix) or ask the user. Run the p-tasks gate in `${CLAUDE_SKILL_DIR}/../_shared/ptasks-bridge.md` to fix the mode: **legacy mode** (p-tasks absent) additionally requires `specs/<slug>/plan.md`; **canonical mode** (p-tasks present) has no `plan.md` and uses the `<slug>` p-tasks task instead.
 
-**Non-interactive — precondition 3 only.** In non-interactive mode there is nobody to name a slug or author a spec, so this precondition is replaced:
+### Non-interactive — precondition 3 only
 
-- **p-tasks present (canonical mode)** → the `specs/<slug>/specification.md` requirement is **dropped**. `<slug>` comes from the parent p-tasks task title, which `_shared/ptasks-bridge.md` defines as being **exactly** the slug: strip the `<type>/` prefix from `git rev-parse --abbrev-ref HEAD`, then confirm a task with that exact title exists via the Skill tool, `p-tasks:list <slug>`. If the branch carries no usable slug, or no task has that title, **stop** — *"p-flow: non-interactive mode cannot resolve `<slug>` — branch `<branch>` has no matching p-tasks task."* Never guess a slug.
+In non-interactive mode there is nobody to name a slug or author a spec, so this precondition is replaced:
+
+- **p-tasks present (canonical mode)** → the `specs/<slug>/specification.md` requirement is **dropped**, and the parent p-tasks task is resolved by the order below — **never from the branch name**. A headless caller is an autonomous loop: it lives on ONE long-lived branch and takes whichever task `p-tasks:next` hands it, so the branch names the *worker*, not the task. On `auto/dev` the branch would yield the slug `dev`, and no task is titled `dev` — which is why every headless run stopped here. Resolve `<parent>` in this order:
+
+  1. **The skill's argument — `--task <t-id|task-title>`.** This is the intended path: the caller has just taken the task from `p-tasks:next`, knows which one it is working on, and writes that argument into the prompt by hand. The value is either the p-tasks **task id** (`t-7`) or the task's **exact title** (`fix-worker-retry` — which the bridge's join key makes exactly the `<slug>`). Resolve it against the whole-project listing — via the Skill tool, `p-tasks:list` with no argument — matching a top-level `task` by `id` or by exact `title`. If nothing matches, **stop** — *"p-flow: non-interactive mode cannot resolve the parent task — `--task <value>` matches no p-tasks task."* An argument that matches nothing **never falls through** to step 2: the caller named a task, and reviewing a different one is worse than stopping.
+
+  2. **Fallback — the single `in_progress` task.** With no argument, take from that same listing the top-level `task` items whose `status` is `in_progress`. Use it only when there is **exactly one**; that one is `<parent>`. Two or more is ambiguous and **must not be guessed** at — a live deployment currently has three.
+
+  3. **Otherwise stop**, naming which of the two inputs was missing, because the operator's fix differs:
+     - nothing in progress → *"p-flow: non-interactive mode cannot resolve the parent task — no `--task` argument was given and no task is `in_progress`."*
+     - two or more → *"p-flow: non-interactive mode cannot resolve the parent task — no `--task` argument was given and <N> tasks are `in_progress`: <ids and titles>."*
+
+  `<slug>` is then the resolved `<parent>`'s title — `_shared/ptasks-bridge.md` defines a top-level task's title as being **exactly** the slug — and the rest of this skill uses `<parent>` / `<slug>` unchanged. Never guess a slug, and never derive one from the branch name.
+
 - **p-tasks present with a `jira` primary or mirror** → **stop** — *"p-flow: non-interactive mode cannot confirm Jira writes — the p-tasks destination is `jira`."* The bridge requires an explicit yes before creating real issues and there is nobody to give it. Checking this here, before the reviewer is dispatched, keeps a headless run from burning a review it may not record.
 - **p-tasks absent** → **stop** — *"p-flow: non-interactive mode requires p-tasks (canonical mode) — `docs/tasks/.ptasks.json` not found."* Do not fall back to legacy: legacy mode has no place to record the triage outcomes without a `plan.md` this run cannot verify a human authored.
 
@@ -36,7 +49,7 @@ Before precondition 3 and before triage, run the gate in `${CLAUDE_SKILL_DIR}/..
 Capture:
 
 - **Goal**: one paragraph distilled from `specification.md` "Overview / Problem Statement / Proposed Solution".
-  - **Non-interactive + canonical mode**: `specification.md` may not exist. Compose the Goal from the parent p-tasks task's `--description` — the concise Overview `writing-plan` puts there — via the Skill tool, `p-tasks:list <slug>`. If the spec file does happen to exist, prefer it, exactly as above.
+  - **Non-interactive + canonical mode**: `specification.md` may not exist. Compose the Goal from the parent p-tasks task's `description` — the concise Overview `writing-plan` puts there — read from the whole-project listing already used to resolve `<parent>` (Skill tool, `p-tasks:list` with **no** argument; a listing scoped to `<parent>` returns that task's sub-tasks, not the task itself). If the spec file does happen to exist, prefer it, exactly as above.
 - **What was done**: the list of completed steps.
   - **Legacy mode** (p-tasks absent — run the gate in `${CLAUDE_SKILL_DIR}/../_shared/ptasks-bridge.md`): the checked items under `## Steps` in `plan.md` (do not include follow-ups or audit entries).
   - **Canonical mode** (p-tasks present): the done sub-tasks of the `<slug>` task — via the Skill tool, `p-tasks:summary <parent>` (which returns done items only). There is no plan.md in this mode.

@@ -49,7 +49,7 @@ Two corollaries:
 
 | Skill | What the gate changes | Documented defaults |
 |---|---|---|
-| `requesting-code-review` | precondition 3 (spec file / slug resolution) and the §4 triage protocol | `skills/requesting-code-review/SKILL.md` |
+| `requesting-code-review` | precondition 3 (spec file / parent-task resolution) and the §4 triage protocol | `skills/requesting-code-review/SKILL.md` |
 
 No other skill reads this doc yet. Adding one means writing that skill's defaults into that skill
 first — this doc supplies the gate and the rule, never the defaults.

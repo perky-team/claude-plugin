@@ -3,6 +3,39 @@
 > Marketplace tag → p-flow plugin version → date → headline.
 > Authored 2026-05-27; backfilled from `v4.6.0` onward (the first p-flow release on the marketplace was `v3.1.0` with `plugins/p-flow 0.1.0` — a minimal `init` skill; see `git log v4.5.0..v4.6.0 -- plugins/p-flow/`).
 
+## `plugins/p-flow 1.10.1` (marketplace `v6.4.1`) — headless `requesting-code-review` takes its task from a `--task` argument, never from the branch
+
+- **As shipped in 1.10.0 the headless path could not resolve a task in the deployment it was built
+  for.** Precondition 3 derived `<slug>` by stripping the `<type>/` prefix off the current branch and
+  required a p-tasks task with exactly that title — p-flow's own one-branch-per-task model. The
+  autonomous loops it targets cannot work that way: they live on ONE long-lived branch and take
+  whichever task `p-tasks:next` hands them, so the task changes every run while the branch never
+  does. Measured on both live deployments on 2026-08-07: branch `auto/dev` → slug `dev`; 39 and 105
+  top-level tasks, **0** titled `dev`. Every headless run stopped on precondition 3 and nothing past
+  it was reachable.
+
+- **Non-interactive resolution order is now:** the skill's argument — `--task <t-id|task-title>`,
+  either the p-tasks task id (`t-7`) or the task's exact title (the `<slug>`, per the bridge's join
+  key) — else the single top-level task with status `in_progress`, usable **only when there is
+  exactly one** (one live deployment has three, so the qualifier is load-bearing) — else a stop. The
+  argument is the intended path: the caller has just taken the task from `p-tasks:next` and knows
+  which one it is working on. An argument that matches nothing **never falls through** to the
+  fallback; reviewing a different task is worse than stopping.
+
+- **Three distinct named stops**, because the operator's fix differs for each: `--task <value>`
+  matches no p-tasks task; no argument and no task `in_progress`; no argument and `<N>` tasks
+  `in_progress` (which lists them).
+
+- **Also fixed in the same block:** the non-interactive Goal was to be read via `p-tasks:list
+  <slug>`, which returns that task's *sub-tasks*, not the task itself — so the parent's
+  `description` was never in the response. It now comes from the whole-project listing the
+  resolution already makes.
+
+- **Interactive is untouched** — the branch is still the right source with a human at the keyboard,
+  and a new assertion pins that sentence verbatim. `tests/p-flow-noninteractive.test.ts` grows from
+  12 to 17 assertions; the design record is amended in
+  `docs/specs/2026-08-07-noninteractive-mode.md`.
+
 ## `plugins/p-flow 1.10.0` (marketplace `v6.4.0`) — `requesting-code-review` runs headless under `P_FLOW_NONINTERACTIVE=1`
 
 - **New shared gate `skills/_shared/noninteractive.md`.** `P_FLOW_NONINTERACTIVE=1` — exactly `1` —

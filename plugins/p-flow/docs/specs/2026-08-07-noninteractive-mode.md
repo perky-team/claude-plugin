@@ -55,7 +55,7 @@ a consent to an external irreversible write, cannot.
 
 | | Interactive (unchanged) | Non-interactive |
 |---|---|---|
-| **Precondition 3** | `specs/<slug>/specification.md` must exist; `<slug>` from the branch **or ask the user** | requirement dropped; `<slug>` = the parent p-tasks task title, which the bridge defines as being exactly the slug, confirmed via `p-tasks:list <slug>`; **Goal** composed from that task's `--description` |
+| **Precondition 3** | `specs/<slug>/specification.md` must exist; `<slug>` from the branch **or ask the user** | requirement dropped; `<parent>` from the skill's `--task <t-id\|task-title>` argument, else the single `in_progress` task ([superseded](#amendment--2026-08-07-the-parent-task-is-resolved-from-an-argument-not-the-branch) the branch-derived slug, which resolved nothing in the target deployment); **Goal** composed from that task's description |
 | **Blockers** | one at a time, `fix` / `defer` / `reject`, no defaults | all → `fix` |
 | **Suggestions** | numbered list, reply with indices | all → `fix` |
 | **Nits** | numbered list; default `reject all`, reason *nit declined* | all → **`defer`**, reason *nit declined (non-interactive default)* |
@@ -104,3 +104,55 @@ covers the new path; `code-reviewer.md` stays mode-neutral.
 
 `p-flow-cross-skill-consistency.test.ts` and `p-flow-sdd-decoupling.test.ts` both reference this
 skill and stay green.
+
+## Amendment — 2026-08-07: the parent task is resolved from an argument, not the branch
+
+**As shipped in 1.10.0 the headless path could not resolve a task in the deployment it was built
+for.** Precondition 3 derived `<slug>` from the branch (strip `<type>/`) and required a p-tasks task
+with exactly that title. That is p-flow's own branching model — one branch per task — and the
+p-shed autonomous loops cannot use it: they live on ONE long-lived branch and take whichever task
+`p-tasks:next` hands them, so the task changes every run while the branch never does. Measured on
+both live deployments on 2026-08-07:
+
+| Deployment | Branch | Branch-derived slug | Top-level tasks | Tasks titled `dev` | `in_progress` |
+|---|---|---|---|---|---|
+| Dimple | `auto/dev` | `dev` | 39 | 0 | 1 |
+| HFT | `auto/dev` | `dev` | 105 | 0 | 3 |
+
+So the skill stopped at precondition 3 on every headless run and nothing past it was reachable.
+
+**Non-interactive resolution order** (interactive is untouched — the branch is still the right
+source when a human is at the keyboard, one branch per task):
+
+```
+        --task <t-id|task-title> given?
+                 │
+        yes ─────┴───── no
+         │               │
+   matches a top-      exactly one top-level task in_progress?
+   level task?           │                    │
+    │        │      yes ─┘                    └─ no / two or more
+   yes       no      │                              │
+    ▼        ▼       ▼                              ▼
+  <parent>  STOP   <parent>                        STOP
+            "matches no                     "no --task argument was given
+             p-tasks task"                   and no task is in_progress"
+       (never falls through)                          — or —
+                                            "…and <N> tasks are in_progress"
+```
+
+The argument is the **intended** path: a p-shed worker has just taken the task from
+`p-tasks:next` and knows its id. The `in_progress` fallback is a convenience for a caller that
+did not pass one, and is deliberately usable **only when exactly one** exists — HFT's three make
+the qualifier load-bearing, not decorative. The two no-argument stops are worded differently on
+purpose: "none in progress" and "N in progress" have different operator fixes.
+
+Also corrected in the same pass: the non-interactive Goal was to be read via `p-tasks:list <slug>`,
+which returns that task's **sub-tasks**, not the task itself — so the parent's `description` was
+never in the response. It now comes from the whole-project listing (`p-tasks:list` with no
+argument), which is the same call the resolution above already makes.
+
+Tests 13–17 in `tests/p-flow-noninteractive.test.ts` defend this: no branch derivation in the
+non-interactive block (and the interactive rule surviving verbatim), the argument's exact form
+documented as the intended path, the fallback qualified by "exactly one" and ranked below the
+argument, and three distinct named stops.

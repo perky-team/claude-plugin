@@ -15,6 +15,11 @@ import { repoRoot } from './helpers.js';
 //   3. the non-interactive path asks NOTHING and cannot `reject` — dropping a
 //      finding is a judgement reserved for a human, so the policy may only
 //      accept or defer.
+//   4. the non-interactive path resolves the parent p-tasks task from its
+//      ARGUMENT (or a single `in_progress` task), never from the branch name.
+//      The headless deployment is a p-shed loop: it lives on ONE long-lived
+//      branch (`auto/dev`) and takes whichever task `p-tasks:next` hands it, so
+//      a branch-derived slug matches no task and the run stopped every time.
 // Modelled on tests/p-flow-ptasks-bridge.test.ts.
 // ---------------------------------------------------------------------------
 
@@ -31,6 +36,22 @@ const BLOCKER_QUESTION =
 const NO_DEFAULTS = 'No defaults — user must answer.';
 
 const NI_TRIAGE_HEADING = '#### Non-interactive triage policy';
+const NI_PRECONDITION_HEADING = '### Non-interactive — precondition 3 only';
+
+/**
+ * The verbatim interactive precondition-3 slug rule. The branch IS the right
+ * source with a human at the keyboard (one branch per task, `<type>/<slug>`);
+ * drift here is the regression.
+ */
+const INTERACTIVE_SLUG_RULE =
+  'Determine `<slug>` from the current branch name (strip the `<type>/` prefix) or ask the user.';
+
+/** The exact argument form a caller writes into a headless prompt by hand. */
+const TASK_ARG = '--task <t-id|task-title>';
+
+/** The two stop reasons must name WHICH input was missing — the operator's fix differs. */
+const STOP_NONE = 'no `--task` argument was given and no task is `in_progress`';
+const STOP_MANY = 'no `--task` argument was given and <N> tasks are `in_progress`';
 
 /** Slice a markdown section: from `heading` up to the next heading of any level. */
 const section = (text: string, heading: string): string => {
@@ -139,5 +160,55 @@ describe('p-flow non-interactive mode', () => {
     const template = read('plugins/p-flow/skills/requesting-code-review/code-reviewer.md');
     expect(template).not.toContain(ENV_VAR);
     expect(template.toLowerCase()).not.toContain('non-interactive');
+  });
+
+  it('13. the non-interactive precondition never derives the task from the branch', () => {
+    const ni = section(read(SKILL), NI_PRECONDITION_HEADING);
+    expect(ni, 'headless must not read the branch name').not.toContain(
+      'git rev-parse --abbrev-ref HEAD',
+    );
+    expect(ni).not.toMatch(/strip the `<type>\/` prefix/);
+    expect(ni).toMatch(/never from the branch name/i);
+    // …and it still asks nobody anything.
+    expect(ni.toLowerCase()).not.toContain('ask the user');
+    // The stale branch-derived failure reason is gone with it.
+    expect(read(SKILL)).not.toMatch(/has no matching p-tasks task/);
+  });
+
+  it('14. the INTERACTIVE precondition still resolves the slug from the branch, verbatim', () => {
+    expect(read(SKILL)).toContain(INTERACTIVE_SLUG_RULE);
+  });
+
+  it('15. the skill argument is documented with its exact form, as the intended path', () => {
+    const ni = section(read(SKILL), NI_PRECONDITION_HEADING);
+    // A caller writes this into a prompt by hand — the exact form is pinned.
+    expect(ni).toContain(TASK_ARG);
+    expect(ni).toMatch(/intended path/i);
+    // Both accepted values are spelled out: a p-tasks id, or the exact title.
+    expect(ni).toMatch(/task id/i);
+    expect(ni).toMatch(/exact title/i);
+  });
+
+  it('16. the `in_progress` fallback is qualified by "exactly one" and ranks below the argument', () => {
+    const ni = section(read(SKILL), NI_PRECONDITION_HEADING);
+    expect(ni).toMatch(/only when there is \*\*exactly one\*\*/i);
+    expect(ni).toContain('in_progress');
+    // Order matters: the caller's argument wins over the inferred fallback.
+    expect(ni.indexOf('--task')).toBeLessThan(ni.indexOf('in_progress'));
+    // Two or more is ambiguous — measured: one live deployment has 3.
+    expect(ni).toMatch(/must not be guessed/i);
+  });
+
+  it('17. the failure reasons are distinct and name which input was missing', () => {
+    const ni = section(read(SKILL), NI_PRECONDITION_HEADING);
+    expect(ni).toContain(STOP_NONE);
+    expect(ni).toContain(STOP_MANY);
+    // An explicit argument that matches nothing is its own reason, and must not
+    // silently fall through to the fallback — that would review the wrong task.
+    expect(ni).toMatch(/matches no p-tasks task/);
+    expect(ni).toMatch(/never falls through/i);
+    // Three distinct stops, not one reason reused.
+    const stops = ni.split('cannot resolve the parent task').length - 1;
+    expect(stops, 'each stop states its own named reason').toBeGreaterThanOrEqual(3);
   });
 });
