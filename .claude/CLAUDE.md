@@ -1,6 +1,16 @@
 # Project rules
 
-## Implementing on Windows: e2e tests MUST also be run under WSL
+## Implementing on Windows: EVERY test run happens under WSL
+
+**If the host system is Windows, run the tests under WSL. Always, and the whole suite — not
+only e2e, not only the files you touched.** A Windows run is optional extra information; the
+WSL run is the one that decides whether the work is verified. Never report work as verified
+on the strength of a Windows-only run.
+
+**If WSL is missing something the run needs — a new enough node, a dependency, the repo copy
+— install it there and continue.** A missing tool in WSL is a setup step, never a reason to
+fall back to Windows-only and never a reason to stop and ask. The setup notes below make this
+a few minutes once and instant afterwards.
 
 A green Windows run does not mean the suite passes. These plugins are operated on Linux,
 and a Windows-only run is green for two reasons that have nothing to do with the code
@@ -18,10 +28,11 @@ being correct. Both were measured in this repo, not assumed:
   branch — while passing on Windows. Timing differs too: a stub can win a race against
   `onSpawn` on Linux that it always loses on Windows.
 
-So: when the implementation was done on Windows, run the e2e suites under WSL before
-calling the work verified, and report BOTH platforms' numbers.
+So: when the implementation was done on Windows, the full suite under WSL is what verifies
+it. Report BOTH platforms' numbers when you ran both, and say plainly which one is the WSL
+run.
 
-    wsl -e bash -lc '...'
+    wsl -e bash -lc 'export PATH=$HOME/.local/node24/bin:$PATH && cd ~/pshed && npx vitest run'
 
 Setup notes that make this cheap and non-invasive (the first run takes a few minutes,
 after that it is instant):
@@ -31,9 +42,12 @@ after that it is instant):
   them and break the Windows side. Copy the repo into the WSL filesystem instead —
   `tar --exclude=./node_modules --exclude=./.git -cf - . | (cd ~/pshed && tar -xf -)` —
   and `npm install` there.
-- **WSL's system node may be far too old** (Ubuntu 22.04 ships v12; vitest needs 18+).
-  Unpack a portable node rather than touching the system or requiring sudo:
-  `curl -fsSL https://nodejs.org/dist/v24.19.0/node-v24.19.0-linux-x64.tar.xz | tar -xJ -C ~/.local/node24 --strip-components=1`
+- **WSL's system node may be far too old** (Ubuntu 22.04 ships v12; vitest needs 18+, and
+  this suite needs 24+ — see the next section). If `~/.local/node24` is not there, install
+  it; do not run the suite on whatever node happens to be on PATH. Unpack a portable node
+  rather than touching the system or requiring sudo:
+  `mkdir -p ~/.local/node24 && curl -fsSL https://nodejs.org/dist/v24.19.0/node-v24.19.0-linux-x64.tar.xz | tar -xJ -C ~/.local/node24 --strip-components=1`
+  then put it first on PATH for the run: `export PATH=$HOME/.local/node24/bin:$PATH`.
 - To tell a real regression from a pre-existing failure, run the same test file against
   the merge-base: `git archive <merge-base> --format=tar` into a second WSL directory and
   reuse the same `node_modules`.
