@@ -52,7 +52,7 @@ return, as `p-chat` does. `tests/cli-exit-safety.test.ts` enforces one of the tw
 | `/p-tasks:init` | Scaffolds `docs/tasks/` and a global rule at `.claude/rules/p-tasks.md`. Prompts for FS or Jira primary; optional mirror. |
 | `/p-tasks:add` | Creates a task or sub-task with optional description and blockers. |
 | `/p-tasks:set` | Updates status, title, description, or blocker list (full replace or incremental). |
-| `/p-tasks:next` | Returns the most relevant unblocked item (in-progress first; sub-tasks of in-progress parents first). |
+| `/p-tasks:next` | Returns the most relevant unblocked item (in-progress first; sub-tasks of in-progress parents first). `--explain` shows why. |
 | `/p-tasks:summary` | Lists done top-level tasks; with a task id — done sub-tasks of that task. |
 | `/p-tasks:list` | Lists ALL items in document order with their status and fields (the whole plan); with a task id — that task's sub-tasks. Fills the gap between `next` (open only) and `summary` (done only). |
 | `/p-tasks:sync` | Pushes primary state to all mirrors. Idempotent. |
@@ -85,6 +85,63 @@ re-read the question and stop. Excluded items still count as blockers for other 
 
 The single stdout line is the reason p-shed records as `lastGuard.reason` and prints in
 `pshed status`, so it is what an operator reads when asking "why did the worker not run?".
+
+## `ptasks next --explain` — why the queue chose what it chose
+
+`next` prints the winner and nothing else, so the only way to learn why a task you expected
+did not come up was to read `tools/lib/next.mjs` and re-derive the comparator by hand. Most
+callers here are automated prompts that cannot read source at decision time.
+
+`--explain` adds an `explain` object to the envelope. **It explains the choice and never
+influences it** — the ordering is computed first, and the explanation is derived from that
+same computation, so the two cannot disagree. Without the flag the output is byte-for-byte
+what it has always been. Works with and without `--all`.
+
+```bash
+ptasks next --explain
+ptasks next --all --explain
+```
+
+Four open tasks: `t-1` is in progress, and `t-2 → t-3 → t-4` is a blocked chain.
+
+```json
+{
+  "next": { "id": "t-1", "title": "Ship the report view", "status": "in_progress" },
+  "explain": {
+    "comparator": "in_progress first, then sub-task of an in-progress parent, then t- before st-, then numeric id",
+    "ranking": [
+      { "id": "t-1", "key": { "statusRank": 0, "parentInProgressRank": 1, "prefixRank": 0, "num": 1 } },
+      { "id": "t-4", "key": { "statusRank": 1, "parentInProgressRank": 1, "prefixRank": 0, "num": 4 } }
+    ],
+    "candidateCount": 2,
+    "excluded": [
+      { "id": "t-2", "unsatisfiedBlockers": [ { "id": "t-3", "status": "todo" } ] },
+      { "id": "t-3", "unsatisfiedBlockers": [ { "id": "t-4", "status": "todo" } ] }
+    ]
+  }
+}
+```
+
+Read it as: `t-4` is the task that unblocks the whole chain, and it *is* a candidate — but
+`t-1` wins on `statusRank` alone, before any other key is even compared. That is deliberate.
+"Continue what you already started" is an anti-thrash property a scheduler-driven caller
+depends on; without it, a loop waking on a timer abandons half-finished work whenever a
+lower-numbered item appears. `--explain` makes the trade-off visible instead of removing it.
+
+| field | meaning |
+|---|---|
+| `comparator` | the ordering rule in words |
+| `ranking` | the ranked candidates with the key that placed each one. **Lower wins on every key**, compared left to right. Capped at **10 entries** |
+| `candidateCount` | how many candidates there were in total, so a capped `ranking` is never mistaken for the whole queue |
+| `excluded` | items held back by an unsatisfied blocker. **Never capped** — a hidden exclusion is the thing this flag exists to surface |
+
+`excluded[].unsatisfiedBlockers` is the subset of that item's own `blockedBy` that is not yet
+done — *all* of it, in the item's own declaration order, not just the first blocker found.
+Listing one of three would send a caller round the loop again for the next one. A blocker id
+that no longer exists is reported as `{ "id": "t-9", "status": null, "missing": true }` rather
+than dropped, and still warns on stderr as it always has.
+
+`explain.excluded.length` is the same population `ptasks guard` counts as `blocked`.
 
 ## Item fields
 

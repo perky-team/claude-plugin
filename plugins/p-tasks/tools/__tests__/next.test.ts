@@ -45,3 +45,37 @@ describe('pickNext', () => {
     expect(warns[0]).toMatch(/nope/);
   });
 });
+
+// `explain` describes the decision; it must never be able to alter it. evaluateGuard calls
+// pickNext without the option and depends on the bare return value, so the default shape is
+// part of the contract, not an implementation detail.
+describe('pickNext explain', () => {
+  it('leaves the return shape alone unless asked', () => {
+    expect(Array.isArray(pickNext(items, { all: true }))).toBe(true);
+    expect(pickNext(items).id).toBe('t-1');
+  });
+  it('wraps the very same selection it would otherwise have returned', () => {
+    expect(pickNext(items, { explain: true }).selection).toEqual(pickNext(items));
+    expect(pickNext(items, { all: true, explain: true }).selection).toEqual(pickNext(items, { all: true }));
+  });
+  it('reports keys that agree with the order they produced', () => {
+    const { selection, explain } = pickNext(items, { all: true, explain: true });
+    expect(explain.ranking.map((r: any) => r.id)).toEqual(selection.map((i: any) => i.id));
+    expect(explain.candidateCount).toBe(selection.length);
+    // The ranking is sorted by its own reported keys — if it were not, the explanation and
+    // the ordering would have come from two different computations.
+    const flat = explain.ranking.map((r: any) => Object.values(r.key));
+    expect([...flat].sort((a: any, b: any) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2] || a[3] - b[3])).toEqual(flat);
+  });
+  it('does not warn a second time for a blocker the decision already warned about', () => {
+    const warns: string[] = [];
+    const out = pickNext(
+      [{ id: 't-1', type: 'task', title: '', description: '', status: 'todo', blockedBy: ['nope'] }],
+      { all: true, explain: true, onWarn: (m: string) => warns.push(m) },
+    );
+    expect(warns).toHaveLength(1);
+    expect(out.explain.excluded).toEqual([
+      { id: 't-1', unsatisfiedBlockers: [{ id: 'nope', status: null, missing: true }] },
+    ]);
+  });
+});

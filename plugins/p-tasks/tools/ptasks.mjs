@@ -274,14 +274,20 @@ export async function nextCommand({ root, args, transport }) {
   await primary.ensureStructure();
   const items = await primary.listItems();
   const warns = [];
+  const onWarn = (m) => warns.push(m);
+  // `--explain` only ever ADDS an `explain` key, and only when asked for. Without the flag
+  // the emitted bytes must stay what they have always been: p-shed guards and prompt-driven
+  // callers parse this envelope, and `explain` is appended last so key order is untouched.
+  const explain = Boolean(args.explain);
+
   if (args.all) {
-    const list = pickNext(items, { all: true, onWarn: (m) => warns.push(m) });
+    const r = pickNext(items, { all: true, explain, onWarn });
     for (const w of warns) process.stderr.write(`warning: ${w}\n`);
-    return emitJson({ items: list }, 0);
+    return emitJson(explain ? { items: r.selection, explain: r.explain } : { items: r }, 0);
   }
-  const one = pickNext(items, { onWarn: (m) => warns.push(m) });
+  const r = pickNext(items, { explain, onWarn });
   for (const w of warns) process.stderr.write(`warning: ${w}\n`);
-  return emitJson({ next: one ?? null }, 0);
+  return emitJson(explain ? { next: r.selection ?? null, explain: r.explain } : { next: r ?? null }, 0);
 }
 
 // A p-shed guard: cheap "is there work?" answer in front of an expensive launch.
