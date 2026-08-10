@@ -26,5 +26,6 @@ Caveat: derived pages can become stale if the source doc later diverges from the
 - `/p-wiki:query "<question>"` — search the wiki and answer with citations
 - `/p-wiki:lint` — audit links, orphan pages, stale frontmatter
 - `/p-wiki:sync` — push the primary destination to every configured mirror (one-way; no-op without mirrors)
+- `pwiki upgrade-schema [--write]` — CLI only. Updates `docs/wiki/CLAUDE.md` to the schema shipped with the installed plugin; without `--write` it just reports what differs. `/p-wiki:init` never rewrites that file, so this is how a rule added to a later p-wiki release reaches this wiki.
 
 Detailed frontmatter schemas, naming conventions, and link rules are in `docs/wiki/CLAUDE.md`, which auto-loads when Claude works with files under `docs/wiki/`.

@@ -470,7 +470,7 @@ if (process.argv.slice(2)[0] === '--version') {
 const command = process.argv[2];
 const args = parseArgs(process.argv.slice(3));
 
-const KNOWN = ['new', 'set', 'promote', 'search', 'lint', 'backlinks', 'index', 'reindex', 'init', 'sync', 'get', 'source'];
+const KNOWN = ['new', 'set', 'promote', 'search', 'lint', 'backlinks', 'index', 'reindex', 'init', 'sync', 'get', 'source', 'upgrade-schema'];
 if (!KNOWN.includes(command)) return die(`unknown command: ${command}`, 1);
 
 try {
@@ -684,6 +684,77 @@ try {
   if (command === 'init') {
     if (!args.confluence && !args['mirror-confluence']) return die('use the /p-wiki:init skill for FS scaffolding; only --confluence is supported here', 1);
     await initConfluence(args);
+  }
+
+  // `init` writes docs/wiki/CLAUDE.md once and never touches it again (its Step 4 skips
+  // the scaffold for an existing wiki), so a rule added to the shipped template reaches
+  // new wikis only. Every wiki created before the change keeps compiling under the old
+  // rules forever. This command is the missing path: it reports the drift and, with
+  // --write, replaces the file from the template that ships with this plugin version.
+  if (command === 'upgrade-schema') {
+    const root = findWikiRoot(process.cwd());
+    if (!root) return die(`not inside a p-wiki repo`, 1);
+    const target = join(root, 'docs', 'wiki', 'CLAUDE.md');
+    const format = args.format ?? 'text';
+
+    let shipped;
+    try {
+      shipped = readFileSync(new URL('../skills/_shared/templates/wiki-claude-md.template.md', import.meta.url), 'utf-8');
+    } catch {
+      return die('cannot read the bundled schema template; the plugin install may be incomplete', 1);
+    }
+    const current = existsSync(target) ? readFileSync(target, 'utf-8') : '';
+    // Compare and write line-ending-agnostically. The shipped template is checked in with
+    // CRLF; a wiki's copy is usually LF. Comparing raw bytes reports every single line as
+    // changed, and writing the template verbatim would rewrite the whole file in the user's
+    // repo for no semantic reason. So: normalise for the comparison, and write back in
+    // whatever ending the target already uses.
+    const norm = (s) => s.replace(/\r\n/g, '\n');
+    const shippedN = norm(shipped);
+    const currentN = norm(current);
+    const inSync = currentN === shippedN;
+    const wrote = !inSync && args.write === true;
+    if (wrote) {
+      const targetUsesCrlf = /\r\n/.test(current);
+      writeFileSync(target, targetUsesCrlf ? shippedN.replace(/\n/g, '\r\n') : shippedN);
+    }
+
+    // A unified diff would need a diff library the plugin deliberately does not carry
+    // (zero deps), so report the shape of the drift instead: which lines differ. That
+    // is enough to decide whether to take the update, and `git diff` shows the rest
+    // once --write has run.
+    const cur = currentN.split('\n');
+    const shp = shippedN.split('\n');
+    const curSet = new Set(cur);
+    const shpSet = new Set(shp);
+    const added = shp.filter(l => l.trim() && !curSet.has(l));
+    const removed = cur.filter(l => l.trim() && !shpSet.has(l));
+
+    if (format === 'json') {
+      return emitJson({
+        target: relative(root, target).split(/[\\/]/).join('/'),
+        inSync, wrote,
+        pluginVersion: readVersion(),
+        added: added.length, removed: removed.length,
+        addedLines: added.slice(0, 40), removedLines: removed.slice(0, 40),
+      }, 0);
+    }
+    if (inSync) {
+      process.stdout.write(`docs/wiki/CLAUDE.md matches the schema shipped with p-wiki ${readVersion()}. Nothing to do.\n`);
+      return;
+    }
+    process.stdout.write(`docs/wiki/CLAUDE.md differs from the schema shipped with p-wiki ${readVersion()}:\n`);
+    process.stdout.write(`  ${added.length} line(s) only in the shipped template, ${removed.length} only in your file\n`);
+    for (const l of added.slice(0, 20)) process.stdout.write(`  + ${l}\n`);
+    for (const l of removed.slice(0, 20)) process.stdout.write(`  - ${l}\n`);
+    if (added.length + removed.length > 40) process.stdout.write(`  … (truncated)\n`);
+    process.stdout.write(
+      wrote
+        ? `\nWritten. Review with \`git diff docs/wiki/CLAUDE.md\`.\n`
+        : `\nNothing written. Re-run with --write to take the shipped schema.\n` +
+          `Local edits to this file are overwritten, so commit or copy them first.\n`,
+    );
+    return;
   }
 
   if (command === 'index') {
