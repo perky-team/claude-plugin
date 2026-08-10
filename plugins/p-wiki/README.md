@@ -48,6 +48,7 @@ After edits, run `/reload-plugins` inside Claude Code to pick them up without re
 
 - `pwiki reindex` — regenerates `docs/wiki/index.md` and writes the `docs/wiki/index.json` bundle that git/HTTP read-only sources consume. Run it as `node "${CLAUDE_PLUGIN_ROOT}/tools/pwiki.mjs" reindex` (or wire it to a pre-push hook) before publishing. See [Publishing a bundle for consumption](#publishing-a-bundle-for-consumption).
 - `pwiki source add <name> …` — registers another wiki as a read-only source, validating the block and probing the source before it touches `.pwiki.json`. See [Adding a source with one command](#adding-a-source-with-one-command).
+- `pwiki upgrade-schema [--write]` — brings an existing wiki's `docs/wiki/CLAUDE.md` up to the schema shipped with the installed plugin. `/p-wiki:init` writes that file once and never rewrites it, so a wiki created before a rule was added keeps compiling under the old rules until this is run. Without `--write` it only reports which lines differ; with `--write` it replaces the file, keeping whatever line endings the file already uses. Local edits to `docs/wiki/CLAUDE.md` are overwritten — commit them first, then review with `git diff`.
 
 ## Storage backends
 
@@ -181,6 +182,10 @@ No `pwiki sync`, no Confluence required. Consumers on GitLab/GitHub fetch `index
 3. `pwiki search "<question>"` and `/p-wiki:query` now union results from both wikis. `pwiki get <path> --source=shared` reads a page from the shared wiki directly.
 
 Full details (frontmatter schemas, identity format, reversing direction) live in the generated `docs/wiki/CLAUDE.md`, which Claude auto-loads when working under `docs/wiki/`.
+
+## Measured benefit
+
+[`docs/measured-benefit.md`](./docs/measured-benefit.md) reports what a controlled A/B measured: where p-wiki pays off, where it does not, one cost claim the study withdrew, and one idea that was tried and dropped. Short version — it pays off for knowledge that is not in the repo, where it is the difference between 100% of the facts and 14%; as a summary of docs that already sit next to it, no difference the study could detect; and as a *replacement* for those docs it is clearly worse, 80% of facts against 94%.
 
 ## Design
 

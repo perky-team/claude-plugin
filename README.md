@@ -47,6 +47,8 @@ Pages live on the filesystem or in Confluence Cloud: one primary destination plu
 
 Skills: `init`, `ingest`, `compile`, `query`, `lint`, `reconcile`, `sync`.
 
+Measured, not assumed: [`docs/measured-benefit.md`](./plugins/p-wiki/docs/measured-benefit.md) reports a controlled A/B of where this plugin pays off — knowledge that is not in the repo, where it is the difference between 100% of the facts and 14% — and where it does not, including one cost claim the study had to withdraw.
+
 ### [`p-flow`](./plugins/p-flow/)
 
 A development process, not a set of tips: one feature or one bug is one branch, one spec folder, one plan, one MR. The unit of work is picked first (`feature` / `bugfix` / `hotfix` / `chore` / `docs`), then it walks brainstorm → spec → plan → implement → verify → review → push with a ready-to-copy MR command. Ships the repo-level rules too: secrets deny-list, Conventional Commits + `<type>/<slug>` branch naming, and spec templates (ADR, Gherkin, full specification).
