@@ -78,6 +78,12 @@ In-repo files used as sources are NOT modified by the plugin. They appear in `so
 ## Compile rules
 
 - **No invention.** Every claim must trace back to a source listed in `sources:`. If a source does not support a claim, leave it out.
+- **Identifiers verbatim.** A page states fewer facts than its source — that is the point. But for a fact the page *does* state, copy the exact tokens from the source: error codes, protocol field values, config keys, file names, numeric values and units, and which component enforces the rule. Never paraphrase an identifier away and never round a number.
+  - Wrong: "the order is rejected and the client gets a reject reason" — the source names the code.
+  - Right: "the order is rejected (`NO_ROUTING_RULE`); on FIX that is `103=99`, `58="no_routing_rule"`".
+  - Wrong: "recovery takes 5–10 seconds" when the source says 5–20 seconds for one day of WAL per shard.
+  - Wrong: attributing a limit to the ADR that describes it when the source says which component enforces it.
+  - If a fact cannot be stated with its identifiers inside the page's length budget, leave the fact out rather than keeping a vague version of it. A missing fact sends the reader to the source; a vague one does not.
 - Concept page length: 800–2000 words. Larger → split into sub-pages and link.
 - Source-summary length: 300–600 words.
 - Factual conflicts between sources — do not silently overwrite. Insert a callout with a parseable leading marker, and record the flag in frontmatter **without** moving `updated`:

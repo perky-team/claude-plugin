@@ -68,6 +68,8 @@ node "${CLAUDE_PLUGIN_ROOT}/tools/pwiki.mjs" new <type> \
 
 This handles the frontmatter (id, type, created, updated, status, sources) and slug-conflict resolution. On exit 2, follow the conflict prompts (overwrite vs. date-suffix). After CLI success, **Edit the body** of the newly created file to add the synthesized facts in the appropriate sections (Key facts / Main ideas / Related concepts) using the templates in `docs/wiki/CLAUDE.md`.
 
+**Identifiers verbatim.** A page states fewer facts than its source — that is the point — but every fact it *does* state keeps the source's exact tokens: error codes, protocol field values, config keys, file names, numeric values with their units, and which component enforces the rule. Do not paraphrase an identifier away ("the client gets a reject reason" where the source names the code) and do not round a number. If a fact will not fit with its identifiers inside the page's length budget, drop the fact instead of keeping a vague version — a missing fact sends the reader to the source, a vague one does not. (Same rule as `docs/wiki/CLAUDE.md` § Compile rules; stated here too so it applies to wikis whose copy of that file predates the rule — see `pwiki upgrade-schema`.)
+
 **If the page exists** (4c match):
 
 1. Mutate frontmatter via CLI:

@@ -3,7 +3,7 @@ name: query
 description: |
   Answer a question using the wiki's pages, with citations. Writes the answer to `pages/queries/<date>-<slug>.md` and conversationally offers to promote it to a concept page. Use when the user says "query wiki", "ask the wiki", "what does the wiki say about X", or asks a question that might be covered by accumulated project knowledge.
 argument-hint: "<question>"
-allowed-tools: Bash(git rev-parse:*) Bash(node:*) Read Edit
+allowed-tools: Bash(git rev-parse:*) Bash(node:*) Read Grep Edit
 ---
 
 # /p-wiki:query
@@ -39,9 +39,26 @@ node "${CLAUDE_PLUGIN_ROOT}/tools/pwiki.mjs" get "<path>" --source="<source>"
 
 This works for both FS and Confluence wikis (do **not** use the `Read` tool for wiki pages — it only opens local files). Cite only pages you actually read. Each search result carries a `source` field; pass it verbatim to `get --source` so a page from a read-only source is read from that source. Results from your own wiki carry the primary's name, which routes to the primary.
 
+## Step 3b — Confirm specifics against the source
+
+Pages are a synthesis; they carry the shape of an answer reliably and its exact values less so. Measured on a real wiki: derived pages dropped FIX codes the source spelled out, and restated a recovery window as "5–10 seconds" where the source said 5–20.
+
+So when the question turns on an **exact value** — an error code, a field name, a numeric limit, a file path, or which component enforces something — and the page either omits it or states it without the source's own wording, read the source before answering.
+
+For each page you are relying on:
+
+1. Take the paths from its `sources:` frontmatter.
+2. **Only follow them when the search result's `source` field equals the primary's name.** A page from a registered read-only source wiki has `sources:` paths relative to *that* repo — resolving them here reads an unrelated same-named file or nothing at all. For those pages, cite the page and say the exact value is unverified.
+3. **Only follow a path that exists locally.** A Confluence-primary wiki, or a page compiled in another checkout, can carry paths absent from this working tree. Skip those the same way.
+4. `Grep` the source for the identifier, then `Read` that region. Take the value from the source, not from the page.
+
+Do not read sources when the page already answers the question and no exact value is in play — that is the common case and the extra read is waste.
+
 ## Step 4 — Synthesize the answer
 
 Compose a 1–3 paragraph answer. Cite specific pages inline using markdown links: `[Title](pages/concept/foo.md)`. Never claim something the cited pages don't support; if the wiki is silent or contradictory on a point, say so.
+
+When Step 3b took a value from a source rather than the page, cite the source too (`path:line`), and — if the page's own wording disagreed with it — say so in one clause, so the divergence is visible and can be fixed by `/p-wiki:compile <source>`.
 
 ## Step 5 — Write the query-output page
 
