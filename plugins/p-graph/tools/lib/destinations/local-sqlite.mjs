@@ -41,7 +41,29 @@ function loadDatabaseSync() {
 // still lives in a file it did not touch, and Pass B then refuses a call that a
 // full index resolves certainly. So a graph written by 1.0.0 must be rebuilt whole
 // rather than patched.
-export const SCHEMA_VERSION = 8;
+// 9: nodes gained `decl`, set on a node that comes from a DECLARATION rather than
+// a definition — today only a C++ pure virtual. C++ allows a pure virtual to have a
+// definition as well, and leveldb writes every convenience method on its interfaces
+// that way (`virtual Status Put(…) = 0;` in db.h, `Status DB::Put(…) { … }` in
+// db_impl.cc). Both nodes on one qname made the exact-qname pass refuse the pair, so
+// `db_->Put(…)` stopped resolving and turned up in the gap report of an unrelated
+// symbol. The resolver now drops a declaration whose definition exists, and it needs
+// the column to know which is which.
+// 10: TypeScript gained three kinds of node and three kinds of field_types row it
+// never had — abstract classes and their methods, interface methods, and the type
+// written on a class field (plus `#extends` and `#alias:` rows the resolver walks).
+// No DDL change, but the bump is not optional: an incremental reindex would write
+// the new rows for the files it reparses while a class in a file it did not touch
+// still has none, and a call would then resolve differently from a full index —
+// silently, and in the direction of false confidence.
+// 11: Go interface methods are nodes. Same reason as 10 — new nodes appear, and a
+// file the incremental pass did not reparse would still have none, so a call would
+// resolve differently from a full index. This one also changes what an ANSWER says:
+// a call written on an interface now lands on the interface's own method, and each
+// concrete implementation reports those calls under the interface instead of as
+// gaps. Reading the two side by side on a half-migrated graph would be worse than
+// rebuilding it.
+export const SCHEMA_VERSION = 11;
 
 const META_DDL = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
@@ -54,7 +76,7 @@ CREATE TABLE IF NOT EXISTS files (
 CREATE TABLE IF NOT EXISTS nodes (
   id TEXT PRIMARY KEY, name TEXT, qname TEXT, kind TEXT, lang TEXT,
   file TEXT, start_line INTEGER, end_line INTEGER,
-  signature TEXT, doc TEXT, container_id TEXT
+  signature TEXT, doc TEXT, container_id TEXT, decl INTEGER DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS nodes_file ON nodes(file);
 CREATE INDEX IF NOT EXISTS nodes_name ON nodes(name);
@@ -192,12 +214,13 @@ export function openStore(dbPath, opts = {}) {
   };
 
   const insNode = db.prepare(`INSERT INTO nodes
-    (id,name,qname,kind,lang,file,start_line,end_line,signature,doc,container_id)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?)
+    (id,name,qname,kind,lang,file,start_line,end_line,signature,doc,container_id,decl)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
     ON CONFLICT(id) DO UPDATE SET
       name=excluded.name, qname=excluded.qname, kind=excluded.kind, lang=excluded.lang,
       file=excluded.file, start_line=excluded.start_line, end_line=excluded.end_line,
-      signature=excluded.signature, doc=excluded.doc, container_id=excluded.container_id`);
+      signature=excluded.signature, doc=excluded.doc, container_id=excluded.container_id,
+      decl=excluded.decl`);
   const delNodesByFile = db.prepare('DELETE FROM nodes WHERE file = ?');
   const delEdgesByFile = db.prepare('DELETE FROM edges WHERE file = ?');
   const insEdge = db.prepare(
@@ -246,7 +269,7 @@ export function openStore(dbPath, opts = {}) {
       delFieldTypesByFile.run(file);
       for (const n of nodes) {
         insNode.run(n.id, n.name, n.qname, n.kind, n.lang, n.file,
-          n.start_line, n.end_line, n.signature, n.doc, n.container_id);
+          n.start_line, n.end_line, n.signature, n.doc, n.container_id, n.decl ? 1 : 0);
         if (insFts) insFts.run(n.id, n.name, n.qname, n.signature);
       }
       for (const e of edges) insEdge.run(e.src_id, e.dst_id ?? null, e.dst_name ?? null,
@@ -303,6 +326,363 @@ export function openStore(dbPath, opts = {}) {
       // name. Go is exempt for the reason given on MEMBER_TARGET_OK.
       if (e.member === 1 && e.lang !== 'go' && !hits[0].owned) continue;
       setDst.run(hits[0].id, e.rowid);
+    }
+  };
+
+  // Pass T — a C++ receiver whose type the source writes down.
+  //
+  // A C++ declaration names the type the way the FILE can see it (`Batch`,
+  // `db::Batch`), while the graph stores the qname built from lexical nesting
+  // (`db.Batch`). The two are not the same string, so this cannot be one exact
+  // lookup the way Pass F is for Go. Two hops instead: resolve the written name to
+  // a class — and only when exactly one class in the repo carries it — then look
+  // for that class's method.
+  //
+  // Both hops are guarded by "exactly one", so nothing here is a pick. Two classes
+  // sharing a name means the source did not say which, and a guess dressed as a
+  // fact is the one outcome worth more than a missing row.
+  //
+  // What it is for: a call written on a value is 40% of leveldb's call edges and
+  // 43% of re2's, and before this pass not one of leveldb's 3,681 was certain.
+  // Measured on the source, 46.5% of those receivers in leveldb and 41.6% in re2
+  // name a repo class whose type is written in plain sight.
+  //
+  // Runs after Pass F (which answers the Go shape) and before Pass B, so a written
+  // type always beats a bare-name guess. When the type IS recorded and leads
+  // nowhere — `std::string`, an external class — this pass resolves nothing and
+  // Pass B's existing guard refuses the fallback, which turns a wrong guess into
+  // an honest gap.
+  // Does this graph have `nodes.decl`? Detected like `edges.guess` and
+  // `edges.dst_bare`: a graph written before schema 9 has no such column, and the
+  // read-only fallback cannot migrate it. Without the column nothing is marked as a
+  // declaration, so there is nothing to drop.
+  const declColumn = () => {
+    try { db.prepare('SELECT decl FROM nodes LIMIT 1').get(); return true; } catch { return false; }
+  };
+
+  const resolveCppReceiverTypes = () => {
+    const pending = db.prepare(`
+      SELECT rowid, file, src_id, field_key, method FROM edges
+      WHERE kind = 'call' AND dst_id IS NULL AND lang = 'cpp' AND external = 0
+        AND field_key IS NOT NULL AND method IS NOT NULL`).all();
+    if (!pending.length) return;
+    // The qname of the symbol each call is written inside, for the scope rule below.
+    const srcQname = new Map();
+    for (const n of db.prepare(
+      `SELECT id, qname FROM nodes WHERE lang = 'cpp'`).all()) srcQname.set(n.id, n.qname);
+    // One type per key. Two different types recorded for one key means the same
+    // name was declared twice in one scope, and neither reading wins.
+    const typeOf = new Map();
+    for (const r of db.prepare('SELECT key, type FROM field_types').all()) {
+      if (!typeOf.has(r.key)) typeOf.set(r.key, r.type);
+      else if (typeOf.get(r.key) !== r.type) typeOf.set(r.key, null);
+    }
+    // Distinct QNAMES, not rows. C++ lets two .cc files each define their own class
+    // of the same name — leveldb's three benchmark files all declare their own
+    // `RandomGenerator` — and counting rows made a single class look like three, so
+    // the check below refused a call that had only one possible answer.
+    const classByName = new Map();
+    for (const n of db.prepare(
+      `SELECT name, qname FROM nodes WHERE lang = 'cpp' AND kind IN ('class','struct')`).all()) {
+      if (!classByName.has(n.name)) classByName.set(n.name, new Set());
+      classByName.get(n.name).add(n.qname);
+    }
+    const byQname = new Map();
+    for (const n of db.prepare(
+      `SELECT id, qname, file FROM nodes WHERE lang = 'cpp' AND kind IN ${CALLABLE}`).all()) {
+      if (!byQname.has(n.qname)) byQname.set(n.qname, []);
+      byQname.get(n.qname).push(n);
+    }
+    // C++ looks a bare type name up from the innermost scope outwards. Written
+    // inside `namespace db`, `Iterator it;` means `db::Iterator` and never the
+    // nested `db::SkipList::Iterator` — that one has to be spelled out. Refusing
+    // whenever two classes share the short name threw both readings away; measured
+    // on leveldb, 382 calls were left unresolved by that alone.
+    const pickByScope = (cands, bare, caller) => {
+      if (!caller) return null;
+      let scope = caller;
+      for (;;) {
+        const cut = scope.lastIndexOf('.');
+        scope = cut === -1 ? '' : scope.slice(0, cut);
+        const want = scope ? `${scope}.${bare}` : bare;
+        if (cands.includes(want)) return want;
+        if (!scope) return null;
+      }
+    };
+    const setDst = db.prepare('UPDATE edges SET dst_id = ?, guess = 0 WHERE rowid = ?');
+    db.prepare('BEGIN').run();
+    try {
+      for (const e of pending) {
+        const written = typeOf.get(e.field_key);
+        if (!written) continue;
+        // A smart pointer is a library type, but a call through it is not a library
+        // call — `std::shared_ptr<Sink> s; s->Emit();` runs `Sink::Emit`. Read what
+        // the pointer holds before anything else.
+        const held = /(?:^|[.:])(?:shared_ptr|unique_ptr|weak_ptr|auto_ptr)\s*<\s*([\w.:]+)/
+          .exec(written);
+        const stripped = (held ? held[1].replaceAll('::', '.').replace(/[*&]+$/, '')
+          : written).replace(/<.*/, '');
+        let bare = stripped.split('.').pop();
+        // The written name may be an alias rather than a class: `typedef Skip Table;`
+        // then `Table table_;`. Follow one hop, and only one — a chain of aliases is
+        // rare enough that stopping here costs nothing, and following any number of
+        // them risks a cycle.
+        //
+        // A class-scoped alias is tried FIRST, before any class of that name: inside
+        // MemTable, `Table` means MemTable's own typedef even though the repo also
+        // has a `class Table`. The owning class is already in the field key.
+        const owner = e.field_key.includes('#field:')
+          ? e.field_key.split('#field:')[0].split('|').pop() : null;
+        const scoped = owner ? typeOf.get(`${owner}#alias:${bare}`) : null;
+        if (scoped) bare = scoped.split('.').pop();
+        else if (!classByName.has(bare)) {
+          const target = typeOf.get(`#alias:${bare}`);
+          if (target) bare = target.split('.').pop();
+        }
+        let classes = [...(classByName.get(bare) ?? [])];
+        if (!classes.length) continue;
+        // The source may have written the owner out — `SkipList::Iterator it;`.
+        // Keep only the classes whose qname ends with the path it wrote.
+        if (stripped.includes('.') && bare === stripped.split('.').pop()) {
+          const exact = classes.filter((c) => c === stripped || c.endsWith(`.${stripped}`));
+          if (exact.length) classes = exact;
+        }
+        const holder = classes.length === 1 ? classes[0]
+          : pickByScope(classes, bare, srcQname.get(e.src_id));
+        if (!holder) continue;
+        const hit = byQname.get(`${holder}.${e.method}`) ?? [];
+        // One definition, or — when several files define their own copy under the
+        // same qname — the one in the file the call is written in. That is what the
+        // compiler sees, and it is the only choice that is not a coin toss. A call
+        // in a THIRD file still gets nothing, which is the honest answer.
+        const same = hit.filter((n) => n.file === e.file);
+        const pick = hit.length === 1 ? hit[0] : (same.length === 1 ? same[0] : null);
+        if (pick) setDst.run(pick.id, e.rowid);
+      }
+      db.prepare('COMMIT').run();
+    } catch (err) {
+      db.prepare('ROLLBACK').run();
+      throw err;
+    }
+  };
+
+  // Pass P — a TypeScript call written on a class FIELD, `this.svc.find(id)`.
+  //
+  // The same two-hop shape as Pass T, because TypeScript has the same problem C++
+  // has: the declaration writes the type the way the file can see it (`Serializer`,
+  // `ProducerSerializer`) while the graph stores a qname. Three extra hops that C++
+  // does not need, each measured on nest and each needed by the SAME call:
+  //
+  //   `this.serializer.serialize(…)` in ClientKafka
+  //     1. the receiver is a field         -> key on `<file>|<Class>#field:<name>`
+  //     2. the field is on a BASE class    -> walk `<Class>#extends`
+  //     3. its type is an alias            -> follow `#alias:ProducerSerializer`
+  //     4. the alias names an INTERFACE    -> interfaces now own their methods
+  //
+  // Before this pass, none of the four existed and all 20 of those calls landed in
+  // the gap banner of an unrelated method that shares the bare name `serialize`.
+  //
+  // Every hop is guarded by "exactly one", so nothing here is a pick. When a type
+  // IS recorded and leads nowhere — a library class, `Redis` — the edge keeps the
+  // key that typed it, and Pass B's existing guard then refuses the bare-name
+  // fallback. An honest gap beats a wrong caller.
+  const resolveTsFieldTypes = () => {
+    const pending = db.prepare(`
+      SELECT rowid, field_key, method, lang FROM edges
+      WHERE kind = 'call' AND dst_id IS NULL AND lang IN ('ts','js') AND external = 0
+        AND field_key LIKE '%#field:%' AND method IS NOT NULL`).all();
+    if (!pending.length) return;
+    // One type per key. Two different types under one key means two classes of one
+    // name declared the same field differently, and neither reading wins.
+    const typeOf = new Map();
+    for (const r of db.prepare('SELECT key, type FROM field_types').all()) {
+      if (!typeOf.has(r.key)) typeOf.set(r.key, r.type);
+      else if (typeOf.get(r.key) !== r.type) typeOf.set(r.key, null);
+    }
+    const classByName = new Map();
+    for (const n of db.prepare(
+      `SELECT name, qname FROM nodes WHERE lang IN ('ts','js') AND kind IN ('class','interface')`).all()) {
+      if (!classByName.has(n.name)) classByName.set(n.name, []);
+      classByName.get(n.name).push(n.qname);
+    }
+    const byQname = new Map();
+    for (const n of db.prepare(
+      `SELECT id, qname FROM nodes WHERE lang IN ('ts','js') AND kind IN ${CALLABLE}`).all()) {
+      if (!byQname.has(n.qname)) byQname.set(n.qname, []);
+      byQname.get(n.qname).push(n.id);
+    }
+    const setDst = db.prepare('UPDATE edges SET dst_id = ?, guess = 0 WHERE rowid = ?');
+    // The key that actually carried the type is written back onto the edge. That is
+    // what lets Pass B refuse: its guard looks the edge's own field_key up in
+    // field_types, and a field found on a base class lives under a key the call site
+    // could not have known.
+    const setKey = db.prepare('UPDATE edges SET field_key = ? WHERE rowid = ?');
+    db.prepare('BEGIN').run();
+    try {
+      for (const e of pending) {
+        const scoped = e.field_key.split('#field:');
+        const fieldName = scoped[1];
+        const cls = scoped[0].split('|').pop();
+        // This file's own declaration first, then the class-wide one, then each
+        // base class in turn. Eight steps is far past any real hierarchy and stops
+        // a cycle dead.
+        let matched = null;
+        if (typeOf.get(e.field_key)) matched = e.field_key;
+        else if (typeOf.get(`${cls}#field:${fieldName}`)) matched = `${cls}#field:${fieldName}`;
+        else {
+          let cur = cls;
+          for (let i = 0; i < 8 && !matched; i++) {
+            const base = typeOf.get(`${cur}#extends`);
+            if (!base) break;
+            if (typeOf.get(`${base}#field:${fieldName}`)) matched = `${base}#field:${fieldName}`;
+            cur = base;
+          }
+        }
+        if (!matched) continue;
+        setKey.run(matched, e.rowid);
+        let bare = typeOf.get(matched).split('.').pop();
+        // One alias hop, and only one — the same rule Pass T follows.
+        if (!classByName.has(bare)) {
+          const target = typeOf.get(`#alias:${bare}`);
+          if (target) bare = target.split('.').pop();
+        }
+        const owners = classByName.get(bare);
+        if (owners?.length !== 1) continue;
+        const hit = byQname.get(`${owners[0]}.${e.method}`);
+        if (hit?.length === 1) setDst.run(hit[0], e.rowid);
+      }
+      db.prepare('COMMIT').run();
+    } catch (err) {
+      db.prepare('ROLLBACK').run();
+      throw err;
+    }
+  };
+
+  // Pass S — a TypeScript call written on a CLASS NAME, `NestFactory.create(app)`.
+  //
+  // The source named the owner itself, so there is nothing to infer: find the one
+  // class of that name and look for its method. Guarded by "exactly one" twice, and
+  // extraction has already checked that no variable of that name is in scope — a
+  // `const Factory = …` shadowing the class makes the call a call on a value, and
+  // then no key is written at all.
+  //
+  // When no repo class carries the name — an imported library class — this pass
+  // resolves nothing and the bare-name fallback stays exactly as it was.
+  //
+  // `external = 1` rows are included on purpose, which is the one place this pass
+  // differs from every other. Extraction marks `JSON.parse(…)` external from a word
+  // list, and a repo that declares its own `class JSON` makes that mark wrong. Only
+  // a whole-repo view can tell, and this is it — the same job Go's
+  // resolveShadowedBuiltins does for `max(…)`. The mark itself is left as written,
+  // for the reason given on that pass.
+  const resolveTsStaticCalls = () => {
+    const pending = db.prepare(`
+      SELECT rowid, field_key, method FROM edges
+      WHERE kind = 'call' AND dst_id IS NULL AND lang IN ('ts','js')
+        AND field_key LIKE '#static:%' AND method IS NOT NULL`).all();
+    if (!pending.length) return;
+    const classByName = new Map();
+    for (const n of db.prepare(
+      `SELECT name, qname FROM nodes WHERE lang IN ('ts','js') AND kind IN ('class','interface')`).all()) {
+      if (!classByName.has(n.name)) classByName.set(n.name, []);
+      classByName.get(n.name).push(n.qname);
+    }
+    const byQname = new Map();
+    for (const n of db.prepare(
+      `SELECT id, qname FROM nodes WHERE lang IN ('ts','js') AND kind IN ${CALLABLE}`).all()) {
+      if (!byQname.has(n.qname)) byQname.set(n.qname, []);
+      byQname.get(n.qname).push(n.id);
+    }
+    // Values declared at the top of a module, keyed by name. This is what answers
+    // `NestFactory.create(…)`: no class is called NestFactory — one file writes
+    // `export const NestFactory = new NestFactoryStatic()` and every other file
+    // calls methods on the name.
+    const valueOf = new Map();
+    for (const r of db.prepare(
+      `SELECT key, type FROM field_types WHERE key LIKE '#value:%'`).all()) {
+      const name = r.key.slice('#value:'.length);
+      if (!valueOf.has(name)) valueOf.set(name, r.type);
+      else if (valueOf.get(name) !== r.type) valueOf.set(name, null);
+    }
+    const setDst = db.prepare('UPDATE edges SET dst_id = ?, guess = 0 WHERE rowid = ?');
+    db.prepare('BEGIN').run();
+    try {
+      for (const e of pending) {
+        const written = e.field_key.slice('#static:'.length);
+        // The name itself first — a class named outright beats a value that
+        // happens to share the name.
+        let owners = classByName.get(written);
+        if (!owners) {
+          const type = valueOf.get(written);
+          if (type) owners = classByName.get(type.split('.').pop());
+        }
+        if (owners?.length !== 1) continue;
+        const hit = byQname.get(`${owners[0]}.${e.method}`);
+        if (hit?.length === 1) setDst.run(hit[0], e.rowid);
+      }
+      db.prepare('COMMIT').run();
+    } catch (err) {
+      db.prepare('ROLLBACK').run();
+      throw err;
+    }
+  };
+
+  // Pass N — C++ unqualified name lookup, outward.
+  //
+  // C++ looks an unqualified name up in the class first, then in each enclosing
+  // namespace, then globally. Extraction records only the innermost reading:
+  // `Scale(v)` written inside `Box::Grow` is stored as `geo.Box.Scale`. When no
+  // node carries that name, the next scope out is where C++ itself would look,
+  // so reading it is knowledge, not a guess — and these rows stay certain.
+  //
+  // Measured before this pass: 58% of leveldb's resolved C++ call edges and 49%
+  // of re2's were guesses, against 11% for Go and 5% for Python. leveldb's
+  // `TotalFileSize` had all six of its callers right and all six marked
+  // UNVERIFIED, and the agent then read version_set.cc five times to check them.
+  // The pass turns 624 leveldb edges and 279 re2 edges exact.
+  //
+  // Every guard is a case where walking out would invent an answer:
+  //   - ANY node already carries the inner qname: C++ stops at the first scope
+  //     that has the name, even when overloads leave it unable to say which one.
+  //     Without this, `InternalKeyComparator::Compare` calling its own other
+  //     overload answered with the free `Compare` — a wrong row marked certain,
+  //     and `impact` follows a certain row.
+  //   - `member = 1`: a call written on a value never does scope lookup, so
+  //     `fd.Flush()` can never mean `util::Flush`.
+  //   - two candidates in the scope we reach: refuse, and stop. A pick would be
+  //     a guess, and carrying on to an outer namesake would be a worse one.
+  const resolveCppOutward = () => {
+    const pending = db.prepare(`
+      SELECT rowid, dst_name FROM edges
+      WHERE kind = 'call' AND dst_id IS NULL AND lang = 'cpp' AND external = 0
+        AND member = 0 AND dst_name IS NOT NULL AND instr(dst_name, '.') > 0`).all();
+    if (!pending.length) return;
+    const byQname = new Map();
+    for (const n of db.prepare(
+      `SELECT id, qname FROM nodes WHERE lang = 'cpp' AND kind IN ${CALLABLE}`).all()) {
+      if (!byQname.has(n.qname)) byQname.set(n.qname, []);
+      byQname.get(n.qname).push(n.id);
+    }
+    const setDst = db.prepare('UPDATE edges SET dst_id = ?, guess = 0 WHERE rowid = ?');
+    // One transaction for the pass, for the reason given on Pass L: an UPDATE of
+    // its own costs a disk sync each, and this pass resolves hundreds of edges.
+    db.prepare('BEGIN').run();
+    try {
+      for (const e of pending) {
+        if (byQname.has(e.dst_name)) continue;
+        const segs = e.dst_name.split('.');
+        const name = segs[segs.length - 1];
+        for (let k = segs.length - 2; k >= 0; k--) {
+          const hit = byQname.get([...segs.slice(0, k), name].join('.'));
+          if (!hit) continue;
+          if (hit.length === 1) setDst.run(hit[0], e.rowid);
+          break;
+        }
+      }
+      db.prepare('COMMIT').run();
+    } catch (err) {
+      db.prepare('ROLLBACK').run();
+      throw err;
     }
   };
 
@@ -501,6 +881,25 @@ export function openStore(dbPath, opts = {}) {
     // previous index survive on an edge that this pass now resolves for real.
     db.prepare(`UPDATE edges SET dst_id = NULL, guess = 0 WHERE kind = 'call'`).run();
 
+    // A declaration whose definition exists is redundant, and worse than
+    // redundant: two nodes on one qname make the exact-qname pass refuse both, so
+    // a call that named the symbol exactly stops resolving and turns up in the gap
+    // report of whatever else shares the bare name. C++ allows a pure virtual to
+    // have a definition, and leveldb writes every convenience method on its
+    // interfaces that way. Measured: `virtual Status Put(…) = 0;` in db.h plus
+    // `Status DB::Put(…)` in db_impl.cc put two rows into an otherwise complete
+    // `callers "WriteBatch::Put"` answer, and the ⚠ banner they raised sent the
+    // agent grepping — the question then cost what it cost with no graph at all.
+    //
+    // Runs at the head of resolve, before dst_id is cleared, so nothing is left
+    // pointing at a node that is about to go. Idempotent: a later incremental
+    // reindex re-adds the declaration and the next resolve drops it again.
+    if (declColumn()) {
+      db.prepare(`DELETE FROM nodes WHERE decl = 1 AND EXISTS (
+        SELECT 1 FROM nodes o WHERE o.qname = nodes.qname AND o.lang = nodes.lang
+          AND o.decl = 0)`).run();
+    }
+
     // Runs before Pass A on purpose: a definition the call site can see is a
     // better answer than a same-named symbol in a file it may never have heard of.
     resolveLexicalScope();
@@ -532,6 +931,11 @@ export function openStore(dbPath, opts = {}) {
     // ones extraction marked external.
     resolveShadowedBuiltins();
 
+    // Runs after Pass A and before every fallback: the innermost scope is the
+    // better answer whenever it has one, and a scope C++ really would search is
+    // a better answer than a bare name that merely matches.
+    resolveCppOutward();
+
     // Pass F — Go recv.field.Method() through the field-type table. Runs before
     // the bare-name fallback so an ambiguous method name links to the RIGHT type.
     // Guarded twice: exactly one known field type for the key, and exactly one
@@ -555,6 +959,16 @@ export function openStore(dbPath, opts = {}) {
     // one read from a callee's signature) and before the bare-name fallback.
     resolveReturnTypes();
 
+    // The C++ shape of the same question, for the reason on the pass itself: a
+    // written C++ type is not the same string as the qname, so it needs two hops
+    // where Go needs one. Before Pass B, so a written type beats a bare name.
+    resolveCppReceiverTypes();
+
+    // TypeScript's shape of the same question. Also before Pass B, and after Pass F
+    // for the same reason: a type written on the declaration beats a bare name.
+    resolveTsFieldTypes();
+    resolveTsStaticCalls();
+
     // Pass B — a unique bare-name match, only when no qualified candidate exists.
     // The extra guard is the one the evaluation showed missing: a call through a
     // field must not fall back to an unrelated same-named method just because
@@ -565,10 +979,14 @@ export function openStore(dbPath, opts = {}) {
     // type (a `"<type>#embed"` row pointing at a node that exists); otherwise
     // refuse. This also covers a field typed as a repo-defined interface: the
     // interface node exists, so the old "is it a repo type" check let it through,
-    // but an interface embeds nothing and has no method_declaration nodes of its
-    // own, so it can never supply a legitimate target. Linking the bare name to
-    // the one repo method that shares it produced 13 false callers for a single
-    // symbol in hugo.
+    // and an interface embeds nothing, so it could not supply a legitimate target
+    // either. Linking the bare name to the one repo method that shares it produced
+    // 13 false callers for a single symbol in hugo.
+    //
+    // An interface DOES own its methods now (schema 10 for TypeScript, 11 for Go),
+    // so a call through one is answered exactly by Pass F or Pass P, before this
+    // pass runs. What is left here is the case that never had an answer: the type is
+    // recorded and it leads nowhere.
     // A bare name is not a fact about the receiver's type — it is a guess that
     // the one repo symbol with this name is the one the call site meant.
     db.prepare(`
@@ -651,8 +1069,45 @@ function attachReadHelpers(store, db, hasFts) {
     }
     return rows.filter((r) => (!kind || r.kind === kind) && (!lang || r.lang === lang)).slice(0, 100);
   };
-  store.node = (idOrQname) =>
-    db.prepare('SELECT * FROM nodes WHERE id = ? OR qname = ? LIMIT 1').get(idOrQname, idOrQname) ?? null;
+  // Every name in the graph that one query can mean.
+  //
+  // C++ writes a scope with `::`, and the graph stores it with a dot and the
+  // namespace in front — `WriteBatchInternal::Count` is `leveldb.WriteBatchInternal.Count`.
+  // Measured on leveldb and re2: the `::` spelling matched nothing, and so did
+  // `WriteBatchInternal.Count`. Only the bare name and the full dotted qname
+  // worked, and neither is how a C++ reader writes the symbol. The cost showed
+  // up in the A/B — the agent spent three to five tool calls per question
+  // hunting for a spelling that answered, against grep's one.
+  //
+  // Two readings, in this order:
+  //   1. LITERALLY — an id, a qname, or a bare name. This is what every other
+  //      language relies on and it must never lose to the reading below.
+  //   2. as the TAIL of a qname, but only for a query that wrote a separator.
+  //      `Box::Size` and `Box.Size` can mean `deep.Box.Size`; a plain `Size`
+  //      may not, or asking for one symbol would quietly merge every namesake
+  //      nested anywhere. When the tail fits several symbols they are ALL
+  //      returned, so the CLI names them instead of picking one in silence.
+  const literalName = db.prepare('SELECT 1 FROM nodes WHERE id = ? OR qname = ? OR name = ? LIMIT 1');
+  // `_` and `%` are LIKE wildcards, and a C++ name is full of underscores
+  // (`rep_`, `mem_table_`). Without escaping, `Store::rep_` would also match
+  // `Store.repX`.
+  const likeTail = db.prepare("SELECT DISTINCT qname FROM nodes WHERE qname LIKE ? ESCAPE '\\'");
+  const matchNames = (raw) => {
+    const s = String(raw);
+    if (literalName.get(s, s, s)) return [s];
+    const dotted = s.replace(/::/g, '.');
+    if (dotted !== s && literalName.get(dotted, dotted, dotted)) return [dotted];
+    if (!dotted.includes('.')) return [s];
+    const tails = likeTail.all(`%.${dotted.replace(/[\\%_]/g, (c) => `\\${c}`)}`).map((r) => r.qname);
+    return tails.length ? tails : [s];
+  };
+  const holes = (n) => Array(n).fill('?').join(',');
+
+  store.node = (idOrQname) => {
+    const ns = matchNames(idOrQname);
+    return db.prepare(`SELECT * FROM nodes WHERE id IN (${holes(ns.length)})
+                       OR qname IN (${holes(ns.length)}) LIMIT 1`).get(...ns, ...ns) ?? null;
+  };
   // callers() matches a target by id, qname OR bare name, so the gap report
   // (gapsFor/gapsAround) has to resolve the same way. Going through store.node()
   // (id or qname only) meant a bare-name query silently dropped the whole
@@ -660,8 +1115,11 @@ function attachReadHelpers(store, db, hasFts) {
   // printing. Returns every matching node, so a name shared by several symbols
   // (e.g. two unrelated classes with the same method name) makes all of them
   // contribute their gap rows, not just whichever the caller finds first.
-  const targetsFor = (nameOrId) => db.prepare(
-    'SELECT * FROM nodes WHERE id = ? OR qname = ? OR name = ?').all(nameOrId, nameOrId, nameOrId);
+  const targetsFor = (nameOrId) => {
+    const ns = matchNames(nameOrId);
+    return db.prepare(`SELECT * FROM nodes WHERE id IN (${holes(ns.length)})
+      OR qname IN (${holes(ns.length)}) OR name IN (${holes(ns.length)})`).all(...ns, ...ns, ...ns);
+  };
   // Grouped by the reported node's id, not SELECT DISTINCT on every column:
   // two edges can reach the same caller/callee, one certain and one a guess,
   // and a plain DISTINCT would then print that node twice — once per guess
@@ -670,12 +1128,41 @@ function attachReadHelpers(store, db, hasFts) {
   // nothing but guesses reports guess = 1. A caller/callee that is certain by
   // ANY path should not be buried under the "uncertain" heading just because
   // some other, unrelated call site also guessed its way there.
-  store.callers = (name) => db.prepare(`
-    SELECT s.*, ${GUESS_COL} AS guess FROM edges e JOIN nodes s ON s.id = e.src_id
-    JOIN nodes d ON d.id = e.dst_id WHERE d.name = ? OR d.qname = ? GROUP BY s.id`).all(name, name);
-  store.callees = (name) => db.prepare(`
-    SELECT d.*, ${GUESS_COL} AS guess FROM edges e JOIN nodes s ON s.id = e.src_id
-    JOIN nodes d ON d.id = e.dst_id WHERE s.name = ? OR s.qname = ? GROUP BY d.id`).all(name, name);
+  // Where the CALL is written, not where the caller is declared. Both were in
+  // this table all along; only the declaration was ever printed, so every reader
+  // had to go and find the call sites with a text search. group_concat has no
+  // defined order, so the pairs are sorted here.
+  const withSites = (rows) => rows.map(({ sites, ...n }) => ({
+    ...n,
+    call_sites: String(sites ?? '').split(',').filter(Boolean)
+      .map((s) => { const i = s.lastIndexOf(':'); return { file: s.slice(0, i), line: Number(s.slice(i + 1)) }; })
+      .sort((a, b) => (a.file === b.file ? a.line - b.line : a.file < b.file ? -1 : 1)),
+  }));
+  const SITES = `group_concat(DISTINCT e.file || ':' || e.line) AS sites`;
+  store.callers = (name) => {
+    const ns = matchNames(name);
+    return withSites(db.prepare(`
+      SELECT s.*, ${GUESS_COL} AS guess, ${SITES} FROM edges e JOIN nodes s ON s.id = e.src_id
+      JOIN nodes d ON d.id = e.dst_id
+      WHERE d.name IN (${holes(ns.length)}) OR d.qname IN (${holes(ns.length)})
+      GROUP BY s.id`).all(...ns, ...ns));
+  };
+  store.callees = (name) => {
+    const ns = matchNames(name);
+    return withSites(db.prepare(`
+      SELECT d.*, ${GUESS_COL} AS guess, ${SITES} FROM edges e JOIN nodes s ON s.id = e.src_id
+      JOIN nodes d ON d.id = e.dst_id
+      WHERE s.name IN (${holes(ns.length)}) OR s.qname IN (${holes(ns.length)})
+      GROUP BY d.id`).all(...ns, ...ns));
+  };
+  // Which symbol(s) a bare name actually reaches. `callers Get` merges every
+  // symbol named Get and used to do it silently, so a reader had to run `search`
+  // first to find out what they were asking about. One call now says so.
+  store.symbolsNamed = (name) => {
+    const ns = matchNames(name);
+    return db.prepare(`SELECT * FROM nodes WHERE name IN (${holes(ns.length)})
+      OR qname IN (${holes(ns.length)}) ORDER BY qname`).all(...ns, ...ns);
+  };
   store.files = (prefix) => {
     let p = prefix == null ? '' : String(prefix);
     if (p === '.' || p === './') p = '';
@@ -740,7 +1227,7 @@ function attachReadHelpers(store, db, hasFts) {
   // number of parameters a statement can bind, so a caller with a big batch
   // must split it — see `chunk` below.
   const gapRowsByNameSql = (n) => `
-    SELECT e.dst_name, e.dst_bare, e.file, e.line, e.external, e.lang,
+    SELECT e.dst_name, e.dst_bare, e.file, e.line, e.external, e.lang, e.field_key,
            s.qname AS src_qname
     FROM edges e LEFT JOIN nodes s ON s.id = e.src_id
     WHERE e.kind = 'call' AND e.dst_id IS NULL
@@ -878,6 +1365,74 @@ function attachReadHelpers(store, db, hasFts) {
     return out;
   };
 
+  // The type the source wrote for the receiver of an unresolved call, as the set of
+  // names it could be matched against, or null when the source wrote nothing this
+  // reader can use. Three key shapes:
+  //   `#static:Widget`                 -> the call names the class outright.
+  //   `<file>|<Class>#field:<name>`    -> the type written on that field, followed
+  //                                       one alias hop, the same as Pass P does.
+  //   `<scope>#var:<name>@<pos>`       -> the type written on a local or parameter.
+  //                                       `let catsController: CatsController;` and
+  //                                       `func Do(x *foo.X)` both say so outright.
+  //
+  // The set holds the name as written AND its last segment, because Go writes a
+  // package-qualified type (`foo.X`) while TypeScript writes a bare one. A type that
+  // EMBEDS another is matched too: a promoted method really is a target for a call
+  // on the outer type, so such a row must not be ruled out.
+  //
+  // `#param` and `#ret:` are markers, not type names — they say the type is decided
+  // somewhere this reader cannot see, which is the opposite of knowing it.
+  //
+  // Returns `{ names, repo }`, or null when the source wrote nothing usable.
+  // `repo` says whether any of those names is a type THIS REPO declares. A call on a
+  // library type is refused by the resolver and REPORTED — that is a tested,
+  // published promise (see "refuses a call on a parameter whose type lives outside
+  // the repo") — so such a row is never dropped here. It is only labelled, so the
+  // report can count it in one line instead of listing it among rows the reader is
+  // told to go and grep for. See the `library` reason in collectGaps.
+  let receiverTypeCache = null;
+  const writtenReceiver = (fieldKey) => {
+    if (!fieldKey) return null;
+    if (!receiverTypeCache) {
+      receiverTypeCache = { type: new Map(), known: new Set() };
+      for (const r of db.prepare('SELECT key, type FROM field_types').all()) {
+        const m = receiverTypeCache.type;
+        if (!m.has(r.key)) m.set(r.key, r.type);
+        else if (m.get(r.key) !== r.type) m.set(r.key, null);
+      }
+      for (const n of db.prepare(
+        `SELECT DISTINCT qname, name FROM nodes
+           WHERE kind IN ('class','interface','struct','type')`).all()) {
+        receiverTypeCache.known.add(n.qname);
+        receiverTypeCache.known.add(n.name);
+      }
+    }
+    const { type, known } = receiverTypeCache;
+    let written = null;
+    if (fieldKey.startsWith('#static:')) written = fieldKey.slice('#static:'.length);
+    else if (fieldKey.includes('#field:')) {
+      const field = fieldKey.split('#field:')[1];
+      const cls = fieldKey.split('#field:')[0].split('|').pop();
+      written = type.get(fieldKey) ?? type.get(`${cls}#field:${field}`);
+    } else written = type.get(fieldKey);
+    if (!written || written.startsWith('#')) return null;
+    const names = new Set();
+    // One alias hop, then the name itself and its tail, then one embed hop.
+    const add = (n) => { if (n) { names.add(n); names.add(n.split('.').pop()); } };
+    add(written);
+    // A smart pointer stands in for what it points at: `shared_ptr<Sink> s;` makes
+    // `s->emit()` a call on `Sink`. Unwrap it before deciding whose type this is, or
+    // a real call site gets filed under "library" and leaves the report. Measured on
+    // spdlog: `sub_sink->log(msg)` in dist_sink.h is written `std::shared_ptr<sink>`
+    // and is a true call site of `sinks::sink::log`.
+    const ptr = /(?:^|[.:])(?:shared_ptr|unique_ptr|weak_ptr|auto_ptr)\s*<\s*([\w.:]+)/.exec(written);
+    if (ptr) add(ptr[1].replaceAll('::', '.').replace(/[*&]+$/, ''));
+    const alias = type.get(`#alias:${written.split('.').pop()}`);
+    add(alias);
+    for (const n of [...names]) add(type.get(`${n}#embed`));
+    return { names, repo: [...names].some((n) => known.has(n)) };
+  };
+
   const collectGaps = (symbols, callerCheckIds = []) => {
     const seen = new Set(), out = [];
 
@@ -909,10 +1464,50 @@ function attachReadHelpers(store, db, hasFts) {
     // Pass 1: gather every matched row (still batched/chunked, unchanged).
     // Reason and reachable need the lookup maps built below, which need to
     // see every row's (bare, lang) and (qualifier, lang) pair first.
-    const matched = [];
+    let matched = [];
     for (const names of chunk(allNames, 400)) {
       const stmt = db.prepare(gapRowsByNameSql(names.length));
       matched.push(...stmt.all(...names, ...names));
+    }
+    // A call written in another language can never be the missing answer. The
+    // rows were matched by name alone, and on re2 — a C++ library with a Python
+    // binding — that put seven Python calls to an unrelated `Match` into the
+    // first twenty rows of a C++ symbol's gap list. A longer banner nobody
+    // believes is worse than a shorter one. With no target found there is no
+    // language to filter by, so that case keeps every row.
+    const langs = new Set(symbols.map((s) => s.lang).filter(Boolean));
+    if (langs.size) matched = matched.filter((r) => langs.has(r.lang));
+    // A call whose receiver type the SOURCE writes down, and writes down as some
+    // other type, is not a missing call site of this target. That is not a guess
+    // about the call — it is the type on the declaration, the same fact the
+    // resolver reads. Measured on nest: `callers "PipesContextCreator.create"`
+    // found all four of its call sites and then listed 168 other `create` calls,
+    // which sends the reader to grep and costs exactly what having no graph costs.
+    // Measured on caddy: seven of the eighteen rows on
+    // `callers "caddyhttp.Handler.ServeHTTP"` were calls on `http.Handler` or on a
+    // concrete middleware, and none of them could ever have been the target.
+    //
+    // What it does NOT rule out: a receiver the source never types, a type that
+    // embeds the target's type (a promoted method is a real target), and a type from
+    // OUTSIDE the repo. That last one is deliberate: a call on a library type is
+    // refused by the resolver and reported, which is a tested, published promise,
+    // and it is also the one case where a repo type could still be behind the value
+    // at run time through an interface whose method set this reader cannot see.
+    // Rows the source types as a LIBRARY receiver. Kept — the promise above — but
+    // labelled, so the report counts them in one line instead of listing them under
+    // a heading that tells the reader to grep. Measured on re2: 204 of the 290 rows
+    // on `callers "re2.Prog.size"` are `size()` on a `std::vector` or an
+    // `absl::string_view`, and that banner cost the run $0.69 and 184 seconds more
+    // than having no graph at all.
+    const libraryRows = new Set();
+    const owners = new Set(symbols.flatMap((s) => s.owners ?? []));
+    if (owners.size) {
+      matched = matched.filter((r) => {
+        const written = writtenReceiver(r.field_key);
+        if (!written) return true;
+        if (!written.repo) { libraryRows.add(`${r.file}|${r.line}|${r.dst_name}`); return true; }
+        return [...written.names].some((n) => owners.has(n));
+      });
     }
     const candidates = candidatesByLangBare(matched);
     const qualifierKnown = qualifiersByLangQualifier(matched);
@@ -926,11 +1521,13 @@ function attachReadHelpers(store, db, hasFts) {
       const candidateCount = r.external === 1 ? 0 : (candidates.get(`${r.lang}|${r.dst_bare}`) ?? 0);
       const dot = r.dst_name.indexOf('.');
       const known = dot === -1 ? 1 : (qualifierKnown.get(`${r.lang}|${r.dst_name.slice(0, dot)}`) ?? 0);
-      const reason = candidateCount > 0 && known ? 'ambiguous' : 'external';
+      const reason = libraryRows.has(key) ? 'library'
+        : (candidateCount > 0 && known ? 'ambiguous' : 'external');
       out.push({
         file: r.file, line: r.line, dst_name: r.dst_name, src_qname: r.src_qname,
         reason,
-        reachable: reason === 'ambiguous' && r.lang === 'go' ? reachableIn(r.file, pkgForRow(r)) : 1,
+        reachable: (reason === 'ambiguous' || reason === 'library') && r.lang === 'go'
+          ? reachableIn(r.file, pkgForRow(r)) : 1,
       });
     }
     if (callerCheckIds.length) {
@@ -951,9 +1548,18 @@ function attachReadHelpers(store, db, hasFts) {
   // The name variants and package for one symbol, as collectGaps needs them.
   // A missing target (no node found) still has to run one gapRows pass under
   // the raw string the caller asked for — no package to score against.
-  const symbolOf = (name, node) =>
-    node ? { names: [String(name), node.name, node.qname], pkg: goPackageOf(node) }
-         : { names: [String(name)], pkg: null };
+  // `owners` is the type a call would have to be written on to reach this symbol:
+  // the qname minus its own name. The gap report uses it to drop a row whose
+  // receiver type the source names as something else.
+  const symbolOf = (name, node) => {
+    if (!node) return { names: [String(name)], pkg: null, lang: null, owners: [] };
+    // Both forms, because Go writes a package-qualified type on a declaration
+    // (`*foo.X`) while TypeScript writes a bare one (`CatsService`).
+    const dot = node.qname.lastIndexOf('.');
+    const ownerQname = dot > 0 ? node.qname.slice(0, dot) : null;
+    return { names: [String(name), node.name, node.qname], pkg: goPackageOf(node), lang: node.lang,
+             owners: ownerQname ? [ownerQname, ownerQname.split('.').pop()] : [] };
+  };
 
   // A call site records whatever the source wrote, so match the target's bare
   // name as well as its qname — that is what finds a call made through an import
@@ -964,11 +1570,98 @@ function attachReadHelpers(store, db, hasFts) {
   // every one of them may have its own no-caller call sites. Matching only by
   // id/qname (store.node) silently dropped the whole no-caller report for a
   // bare-name query — see the comment on targetsFor above.
+  // Call sites that reach a CONCRETE method through an interface it implements.
+  //
+  // Indexing interface methods answered a question that could not be asked before
+  // — `callers "caddyhttp.Handler.ServeHTTP"` used to say "no symbol named …" — but
+  // on its own it would have taken something away. A call written on an interface
+  // used to sit unresolved in the gap report of every implementation, warning the
+  // reader that something reaches the method which no static tool can name. Once
+  // the call resolves to the interface, it is no longer unresolved, and that
+  // warning would just vanish: `callers "Postgres.ListGroups"` would read "no
+  // callers ✓ complete" for a method that runs on every request.
+  //
+  // So it is kept, and it says more than it used to. It used to say "2 call sites
+  // missing, go and grep"; it now NAMES the interface the calls go through, which
+  // is something a text search cannot work out at all.
+  //
+  // "Implements" is decided by the method set, the way Go itself decides it: the
+  // type carries every name the interface declares. Structural, so it works for
+  // TypeScript too, `implements` clause or not. An interface with no methods is
+  // satisfied by everything and says nothing, so it is skipped.
+  // A method's owning type, and every method name that type carries. Two shapes,
+  // because Go states the owner in the qname while every other language nests it:
+  //   nested   `Json.serialize`  -> container_id points at the class
+  //   Go       `store.Postgres.ListGroups` -> no container at all; the receiver is
+  //            written into the qname, so the owner is the qname minus its own name
+  //            and the method set is every qname under that prefix.
+  const ownerOf = (node) => {
+    if (node.container_id) {
+      const o = db.prepare('SELECT id, qname, kind FROM nodes WHERE id = ?').get(node.container_id);
+      if (!o) return null;
+      return { ...o, names: db.prepare('SELECT name FROM nodes WHERE container_id = ?')
+        .all(o.id).map((r) => r.name) };
+    }
+    if (!node.qname?.includes('.')) return null;
+    const ownerQname = node.qname.slice(0, node.qname.lastIndexOf('.'));
+    const o = db.prepare('SELECT id, qname, kind FROM nodes WHERE qname = ? AND lang = ? LIMIT 2')
+      .all(ownerQname, node.lang);
+    if (o.length !== 1) return null; // two types on one qname: no method set to trust
+    // `qname = prefix || name` instead of a LIKE: it picks exactly this type's own
+    // methods and never `x.y.z.w`, a method of something nested one level deeper.
+    // It also needs no escaping, and a Go qname can hold `_`, which LIKE would read
+    // as a wildcard.
+    const prefix = `${ownerQname}.`;
+    const names = db.prepare(
+      `SELECT name FROM nodes WHERE lang = ? AND qname = ? || name
+         AND kind IN ('function','method')`).all(node.lang, prefix.replace(/\\(.)/g, '$1'))
+      .map((r) => r.name);
+    return { ...o[0], names };
+  };
+
+  const interfaceReach = (node) => {
+    if (!node?.name) return [];
+    const owner = ownerOf(node);
+    if (!owner || owner.kind === 'interface') return [];
+    const ownNames = new Set(owner.names);
+    // Only interfaces that declare a method of this name can be relevant.
+    const ifaces = db.prepare(`
+      SELECT o.id, o.qname FROM nodes n JOIN nodes o ON n.container_id = o.id
+      WHERE o.kind = 'interface' AND o.lang = ? AND n.name = ? AND o.id <> ?`)
+      .all(node.lang, node.name, owner.id);
+    const out = [];
+    for (const iface of ifaces) {
+      const need = db.prepare('SELECT name FROM nodes WHERE container_id = ?').all(iface.id)
+        .map((r) => r.name);
+      if (!need.length || !need.every((n) => ownNames.has(n))) continue;
+      for (const r of db.prepare(`
+        SELECT e.file, e.line, e.dst_name, s.qname AS src_qname, n.qname AS via
+        FROM edges e JOIN nodes n ON n.id = e.dst_id
+        LEFT JOIN nodes s ON s.id = e.src_id
+        WHERE e.kind = 'call' AND n.container_id = ? AND n.name = ?
+        ORDER BY e.file, e.line`).all(iface.id, node.name)) {
+        out.push({ file: r.file, line: r.line, dst_name: r.dst_name, src_qname: r.src_qname,
+          reason: 'interface', reachable: 1, via: r.via });
+      }
+    }
+    return out;
+  };
+
   store.gapsFor = (name) => {
     if (!hasBare) return [];
     const targets = targetsFor(name);
     if (!targets.length) return collectGaps([symbolOf(name, null)], []);
-    return collectGaps(targets.map((t) => symbolOf(name, t)), targets.map((t) => t.id));
+    const rows = collectGaps(targets.map((t) => symbolOf(name, t)), targets.map((t) => t.id));
+    const seen = new Set(rows.map((r) => `${r.file}|${r.line}`));
+    for (const t of targets) {
+      for (const r of interfaceReach(t)) {
+        const key = `${r.file}|${r.line}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        rows.push(r);
+      }
+    }
+    return rows.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
   };
   store.gapsFrom = (name) => {
     if (!hasBare) return [];
@@ -1013,7 +1706,19 @@ function attachReadHelpers(store, db, hasFts) {
     const reached = [...reachedById.values()];
     const symbols = [...targets.map((t) => symbolOf(name, t)), ...reached.map((n) => symbolOf(n.qname, n))];
     const callerCheckIds = [...targets.map((t) => t.id), ...reached.map((n) => n.id)];
-    return collectGaps(symbols, callerCheckIds);
+    const rows = collectGaps(symbols, callerCheckIds);
+    // The same interface line the direct question gets. An impact walk that stops
+    // at a concrete method has to say what reaches it, or the set reads as closed.
+    const seen = new Set(rows.map((r) => `${r.file}|${r.line}`));
+    for (const t of targets) {
+      for (const r of interfaceReach(t)) {
+        const key = `${r.file}|${r.line}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        rows.push(r);
+      }
+    }
+    return rows.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
   };
   const MAX_DEPTH = 50;
   store.impact = (name) => {

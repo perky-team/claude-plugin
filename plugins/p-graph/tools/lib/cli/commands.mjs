@@ -80,6 +80,52 @@ export async function runCommand(ctx) {
 
   const fmtNode = (n) => `${n.kind} ${n.qname}  ${n.file}:${n.start_line}  ${n.signature}`;
 
+  // A caller row answers "where is the call written", so that is what it shows.
+  // It used to show where the CALLER was declared, plus its signature — up to
+  // 300 characters of row for a fact nobody asked for, and none of the call
+  // lines. `pgraph node <qname>` still prints the signature, and so does
+  // `search`. Repeated files are written once: `a.go:10, 11`.
+  const fmtSites = (n) => {
+    if (!n.call_sites?.length) return `${n.file}:${n.start_line}`;
+    let last = null;
+    return n.call_sites.map((s) => {
+      const out = s.file === last ? String(s.line) : `${s.file}:${s.line}`;
+      last = s.file;
+      return out;
+    }).join(', ');
+  };
+  const fmtCall = (n) => `${n.kind} ${n.qname}  ${fmtSites(n)}`;
+
+  // `callers Get` merges every symbol named Get, and used to do it in silence —
+  // so a reader ran `search Get` first just to learn what they had asked about.
+  // Saying it here turns two commands into one.
+  // Nothing in the graph carries this name. Say so, and say it in words that
+  // cannot be read as an answer: an empty list plus "✓ complete" is what
+  // `callers "RE2::Match"` printed on re2 while knowing nothing about the
+  // symbol at all — the most confident wrong answer this tool can give.
+  const noSuchSymbol = (name) =>
+    `no symbol named ${name} in the graph — nothing to report. Try \`pgraph search ${name}\`.`;
+
+  const emitTargets = (name) => {
+    const t = store.symbolsNamed(name);
+    if (!t.length) { out(noSuchSymbol(name)); return t; }
+    if (t.length === 1) out(`target: ${t[0].kind} ${t[0].qname}  ${t[0].file}:${t[0].start_line}`);
+    else {
+      out(`target: ${t.length} symbols named ${t[0].name} — the rows below merge all of them.`);
+      // A TypeScript or Python qname carries no module path, so a monorepo can hold
+      // the same qname several times over. Repeating it then reads as advice —
+      // "ask by qname to separate: RecipesService.findOneById,
+      // RecipesService.findOneById, RecipesService.findOneById" — that cannot be
+      // followed. When the qnames do not tell the symbols apart, the file and line
+      // do. Measured on nest: 393 qnames are carried by more than one symbol.
+      const qnames = [...new Set(t.map((x) => x.qname))];
+      if (qnames.length === t.length) out(`  Ask by qname to separate: ${qnames.join(', ')}`);
+      else out(`  They share a qname; tell them apart by file: ${
+        t.map((x) => `${x.file}:${x.start_line}`).join(', ')}`);
+    }
+    return t;
+  };
+
   // A guessed row is not wrong, just unverified: the graph could not see the
   // receiver's real type, so it fell back to the one repo symbol that shares
   // the call's bare method name. That symbol might be the right one, or the
@@ -92,7 +138,7 @@ export async function runCommand(ctx) {
   const printCertainThenGuessed = (rows, noun, indent = '') => {
     const certain = rows.filter((r) => !r.guess);
     const guessed = rows.filter((r) => r.guess);
-    certain.forEach((r) => out(indent + fmtNode(r)));
+    certain.forEach((r) => out(indent + fmtCall(r)));
     if (guessed.length) {
       const s = guessed.length === 1 ? '' : 's';
       // "more" only makes sense on top of a certain list above it — with none,
@@ -104,7 +150,7 @@ export async function runCommand(ctx) {
       // below) — rows that are missing or incomplete, not rows that might be
       // wrong. Two different claims should not share one glyph.
       out(`${indent}UNVERIFIED: ${lead}, matched by name only (guess) — the graph could not see the receiver's type, so ${guessed.length === 1 ? 'this one' : 'these'} may be a different symbol with the same method name:`);
-      guessed.forEach((r) => out(indent + '    ' + fmtNode(r)));
+      guessed.forEach((r) => out(indent + '    ' + fmtCall(r)));
     }
   };
 
@@ -114,11 +160,66 @@ export async function runCommand(ctx) {
   // repo can never be linked — both are counted honestly and not listed, because
   // a banner nobody reads is worse than none.
   const GAP_LIMIT = 20;
-  const emitGaps = (rows) => {
-    const listed = rows.filter((r) => r.reason !== 'external' && r.reachable !== 0);
-    const unrelated = rows.filter((r) => r.reason === 'ambiguous' && r.reachable === 0).length;
-    const external = rows.filter((r) => r.reason === 'external').length;
-    if (!listed.length && !unrelated && !external) return;
+  // The three groups the gap report splits into. Pulled out so the completeness
+  // line below is decided by exactly the same rule that decides whether a
+  // banner prints — the two can never disagree about one answer.
+  // `interface` rows are pulled out first and counted with none of the three: they
+  // are not a gap. The other groups all mean "the graph could not account for this
+  // line"; an interface row means the opposite — the graph accounted for the call
+  // and knows exactly which interface carries it. Putting it under the ⚠ banner
+  // would tell the reader to grep for something a text search cannot find at all.
+  // `library` rows are counted apart for the same reason `unrelated` ones are: the
+  // graph can PROVE they are not the target, because the source writes the
+  // receiver's type and it belongs to a library. Listing them sends the reader to
+  // grep for something that is already settled. They still block ✓ complete and
+  // still print a count, because a refused call must never disappear.
+  const gapCounts = (rows) => ({
+    viaInterface: rows.filter((r) => r.reason === 'interface'),
+    listed: rows.filter((r) => r.reason !== 'external' && r.reason !== 'interface'
+      && r.reason !== 'library' && r.reachable !== 0),
+    unrelated: rows.filter((r) => r.reason === 'ambiguous' && r.reachable === 0).length,
+    library: rows.filter((r) => r.reason === 'library').length,
+    external: rows.filter((r) => r.reason === 'external').length,
+  });
+  const nothingMissing = (rows) => {
+    const c = gapCounts(rows);
+    return !c.listed.length && !c.unrelated && !c.external && !c.library;
+  };
+  // An answer with nothing missing used to end in silence, and silence reads as
+  // "I do not know" — measured on seven public repos, an agent given a gap-free
+  // answer went and grepped anyway in 12 runs out of 12. So say it. The claim is
+  // deliberately narrow: what the graph FOUND, not a promise about a file it
+  // failed to parse. See docs/measured-benefit.md.
+  // Deliberately shares no wording with the ⚠ banner. The two make opposite
+  // claims, and `not.toContain('missing from this answer')` is how more than one
+  // test — and, more importantly, a reader skimming — tells them apart.
+  const COMPLETE = '✓ complete — no gaps: the graph accounted for every call site it found.';
+  const COMPLETE_IMPACT = '✓ complete — no gaps, and no edge was refused.';
+
+  // `complete` is passed in, never derived here: only the caller knows whether
+  // its own command left something else out (impact refuses guessed edges), and
+  // `gapsOff` means the report could not be built at all — an empty list there
+  // is the one case where claiming completeness would be a lie.
+  const emitGaps = (rows, complete = false, line = COMPLETE) => {
+    const { viaInterface, listed, unrelated, library, external } = gapCounts(rows);
+    // Printed before everything else, and grouped by the interface that carries
+    // the calls. This is knowledge, not a gap: which implementation runs is decided
+    // at run time, and naming the interface is the part a text search cannot do.
+    if (viaInterface.length) {
+      const byIface = new Map();
+      for (const r of viaInterface) {
+        if (!byIface.has(r.via)) byIface.set(r.via, []);
+        byIface.get(r.via).push(r);
+      }
+      for (const [via, rs] of byIface) {
+        out(`ℹ ${rs.length} call site${rs.length === 1 ? '' : 's'} reach this method through ${via} — which implementation runs is decided at run time:`);
+        for (const r of rs.slice(0, GAP_LIMIT)) {
+          out(`    ${r.file}:${r.line}  ${r.src_qname ?? 'file scope'} -> ${r.dst_name}`);
+        }
+        if (rs.length > GAP_LIMIT) out(`    … and ${rs.length - GAP_LIMIT} more`);
+      }
+    }
+    if (!listed.length && !unrelated && !library && !external) return complete ? out(line) : undefined;
     if (listed.length) {
       out(`⚠ ${listed.length} call site${listed.length === 1 ? '' : 's'} missing from this answer:`);
       for (const r of listed.slice(0, GAP_LIMIT)) {
@@ -134,6 +235,9 @@ export async function runCommand(ctx) {
     const lead = listed.length ? '  + ' : '  ';
     if (unrelated) {
       out(`${lead}${unrelated} same-name call site${unrelated === 1 ? '' : 's'} in files that do not import the target's package — likely unrelated, not listed.`);
+    }
+    if (library) {
+      out(`${lead}${library} call site${library === 1 ? '' : 's'} whose receiver the source types as a library type — provably not this method, not listed.`);
     }
     if (external) {
       // Not every row here truly left the repo: a Go conversion into a repo
@@ -162,18 +266,28 @@ export async function runCommand(ctx) {
   if (command === 'callers') {
     const target = needArg('a symbol');
     const rows = store.callers(target), gaps = store.gapsFor(target);
-    if (opts.json) return emitJson({ callers: rows, gaps, ...(gapsOff ? { gaps_unavailable: true } : {}) });
+    // Completeness is a claim about a symbol. With no symbol there is nothing to
+    // be complete about, so an unknown name can never earn the line.
+    const known = store.symbolsNamed(target);
+    const complete = !gapsOff && known.length > 0 && nothingMissing(gaps);
+    if (opts.json) return emitJson({ callers: rows, targets: known, gaps, complete,
+      ...(gapsOff ? { gaps_unavailable: true } : {}) });
+    emitTargets(target);
     printCertainThenGuessed(rows, 'caller');
     noteGapsOff();
-    return emitGaps(gaps);
+    return emitGaps(gaps, complete);
   }
   if (command === 'callees') {
     const target = needArg('a symbol');
     const rows = store.callees(target), gaps = store.gapsFrom(target);
-    if (opts.json) return emitJson({ callees: rows, gaps, ...(gapsOff ? { gaps_unavailable: true } : {}) });
+    const known = store.symbolsNamed(target);
+    const complete = !gapsOff && known.length > 0 && nothingMissing(gaps);
+    if (opts.json) return emitJson({ callees: rows, targets: known, gaps, complete,
+      ...(gapsOff ? { gaps_unavailable: true } : {}) });
+    emitTargets(target);
     printCertainThenGuessed(rows, 'callee');
     noteGapsOff();
-    return emitGaps(gaps);
+    return emitGaps(gaps, complete);
   }
   if (command === 'impact') {
     const target = needArg('a symbol');
@@ -186,8 +300,15 @@ export async function runCommand(ctx) {
     // tells them apart — a count, not a flag, so a caller can also tell
     // "one near-miss" from "several refused".
     const skippedGuesses = store.impactSkippedGuesses(target);
-    if (opts.json) return emitJson({ impact: rows, gaps, skipped_guesses: skippedGuesses,
+    // An impact answer is a floor, not a ceiling: refusing one guessed edge
+    // leaves a real dependency out even when the gap list is empty. So a
+    // refusal disqualifies the completeness claim on its own — and so does a
+    // name no symbol carries, for the reason on noSuchSymbol.
+    const known = store.symbolsNamed(target);
+    const complete = !gapsOff && known.length > 0 && skippedGuesses === 0 && nothingMissing(gaps);
+    if (opts.json) return emitJson({ impact: rows, gaps, skipped_guesses: skippedGuesses, complete,
       ...(gapsOff ? { gaps_unavailable: true } : {}) });
+    if (!known.length) out(noSuchSymbol(target));
     rows.length ? rows.forEach((r) => out(fmtNode(r))) : out('(no impact)');
     // Only say this when it is actually true for this query — with no guess
     // anywhere near the target, the line would always print and never mean
@@ -198,7 +319,7 @@ export async function runCommand(ctx) {
       const be = skippedGuesses === 1 ? 'was' : 'were';
       out(`${skippedGuesses} guessed edge${s} (receiver type unknown) near this target ${be} not followed, so a real impact through one may be missing.`);
     }
-    return emitGaps(gaps);
+    return emitGaps(gaps, complete, COMPLETE_IMPACT);
   }
   if (command === 'trace') {
     if (opts._[0] === undefined || opts._[1] === undefined) die('trace needs two symbols');
@@ -247,9 +368,10 @@ export async function runCommand(ctx) {
       seen.add(key);
       return true;
     });
+    const complete = !gapsOff && nothingMissing(gaps);
     const ctxObj = {
       node: n, callers: store.callers(opts._[0]), callees: store.callees(opts._[0]),
-      gaps_in: gapsIn, gaps_out: gapsOut, gaps,
+      gaps_in: gapsIn, gaps_out: gapsOut, gaps, complete,
     };
     if (opts.json) return emitJson(gapsOff ? { ...ctxObj, gaps_unavailable: true } : ctxObj);
     out(fmtNode(n));
@@ -259,7 +381,7 @@ export async function runCommand(ctx) {
     out('callers:'); printCertainThenGuessed(ctxObj.callers, 'caller', '  ');
     out('callees:'); printCertainThenGuessed(ctxObj.callees, 'callee', '  ');
     noteGapsOff();
-    return emitGaps(gaps);
+    return emitGaps(gaps, complete);
   }
   if (command === 'explore') {
     const rows = opts._.map((q) => store.node(q)).filter(Boolean);

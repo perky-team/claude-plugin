@@ -44,6 +44,58 @@
 ;; operator (`operator==`) live.
 (function_definition) @definition.function
 
+;; ANY method declared in a class body, whether or not it has a body elsewhere.
+;; It earns a node and then yields to its definition when the repo has one — see
+;; SCHEMA_VERSION 9 and the drop at the head of resolve. One rule instead of a list
+;; of special cases, and it covers three real shapes:
+;;
+;;   * a pure virtual (`virtual bool Valid() const = 0;`). A C++ interface is made
+;;     of these and they can have no body in the class. Without them the interface
+;;     method is missing while its implementations are present, so a question about
+;;     the interface answers with an implementation — the wrong symbol, confidently.
+;;     Measured on leveldb: `leveldb::Iterator::Valid` was absent while nine
+;;     `Valid` implementations were there.
+;;   * a method whose body the parse lost. `bool Insert(int f) LOCKS_EXCLUDED(mu_)
+;;     { … }` splits in two: the real name stays here in the declaration and the
+;;     body becomes a definition named after the annotation macro. 15 nodes in
+;;     leveldb were called `LOCKS_EXCLUDED` or the like, and the methods they stood
+;;     in for were in no answer at all.
+;;   * a method this repo declares and never implements.
+;;
+;; A declaration that DOES have a definition is dropped, so no qname ends up with
+;; two nodes — which would make the exact-qname pass refuse both.
+(field_declaration
+  declarator: (function_declarator declarator: (field_identifier) @name)) @definition.method
+
+;; A pure virtual inside a class whose name a macro pushed out of the parse —
+;; `class LEVELDB_EXPORT Cache { … };` — has NO rule here, because there is nothing
+;; left to match: the broken body is a compound_statement and only the FIRST such
+;; declaration survives it as anything at all. The driver reads them out of the
+;; source instead, the same way it reads the class's own name — see
+;; cppMacroPureVirtuals. Recovering one of a class's seven interface methods and
+;; not the other six would be worse than recovering none: a reader cannot tell
+;; which case they are looking at.
+
+;; Every place C++ writes a type next to a name: a local, a parameter, a class
+;; field. This is what lets a call written on a value (`b.Put(k)`, `p->Put(k)`)
+;; name the type it belongs to instead of falling back to a bare-name guess —
+;; 40% of the call edges in leveldb, none of them certain before this.
+;;
+;; The whole declaration node is captured, not the name inside it, because C++
+;; wraps a declarator in a pointer, a reference, an array and an initialiser in
+;; any combination: `Batch* b`, `Batch& b`, `Batch* b = Make()`, `Batch b[4]`.
+;; One query pattern per combination is not maintainable, so the driver walks the
+;; declarator down to the name — the same trade the function rule below makes.
+;; A type alias. `typedef SkipList<const char*, KeyComparator> Table;` then
+;; `Table table_;` — the declaration names `Table`, no class is called that, and the
+;; receiver stayed untyped. leveldb's MemTable is written exactly this way.
+(type_definition) @cpp.alias
+(alias_declaration) @cpp.alias
+
+(declaration) @cpp.decl
+(parameter_declaration) @cpp.decl
+(field_declaration) @cpp.decl
+
 ;; references
 (call_expression function: (identifier) @reference.call)
 (call_expression function: (field_expression field: (field_identifier) @reference.call))

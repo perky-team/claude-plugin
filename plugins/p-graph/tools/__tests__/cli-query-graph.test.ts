@@ -54,10 +54,10 @@ func (c *Counter) Write(p []byte) (int, error) { return c.inner.Write(p) }
   it('lists the call site once in the banner and once in --json gaps', () => {
     r(['index', '--full']);
     const text = r(['context', 'iox.Counter.Write']);
-    expect(text).toContain('1 call site missing from this answer');
-    // The gap-listing line itself, not the node header (which also names
-    // iox.go:4 as Counter.Write's own definition site).
-    expect(text.match(/iox\.Counter\.Write -> Write/g)).toHaveLength(1);
+    // `bytes.Buffer` types the receiver, so the row is counted as a library call
+    // rather than listed — but it must still be counted exactly once.
+    expect(text).toContain('1 call site whose receiver the source types as a library type');
+    expect(text.match(/library type/g)).toHaveLength(1);
 
     const ctxJson = JSON.parse(r(['context', 'iox.Counter.Write', '--json']));
     expect(ctxJson.gaps).toHaveLength(1);

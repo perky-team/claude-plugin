@@ -45,6 +45,33 @@ const GO_PREDECLARED_TYPES = new Set([
   'string', 'uint', 'uint8', 'uint16', 'uint32', 'uint64', 'uintptr',
 ]);
 
+// JavaScript's own global objects. `Object.assign(…)`, `JSON.parse(…)`,
+// `Reflect.getMetadata(…)` name the language and the runtime, never this repo — the
+// same fact GO_BUILTINS above records for Go, which TypeScript had no equivalent of.
+// It cost twice over on nest: the bare-name fallback answered `JSON.parse` with a
+// repo method called `parse` (71 such guesses, and 61 for `assign`), and every
+// unmatched one landed in the gap banner of whatever repo method shares the name —
+// 126 `Object.create` rows sat in the banner of `PipesContextCreator.create`.
+//
+// Only the standard objects and the Node globals are listed, never a library: a
+// name that arrives through an import is a fact about this repo's dependencies, not
+// about the language. A repo that declares its own class of one of these names wins
+// anyway — see resolveTsStaticCalls, which is allowed to resolve an external edge
+// for exactly the reason Go's resolveShadowedBuiltins is.
+const JS_GLOBALS = new Set([
+  'Object', 'Array', 'String', 'Number', 'Boolean', 'Symbol', 'BigInt', 'Function',
+  'Math', 'JSON', 'Date', 'RegExp', 'Promise', 'Proxy', 'Reflect', 'Intl',
+  'Map', 'Set', 'WeakMap', 'WeakSet', 'WeakRef', 'FinalizationRegistry',
+  'Error', 'TypeError', 'RangeError', 'SyntaxError', 'ReferenceError', 'EvalError',
+  'URIError', 'AggregateError',
+  'ArrayBuffer', 'SharedArrayBuffer', 'DataView', 'Atomics',
+  'Int8Array', 'Uint8Array', 'Uint8ClampedArray', 'Int16Array', 'Uint16Array',
+  'Int32Array', 'Uint32Array', 'Float32Array', 'Float64Array',
+  'BigInt64Array', 'BigUint64Array',
+  'globalThis', 'console', 'process', 'Buffer', 'URL', 'URLSearchParams',
+  'TextEncoder', 'TextDecoder', 'AbortController', 'AbortSignal', 'performance',
+]);
+
 // The last segment of a dotted target name. A call site records whatever the
 // source wrote — `bp.GetBuffer` under an import alias, `api.W.helper` for an own
 // receiver — so the bare segment is the only part that is stable across
@@ -257,6 +284,22 @@ function tsStatedTypeName(declNode) {
   return null;
 }
 
+// The type a TypeScript alias points at: `type ProducerSerializer = Serializer<…>`
+// gives "Serializer". Only a name counts — a union, an object type or a mapped type
+// names no single type, and a field declared with one of those has no type this
+// reader can follow.
+function tsAliasTargetName(aliasNode) {
+  const v = aliasNode?.childForFieldName?.('value');
+  if (v?.type === 'type_identifier') return v.text;
+  if (v?.type === 'nested_type_identifier') return v.text.replace(/\s/g, '').split('.').pop();
+  if (v?.type === 'generic_type') {
+    const base = v.childForFieldName?.('name');
+    if (base?.type === 'type_identifier') return base.text;
+    if (base?.type === 'nested_type_identifier') return base.text.replace(/\s/g, '').split('.').pop();
+  }
+  return null;
+}
+
 // The call a short declaration takes its value from: `x := reflect.ValueOf(v)`,
 // `buf := bp.GetBuffer()`, `y := Make()`. Returns the call node, or null when the
 // initializer is anything else. Parens and `new(T)` are already handled by
@@ -292,7 +335,14 @@ function goVarDeclNames(decl) {
       if (name.type !== 'identifier') continue;
       const init = paired ? right.namedChild(i) : null;
       const t = init ? goInitTypeNode(init) : null;
-      out.push({ nameNode: name, typeNode: t, callNode: t ? null : (init ? goInitCallNode(init) : null) });
+      // `nextCopy := next` — one name copied into another. Nothing at the second
+      // name says what it holds, but the first one does, and Go reads it that way.
+      // The name is returned rather than a type, because what it holds depends on
+      // which binding is in scope HERE, and that is only known once every binding
+      // in the file has been recorded.
+      const alias = !t && init?.type === 'identifier' ? init : null;
+      out.push({ nameNode: name, typeNode: t, aliasNode: alias,
+        callNode: t || alias ? null : (init ? goInitCallNode(init) : null) });
     }
     return out;
   }
@@ -396,14 +446,69 @@ function cppFunctionDeclarator(node) {
 // Returns null for a shape we cannot name (a function pointer declarator), so
 // the definition is skipped instead of indexed as "(anon)".
 const CPP_NAME_NODES = ['identifier', 'field_identifier', 'destructor_name', 'operator_name'];
+
+// The names parked in an ERROR node inside a qualified_identifier, or [] if there
+// is no ERROR there.
+//
+// WHY. A header-only C++ library writes every out-of-class definition behind a
+// macro: `SPDLOG_INLINE std::shared_ptr<logger> registry::get(...)`. tree-sitter
+// does not know the macro, so it reads it as the return type, and then the real
+// return type has nowhere to go — it takes the scope slot, and the class that owns
+// the method is pushed into an ERROR node:
+//
+//   qualified_identifier [scope=«std» name=qualified_identifier]
+//     qualified_identifier [scope=«shared_ptr<logger>» name=«get»]
+//       ERROR
+//         identifier «registry»          <- the owner, the only true scope here
+//
+// Measured on spdlog: 337 of 1323 methods came out named after their return type,
+// `std.shared_ptr.registry.get` and the like, and `callers "registry.get"` answered
+// with no callers at all and a warning listing every one of the 33. leveldb and re2
+// do not use the macro style and were untouched, which is why this went unseen.
+function cppErrorScopes(n) {
+  const out = [];
+  for (let i = 0; i < (n.namedChildCount ?? 0); i++) {
+    const c = n.namedChild(i);
+    if (c?.type !== 'ERROR') continue;
+    for (let j = 0; j < (c.namedChildCount ?? 0); j++) {
+      const g = c.namedChild(j);
+      if (!g) continue;
+      if (g.type === 'template_type') out.push(g.childForFieldName?.('name')?.text ?? g.text);
+      else if (/identifier$/.test(g.type)) out.push(g.text);
+    }
+  }
+  return out;
+}
+
 function cppNamePath(declarator) {
-  const path = [];
+  let path = [];
   let n = declarator;
   while (n?.type === 'qualified_identifier') {
-    const scope = n.childForFieldName?.('scope');
-    // `Vec<T>::At` — the scope is the template, and the class is its `name`.
-    if (scope) path.push(scope.type === 'template_type'
-      ? (scope.childForFieldName?.('name')?.text ?? scope.text) : scope.text);
+    // An ERROR here means everything collected so far is the return type, not a
+    // scope. Start again from the names the ERROR holds — they are the real owner.
+    const owner = cppErrorScopes(n);
+    if (owner.length) path = owner;
+    else {
+      const scope = n.childForFieldName?.('scope');
+      const name = n.childForFieldName?.('name');
+      // Only `::` joins a scope to what follows it. When the source puts a SPACE
+      // there, tree-sitter has read a return type as a scope and everything so far
+      // belongs to the return type, so start again:
+      //   `SPDLOG_INLINE std::shared_ptr<logger> registry::get(…)`
+      //                  ^^^^^^^^^^^^^^^^^^^^^^^ scope, scope   ^^^^^^^^ the owner
+      // The same source parses two ways depending on how long the class name is —
+      // a short one leaves an ERROR node (handled above), a long one leaves none —
+      // so both checks are needed.
+      if (scope) {
+        const sep = (typeof scope.endIndex === 'number' && typeof name?.startIndex === 'number')
+          ? n.text.slice(scope.endIndex - n.startIndex, name.startIndex - n.startIndex).trim()
+          : '::';
+        if (sep !== '::') path = [];
+        // `Vec<T>::At` — the scope is the template, and the class is its `name`.
+        else path.push(scope.type === 'template_type'
+          ? (scope.childForFieldName?.('name')?.text ?? scope.text) : scope.text);
+      }
+    }
     n = n.childForFieldName?.('name');
   }
   // `template <> void f<int>() {}` — the name sits under the specialization.
@@ -411,6 +516,42 @@ function cppNamePath(declarator) {
   if (!n || !CPP_NAME_NODES.includes(n.type)) return null;
   path.push(n.text);
   return path;
+}
+
+// The name a googletest body should carry: `TEST(WriteBatchTest, Empty) { … }`
+// becomes `WriteBatchTest.Empty`. Returns null for anything that is not one of
+// these macros, and then the definition keeps the name it had.
+//
+// WHY. tree-sitter reads the macro as a function definition called `TEST`, and
+// the two arguments as parameters. Measured on leveldb, 139 definitions ended up
+// sharing the qname `leveldb.TEST_F` and 47 shared `leveldb.TEST`. That costs
+// twice over: a reader gets gap lines and caller rows reading
+// `leveldb.TEST_F -> Put` again and again with no way to tell the tests apart,
+// and an exact-qname lookup for any one of them is ambiguous, so it answers with
+// none of them.
+//
+// The macro list is explicit on purpose. Reading two arguments out of a macro we
+// do not know would invent a name, and a wrong name is worse than a dull one.
+// googletest is where all of these come from, and it spells them the same way in
+// every project.
+const GTEST_MACROS = new Set(['TEST', 'TEST_F', 'TEST_P', 'TYPED_TEST', 'TYPED_TEST_P']);
+function cppGtestPath(path, declarator) {
+  if (path.length !== 1 || !GTEST_MACROS.has(path[0])) return null;
+  const params = declarator?.childForFieldName?.('parameters');
+  if (!params || params.namedChildCount !== 2) return null;
+  // The arguments are bare names, so tree-sitter reads each as a parameter whose
+  // TYPE is a type_identifier and which declares nothing. A real function called
+  // TEST — `int TEST(int a, int b)` — names a declarator in each parameter, which
+  // is what tells the two apart.
+  const names = [];
+  for (let i = 0; i < 2; i++) {
+    const p = params.namedChild(i);
+    if (p?.type !== 'parameter_declaration' || p.childForFieldName?.('declarator')) return null;
+    const t = p.childForFieldName?.('type');
+    if (t?.type !== 'type_identifier') return null;
+    names.push(t.text);
+  }
+  return names.join('.');
 }
 
 // The class name a macro-broken class declaration writes.
@@ -457,6 +598,126 @@ function cppMacroClassName(node, source) {
   // `final` is written after the class name, never as one.
   while (words[words.length - 1] === 'final') words.pop();
   return words.length ? words[words.length - 1] : null;
+}
+
+// The pure virtuals written inside a class body the parse could not keep.
+//
+// `class LEVELDB_EXPORT Cache { virtual bool Insert(…) = 0; … };` — the macro
+// between `class` and the name breaks the parse, the body becomes a
+// compound_statement, and an ERROR node swallows every pure virtual after the
+// first. Measured on leveldb: 1 of 7 in cache.h, 1 of 9 in iterator.h, 1 of 10 in
+// db.h. Every public class in that repo is written this way, so a query-based rule
+// reaches almost none of them — and recovering one interface method while leaving
+// its six siblings out is worse than recovering none, because the reader cannot
+// tell which case they have.
+//
+// So read them from the source, as cppMacroClassName already reads the class name.
+// `virtual … <name>(…) … = 0;` is unambiguous in C++: `virtual` and `= 0` in one
+// statement is a pure virtual and nothing else. Returns {name, line, col} for each.
+const CPP_PURE_VIRTUAL =
+  /\bvirtual\b[^;{}()]*?\b([A-Za-z_]\w*)\s*\([^;{}]*?\)[^;{}]*?=\s*0\s*;/g;
+function cppMacroPureVirtuals(node, source) {
+  const body = source.slice(node.startIndex, node.endIndex);
+  const out = [];
+  for (const m of body.matchAll(CPP_PURE_VIRTUAL)) {
+    // The name's own offset inside the whole file, so the synthesised definition
+    // sits where the source puts it and containment reads it as the class's child.
+    const at = node.startIndex + m.index + m[0].indexOf(m[1]);
+    const before = source.slice(0, at);
+    const line = before.split('\n').length;
+    out.push({ name: m[1], line, col: at - (before.lastIndexOf('\n') + 1) });
+  }
+  return out;
+}
+
+// The scopes a C++ name can be bound in. A block is a scope of its own, which is
+// what keeps `if (f) { Batch b; … } else { Other b; … }` from typing one branch
+// with the other's variable. Missing a node type here makes a scope too WIDE,
+// which keeps today's answer instead of inventing one — the same trade the Go and
+// TypeScript sets make.
+// Thread-safety annotations from clang's analysis attributes, as every Google C++
+// project spells them. Written after the parameter list, where they break the parse
+// in two — see the check in the definition loop.
+const CPP_ANNOTATION_MACROS = new Set([
+  'LOCKS_EXCLUDED', 'EXCLUSIVE_LOCKS_REQUIRED', 'SHARED_LOCKS_REQUIRED',
+  'EXCLUSIVE_LOCK_FUNCTION', 'SHARED_LOCK_FUNCTION', 'UNLOCK_FUNCTION',
+  'ACQUIRED_AFTER', 'ACQUIRED_BEFORE', 'GUARDED_BY', 'PT_GUARDED_BY',
+  'ABSL_LOCKS_EXCLUDED', 'ABSL_EXCLUSIVE_LOCKS_REQUIRED', 'ABSL_GUARDED_BY',
+]);
+
+const CPP_SCOPE_NODES = new Set([
+  'compound_statement', 'function_definition', 'for_statement', 'for_range_loop',
+  'while_statement', 'if_statement', 'switch_statement', 'catch_clause',
+  'field_declaration_list', 'namespace_definition', 'translation_unit',
+]);
+
+// The type a C++ declaration writes, as a dotted name, or null when it writes
+// nothing a lookup can use. `db::Batch` becomes `db.Batch` so it reads like a
+// qname; `std::vector<int>` becomes `std.vector`, because the template arguments
+// name no type the graph holds. `auto` is deliberately null: it states that the
+// type is written somewhere else.
+const CPP_TYPE_NODES = new Set([
+  'type_identifier', 'qualified_identifier', 'template_type', 'primitive_type',
+  'sized_type_specifier',
+]);
+function cppWrittenType(decl) {
+  let t = decl?.childForFieldName?.('type');
+  if (!t) return null;
+  // `using T = Skip<int>;` wraps the type in a type_descriptor; `typedef` does not.
+  if (t.type === 'type_descriptor') t = t.childForFieldName?.('type') ?? t.namedChild(0) ?? t;
+  if (t.type === 'template_type') t = t.childForFieldName?.('name') ?? t;
+  if (!CPP_TYPE_NODES.has(t.type)) return null;
+  return t.text.replace(/::/g, '.');
+}
+
+// The names a C++ declaration declares, with the node each name sits on. Walks
+// past every declarator wrapper — pointer, reference, array, initialiser,
+// function — so `Batch* b = Make()` and `const Batch& b` both give `b`.
+//
+// A function declarator is skipped on purpose: `void Batch::Put(int k);` declares
+// a method, not a variable of type void, and recording `Put` as a name of type
+// `void` would make every `Put.something()` resolve to nothing.
+function cppDeclaredNames(decl, inFunctionBody = false) {
+  const out = [];
+  const walk = (n, depth) => {
+    if (!n || depth > 8) return;
+    switch (n.type) {
+      case 'identifier':
+      case 'field_identifier':
+        out.push(n);
+        return;
+      case 'function_declarator':
+        // C++'s "most vexing parse". `Batch b(Opts());` inside a function body is a
+        // variable built with constructor arguments, and it is spelled exactly like
+        // a function declaration — tree-sitter reads it as one. It is the everyday
+        // way to build an object, so inside a BODY the name is taken as a variable.
+        // Measured on leveldb: this is why `model.Put(…)` at db_test.cc:2310 could
+        // not be placed.
+        //
+        // Only inside a body. At class or file scope `T name(A a);` is a declaration
+        // and nothing else, and reading it as a variable would put a method's name
+        // in the variable table. Getting the body case wrong costs nothing: the
+        // recorded type leads to a `<T>.<method>` lookup that simply finds nothing.
+        if (inFunctionBody) walk(n.childForFieldName?.('declarator'), depth + 1);
+        return;
+      case 'pointer_declarator':
+      case 'reference_declarator':
+      case 'array_declarator':
+      case 'init_declarator':
+      case 'parenthesized_declarator':
+        walk(n.childForFieldName?.('declarator') ?? n.namedChild(0), depth + 1);
+        return;
+      default:
+        return;
+    }
+  };
+  // A declaration can declare several names: `Batch a, b;` holds two declarators.
+  for (let i = 0; i < decl.namedChildCount; i++) {
+    const c = decl.namedChild(i);
+    if (c === decl.childForFieldName?.('type')) continue;
+    walk(c, 0);
+  }
+  return out;
 }
 
 // What a C++ call site names, and the bare method name to fall back on.
@@ -770,6 +1031,11 @@ export async function extract({ file, lang, langId, scm, source, pyRepoModules =
 
   const defKinds = ['function', 'method', 'class', 'struct', 'interface', 'type', 'enum', 'namespace'];
   const defs = [];
+  // Definitions the parse could not produce, synthesised from the source: the pure
+  // virtuals of a macro-broken class body. Collected here and appended after the
+  // capture loop, so they take part in dedup, nesting and qname building exactly
+  // like a captured definition.
+  const macroMembers = [];
   const defCaps = caps.filter((c) => c.name.startsWith('definition.'));
   const nameCaps = caps.filter((c) => c.name === 'name');
   const recvCaps = caps.filter((c) => c.name === 'receiver');
@@ -785,16 +1051,46 @@ export async function extract({ file, lang, langId, scm, source, pyRepoModules =
       const fd = cppFunctionDeclarator(d.node.childForFieldName?.('declarator'));
       const path = fd ? cppNamePath(fd.childForFieldName?.('declarator')) : null;
       if (!path) continue; // a shape we cannot name — see cppFunctionDeclarator
-      localPath = path.join('.');
+      localPath = cppGtestPath(path, fd) ?? path.join('.');
     }
     // A class whose name a macro pushed out of the parse. The captured node is
     // the broken function definition or declaration, not a class_specifier, and
     // the name has to be read from the source — see cppMacroClassName.
+    // A DECLARATION, not a definition: a C++ pure virtual. It earns a node because
+    // an interface method has no definition to index — but it yields to a real
+    // definition when the repo has one, because C++ lets a pure virtual have a body
+    // and two nodes on one qname resolve to neither. See SCHEMA_VERSION 9.
+    let decl = lang === 'cpp' && d.node?.type === 'field_declaration';
+    // A thread-safety annotation after the parameter list splits the parse: the real
+    // name stays in the declaration above and the BODY becomes a definition named
+    // after the macro. The declaration is now indexed (see cpp.scm), so the bogus
+    // definition is simply dropped — a wrong name is worse than a missing one,
+    // because search finds it and a reader believes it.
+    if (lang === 'cpp' && kind === 'function' && d.node?.type === 'function_definition') {
+      const fd0 = cppFunctionDeclarator(d.node.childForFieldName?.('declarator'));
+      const nm = fd0 && cppNamePath(fd0.childForFieldName?.('declarator'));
+      if (nm?.length === 1 && CPP_ANNOTATION_MACROS.has(nm[0])) continue;
+    }
+    let macroClass = false;
     if (lang === 'cpp' && (kind === 'class' || kind === 'struct') &&
         d.node.type !== 'class_specifier' && d.node.type !== 'struct_specifier') {
       const recovered = cppMacroClassName(d.node, source);
       if (!recovered) continue; // too broken to name — a wrong owner is worse
       localPath = recovered;
+      macroClass = true;
+      // The interface methods the broken parse lost. Pushed as definitions of
+      // their own so nesting gives them `<ns>.<Class>.<name>` like any other
+      // method — see cppMacroPureVirtuals.
+      for (const pv of cppMacroPureVirtuals(d.node, source)) {
+        macroMembers.push({
+          kind: 'method', localPath: null, isCallback: false,
+          macroClass: false, decl: true, name: pv.name,
+          startLine: pv.line, endLine: pv.line,
+          startCol: pv.col, endCol: pv.col + pv.name.length,
+          signature: capSignature(source.split('\n')[pv.line - 1]?.trim() ?? ''),
+          node: null,
+        });
+      }
     }
     // A callback has no name of its own, and the `@name` captures inside its span
     // belong to something else: a nested `function helper()` would otherwise name
@@ -818,7 +1114,7 @@ export async function extract({ file, lang, langId, scm, source, pyRepoModules =
       localPath = nameCap.text.split('::').join('.');
     }
     defs.push({
-      kind, localPath, isCallback,
+      kind, localPath, isCallback, macroClass, decl,
       name: localPath ? localPath.slice(localPath.lastIndexOf('.') + 1)
         : (ownName ?? nameCap?.text ?? '(anon)'),
       startLine: d.startLine, endLine: d.endLine,
@@ -827,6 +1123,8 @@ export async function extract({ file, lang, langId, scm, source, pyRepoModules =
       node: d.node, // kept for containment checks below; never copied into `nodes`
     });
   }
+
+  defs.push(...macroMembers);
 
   // Collapse defs that occupy the exact same span into one, keeping the most
   // specific kind. A grouped Go `type_spec` matches both its shape-specific rule
@@ -939,6 +1237,7 @@ export async function extract({ file, lang, langId, scm, source, pyRepoModules =
     id: d.id, name: d.name, qname: d.qname, kind: d.kind, lang,
     file, start_line: d.startLine, end_line: d.endLine,
     signature: d.signature, doc: '', container_id: d.container_id,
+    decl: d.decl ? 1 : 0,
   }));
 
   // Struct-field-type table: <struct qname>.<field> -> package-qualified field
@@ -1033,7 +1332,11 @@ export async function extract({ file, lang, langId, scm, source, pyRepoModules =
   const pkgVarKey = (name) => (pkgVarScope ? `${pkgVarScope}#pkgvar:${name}` : null);
   // Every Go name this file binds, with the span it is visible in, grouped by name
   // so a call site asks about one name and not about every binding in the file.
-  const bindings = new Map(); // name -> [binding, ...]
+  const bindings = new Map();
+  // `x := y` in Go: the copy's type is whatever binding `y` refers to at that line,
+  // which is only settled once every binding in the file is recorded and sorted. So
+  // the pairs are collected here and resolved after bindingAt below.
+  const goCopies = []; // [{ key of the copy, the name node it was copied from }, ...]
   // binding key -> the one type this file recorded for it. Used for `x.f.M()`,
   // where the field key needs the type that owns the field named at extraction.
   const varTypes = new Map();
@@ -1071,10 +1374,10 @@ export async function extract({ file, lang, langId, scm, source, pyRepoModules =
       // writing `var _ SomeIface = &Impl{}` (the interface-assertion idiom)
       // turn into a false "conflict" on the shared package-level key: nothing
       // can ever call through `_`, so there is no binding here to record.
-      if (nameNode.text === '_') return;
+      if (nameNode.text === '_') return null;
       const owner = ownerOf(cap);
       const scope = goScopeNode(nameNode);
-      if (!scope) return;
+      if (!scope) return null;
       // `ownerOf` only finds a NAMED function, method or type. A closure that
       // sits at package level (`var handlers = map[string]func(){ "x": func()
       // { conf := ... } }`) has none — but its body is still a local scope, not
@@ -1088,7 +1391,7 @@ export async function extract({ file, lang, langId, scm, source, pyRepoModules =
         : pkgLevel
           ? pkgVarKey(nameNode.text)
           : `${file}#var:${nameNode.text}@${nameNode.startPosition.row + 1}:${nameNode.startPosition.column}`;
-      if (!key) return; // a package-level name in a file with no package clause
+      if (!key) return null; // a package-level name in a file with no package clause
       if (!bindings.has(nameNode.text)) bindings.set(nameNode.text, []);
       bindings.get(nameNode.text).push({
         key,
@@ -1102,19 +1405,24 @@ export async function extract({ file, lang, langId, scm, source, pyRepoModules =
       });
       const typeName = typeNode ? goFieldTypeName(typeNode, goCtx.pkg)
         : (callNode ? retTypeOf(callNode) : null);
-      if (!typeName) return;
+      if (!typeName) return key;
       // A "#ret:" row names a callee, not a type, so it must not be offered as
       // one: `x.f.M()` keys on the type that owns the field `f`, and there is no
       // such type here.
-      if (typeName.startsWith('#ret:')) { fieldTypes.push({ key, type: typeName, file }); return; }
+      if (typeName.startsWith('#ret:')) { fieldTypes.push({ key, type: typeName, file }); return key; }
       fieldTypes.push({ key, type: typeName, file });
       // One key is one binding, so a second type for it can only come from two
       // query patterns matching the same declaration. Refuse rather than pick.
       varTypes.set(key, varTypes.has(key) && varTypes.get(key) !== typeName ? null : typeName);
+      return key;
     };
+    // `x := y` waits for the second pass further down: what `y` holds depends on
+    // the binding in scope at that line, and that is only settled once every
+    // binding in the file is recorded and sorted.
     for (const vd of caps.filter((c) => c.name === 'var.decl')) {
-      for (const { nameNode, typeNode, callNode } of goVarDeclNames(vd.node)) {
-        bind(vd, nameNode, typeNode, vd.node, callNode);
+      for (const { nameNode, typeNode, aliasNode, callNode } of goVarDeclNames(vd.node)) {
+        const key = bind(vd, nameNode, typeNode, vd.node, callNode);
+        if (aliasNode && key) goCopies.push({ key, aliasNode });
       }
     }
     for (const vl of caps.filter((c) => c.name === 'var.local')) {
@@ -1140,6 +1448,19 @@ export async function extract({ file, lang, langId, scm, source, pyRepoModules =
     }
     return found;
   };
+
+  // Give each copied name the type of the binding its source name refers to.
+  // `#ret:` rows are not carried over: a marker says the type is decided somewhere
+  // this reader cannot see, and copying that claim one step further adds nothing.
+  // A copy of a copy is not followed either — one hop covers the shape this exists
+  // for (`nextCopy := next`), and a chain risks a cycle.
+  for (const { key, aliasNode } of goCopies) {
+    const src = bindingAt(aliasNode.text, aliasNode);
+    const type = src ? varTypes.get(src.key) : null;
+    if (!type || type.startsWith('#ret:')) continue;
+    fieldTypes.push({ key, type, file });
+    varTypes.set(key, varTypes.has(key) && varTypes.get(key) !== type ? null : type);
+  }
 
   // Every name a Python scope in this file binds to a VALUE, with the span that
   // binding covers. An imported module name can be shadowed by a local or a
@@ -1279,6 +1600,74 @@ export async function extract({ file, lang, langId, scm, source, pyRepoModules =
         if (lang === 'ts' && isParam && !annotated) fieldTypes.push({ key: b.key, type: '#param', file });
       }
     }
+    // Class FIELD types. Keyed by the class, not by a position: the field is
+    // declared once at the top of the class and used in methods far below it, and
+    // often in a SUBCLASS in another file. Two keys per field, exactly as C++ does
+    // and for the same measured reason — nest ships three sample apps that each
+    // declare a `RecipesService`, so the class-wide key alone would collect three
+    // types under one name and answer none of them. The call site prefers the
+    // file-scoped key; the resolver falls back to the class-wide one, which is what
+    // reaches a field declared in another file.
+    for (const c of caps) {
+      if (c.name !== 'ts.field') continue;
+      // A parameter is a field only when it carries a modifier:
+      // `constructor(private readonly svc: Svc)` declares one, `constructor(x: T)`
+      // does not. `readonly` alone is an anonymous token with no node of its own,
+      // so the node's own text is what says it is there.
+      if (c.node.type !== 'public_field_definition') {
+        const modifier = c.node.namedChild(0)?.type === 'accessibility_modifier' ||
+          /^readonly\b/.test(c.node.text);
+        if (!modifier) continue;
+      }
+      const name = c.node.type === 'public_field_definition'
+        ? c.node.childForFieldName?.('name')?.text
+        : c.node.namedChildren.find((n) => n.type === 'identifier')?.text;
+      const type = tsStatedTypeName(c.node);
+      if (!name || !type) continue;
+      const cls = defs.filter((d) => d.kind === 'class' && within(c, d)).sort(innermostFirst)[0];
+      if (!cls) continue;
+      fieldTypes.push({ key: `${cls.name}#field:${name}`, type, file });
+      fieldTypes.push({ key: `${file}|${cls.name}#field:${name}`, type, file });
+    }
+    // `class Sub extends Base`, recorded so the resolver can look a field up in the
+    // class that really declares it. Only a plain name counts: `extends mixin(Base)`
+    // names no single base, and guessing one would invent a whole method set.
+    for (const c of caps) {
+      if (c.name !== 'ts.extends') continue;
+      const value = c.node.namedChild(0);
+      const base = value?.type === 'identifier' ? value.text
+        : value?.type === 'member_expression' ? value.childForFieldName?.('property')?.text : null;
+      const cls = defs.filter((d) => d.kind === 'class' && within(c, d)).sort(innermostFirst)[0];
+      if (base && cls && base !== cls.name) {
+        fieldTypes.push({ key: `${cls.name}#extends`, type: base, file });
+      }
+    }
+    // A value declared at the TOP of a module, keyed by its name alone so another
+    // file can look it up. `export const NestFactory = new NestFactoryStatic();` is
+    // declared once and called from everywhere, and the call site has no local of
+    // that name to key on. Top-level only: a name bound inside a function is not
+    // visible to another file, so offering it repo-wide would be an invention.
+    // Two modules binding one name to different types cancel out, the same way
+    // every other type row does.
+    for (const [name, binds] of tsVarKeys) {
+      for (const b of binds) {
+        if (b.node.parent?.type !== 'variable_declarator') continue;
+        if (defs.some((d) => within({ startLine: b.node.startPosition.row + 1,
+          startCol: b.node.startPosition.column,
+          endLine: b.node.startPosition.row + 1,
+          endCol: b.node.startPosition.column + name.length }, d))) continue;
+        const type = tsStatedTypeName(b.node.parent);
+        if (type) fieldTypes.push({ key: `#value:${name}`, type, file });
+      }
+    }
+    // Type aliases, keyed the same way C++ keys its typedefs, so the same resolver
+    // hop follows them.
+    for (const c of caps) {
+      if (c.name !== 'ts.alias') continue;
+      const name = c.node.childForFieldName?.('name')?.text;
+      const target = tsAliasTargetName(c.node);
+      if (name && target && name !== target) fieldTypes.push({ key: `#alias:${name}`, type: target, file });
+    }
   }
   // The binding in scope at this point, innermost first: of two scopes that both
   // hold one position, the inner one always starts later.
@@ -1309,11 +1698,166 @@ export async function extract({ file, lang, langId, scm, source, pyRepoModules =
     return false;
   };
 
+  // C++ receiver types. One entry per name per scope, keyed and looked up exactly
+  // as Go's, Python's and TypeScript's are, so the SAME field_types table and the
+  // same resolver guards answer them.
+  //
+  // Two kinds of row go in:
+  //   `<scope>#var:<name>@<pos>` -> the type written on a local or a parameter.
+  //   `<Class>#field:<name>`     -> the type written on a class field. Keyed by the
+  //      class rather than by position, because the everyday C++ layout puts the
+  //      field in a header and the method that uses it in a .cc, so the two are
+  //      never in one scope.
+  const cppVarKeys = new Map(); // name -> [{ key, span }, ...]
+  if (lang === 'cpp') {
+    // Type aliases first, so a declaration that names one can be followed. Keyed by
+    // the alias name alone: an alias is usually the only thing in a repo called
+    // that, and when it is not, the resolver sees two types for one key and refuses
+    // — the same rule it applies to every other type row.
+    for (const c of caps) {
+      if (c.name !== 'cpp.alias') continue;
+      const name = c.node.type === 'type_definition'
+        ? c.node.childForFieldName?.('declarator')?.text
+        : c.node.childForFieldName?.('name')?.text;
+      const target = cppWrittenType(c.node);
+      if (!name || !target || name === target) continue;
+      fieldTypes.push({ key: `#alias:${name}`, type: target, file });
+      // An alias declared inside a class body means that class's alias inside it,
+      // whatever else in the repo carries the name. leveldb has `class Table` in
+      // table.h AND `typedef SkipList<…> Table;` inside MemTable, and inside MemTable
+      // the name means the typedef — so the class-scoped key is tried first.
+      let cls = c.node.parent;
+      while (cls && cls.type !== 'class_specifier' && cls.type !== 'struct_specifier') cls = cls.parent;
+      const clsName = cls?.childForFieldName?.('name')?.text;
+      if (clsName) fieldTypes.push({ key: `${clsName}#alias:${name}`, type: target, file });
+    }
+    for (const c of caps) {
+      if (c.name !== 'cpp.decl') continue;
+      const type = cppWrittenType(c.node);
+      if (!type) continue;
+      let scope = c.node.parent;
+      while (scope && !CPP_SCOPE_NODES.has(scope.type)) scope = scope.parent;
+      if (!scope) continue;
+      const names = cppDeclaredNames(c.node, scope.type === 'compound_statement');
+      if (!names.length) continue;
+      // A field declaration belongs to the class that holds it, not to a block. Two
+      // keys per field: one named after the class, which is what a method defined in
+      // another file can look up, and one that also names this file. leveldb ships
+      // three benchmark programs, each with its own `class Benchmark` and its own
+      // `db_` field of a different type; on the class-wide key alone all three types
+      // landed together, the type came out ambiguous, and every `db_->…` call in all
+      // three files stayed unresolved. The call site prefers the file-scoped key when
+      // the declaration is in its own file — see cppReceiverKey.
+      if (c.node.type === 'field_declaration') {
+        let cls = c.node.parent;
+        while (cls && cls.type !== 'class_specifier' && cls.type !== 'struct_specifier') cls = cls.parent;
+        const clsName = cls?.childForFieldName?.('name')?.text;
+        if (!clsName) continue;
+        for (const n of names) {
+          fieldTypes.push({ key: `${clsName}#field:${n.text}`, type, file });
+          fieldTypes.push({ key: `${file}|${clsName}#field:${n.text}`, type, file });
+        }
+        continue;
+      }
+      const owner = defs.filter((d) => within(c, d)).sort(innermostFirst)[0];
+      for (const n of names) {
+        const at = `@${n.startPosition.row + 1}:${n.startPosition.column}`;
+        const key = owner ? `${owner.id}#var:${n.text}${at}` : `${file}#var:${n.text}${at}`;
+        if (!cppVarKeys.has(n.text)) cppVarKeys.set(n.text, []);
+        cppVarKeys.get(n.text).push({
+          key,
+          span: {
+            startLine: scope.startPosition.row + 1, startCol: scope.startPosition.column,
+            endLine: scope.endPosition.row + 1, endCol: scope.endPosition.column,
+          },
+        });
+        fieldTypes.push({ key, type, file });
+      }
+    }
+  }
+  // The binding in scope at this point, innermost first — of two scopes that both
+  // hold one position, the inner one starts later.
+  const cppVarKeyAt = (name, node) => {
+    const line = node.startPosition.row + 1, col = node.startPosition.column;
+    const hits = (cppVarKeys.get(name) ?? []).filter((b) =>
+      posLE(b.span.startLine, b.span.startCol, line, col) &&
+      posLE(line, col, b.span.endLine, b.span.endCol));
+    hits.sort((a, b) => b.span.startLine - a.span.startLine || b.span.startCol - a.span.startCol);
+    return hits[0]?.key ?? null;
+  };
+
+  // The field_types key a C++ call written on `recv` belongs to, or null when the
+  // source gives nothing to key on — and then the bare-name fallback stays, which
+  // is the right answer for a receiver whose type we cannot read.
+  //
+  // Three shapes, in the order C++ makes them likely:
+  //   `b.Put(k)`      -> the local or parameter `b`, keyed by scope and position.
+  //   `rep_.Put(k)`   -> a field of the class the call is written in. The field's
+  //                      own declaration is usually in a header, so the key names
+  //                      the class rather than a position.
+  //   `h->rep.Put(k)` -> a field of a receiver this file typed. The type of `h` is
+  //                      read here, from the rows just built, so the key is the
+  //                      same `<Class>#field:<name>` shape as the case above.
+  const cppOwningClass = (enclosing) => {
+    if (!enclosing) return null;
+    // An out-of-class definition writes the class in its own declarator:
+    // `void Writer::Run()` gives the localPath `Writer.Run`.
+    if (enclosing.localPath?.includes('.')) {
+      return enclosing.localPath.split('.').slice(0, -1).pop();
+    }
+    // Written inside the class body, so the container IS the class.
+    const owner = defs.find((d) => d.id === enclosing.container_id);
+    return owner && (owner.kind === 'class' || owner.kind === 'struct') ? owner.name : null;
+  };
+  const cppTypeOfKey = new Map();
+  if (lang === 'cpp') for (const f of fieldTypes) cppTypeOfKey.set(f.key, f.type);
+  const cppReceiverKey = (recv, enclosing) => {
+    if (!recv) return null;
+    if (recv.type === 'identifier') {
+      const local = cppVarKeyAt(recv.text, recv);
+      if (local) return local;
+      const cls = cppOwningClass(enclosing);
+      if (!cls) return null;
+      // This file's own declaration wins over the class-wide one — see the two-key
+      // comment above. `cppTypeOfKey` holds only this file's rows, so a hit there is
+      // exactly "the class is declared here too".
+      const scoped = `${file}|${cls}#field:${recv.text}`;
+      return cppTypeOfKey.has(scoped) ? scoped : `${cls}#field:${recv.text}`;
+    }
+    // `shard_[Pick(h)].Insert(k)`: an array of a known type is still that type,
+    // whichever element the subscript picks. leveldb's sharded cache is written this
+    // way, and without it the call was one more row in a gap banner.
+    if (recv.type === 'subscript_expression') {
+      return cppReceiverKey(recv.childForFieldName?.('argument'), enclosing);
+    }
+    // `h->rep.Put(k)`: name the type that owns the field, exactly as the branch
+    // above would if the field had been written bare.
+    if (recv.type === 'field_expression') {
+      const inner = recv.childForFieldName?.('argument');
+      const field = recv.childForFieldName?.('field')?.text;
+      if (inner?.type !== 'identifier' || !field) return null;
+      const innerKey = cppReceiverKey(inner, enclosing);
+      const innerType = innerKey && cppTypeOfKey.get(innerKey);
+      if (!innerType) return null;
+      const cls = innerType.split('.').pop();
+      const scoped = `${file}|${cls}#field:${field}`;
+      return cppTypeOfKey.has(scoped) ? scoped : `${cls}#field:${field}`;
+    }
+    return null;
+  };
+
   const refMap = { 'reference.call': 'call', 'reference.import': 'import', 'reference.include': 'include' };
+  // A pure virtual recovered from a macro-broken class body reads as
+  // `Insert(int k) = 0` — an assignment to a call — so the call rule captures it
+  // and the graph gains an edge saying the interface method calls itself. Suppress
+  // exactly those: same line, same name as a member we synthesised from that very
+  // line. Nothing else can match, so a real `matrix(i, j) = 0;` keeps its edge.
+  const macroDeclSites = new Set(macroMembers.map((m) => `${m.startLine}:${m.name}`));
   const edges = [];
   for (const c of caps) {
     const kind = refMap[c.name];
     if (!kind) continue;
+    if (kind === 'call' && macroDeclSites.has(`${c.startLine}:${c.text}`)) continue;
     const enclosing = defs.filter((d) => within(c, d)).sort(innermostFirst)[0];
     let dst_name, field_key = null, method = null;
     // An identifier names a variable, not a package, when a binding for it is in
@@ -1372,6 +1916,16 @@ export async function extract({ file, lang, langId, scm, source, pyRepoModules =
         (enclosing?.kind === 'namespace' ? enclosing.qname : enclosing?.cppNs) ?? null);
       dst_name = t.dst_name;
       method = t.method;
+      // `x.m()` / `x->m()`. cppCallTarget kept the bare method name because the
+      // receiver's type is not in the source at the call. It usually IS in the
+      // source somewhere else, though — on the declaration — so key the call on
+      // the receiver and let the resolver read the type. Keyed exactly like Go's
+      // and TypeScript's, so the same passes and the same guards answer it.
+      if (c.node?.type === 'field_identifier' && c.node.parent?.type === 'field_expression') {
+        const recv = c.node.parent.childForFieldName?.('argument');
+        const key = cppReceiverKey(recv, enclosing);
+        if (key) { field_key = key; method = c.text; }
+      }
     } else {
       dst_name = target;
       // Same idea for lexically-nested languages: `this.m()` / `self.m()` belongs
@@ -1397,6 +1951,29 @@ export async function extract({ file, lang, langId, scm, source, pyRepoModules =
           if (obj?.type === 'identifier') {
             const key = tsVarKeyAt(obj.text, obj);
             if (key) { field_key = key; method = c.text; }
+            // `NestFactory.create(app)` — a call written on a CLASS, not on a
+            // value. The source names the owner outright, so it is not a guess;
+            // it was falling through to one only because the receiver is not a
+            // variable and nothing keyed it. The name is recorded rather than
+            // written into dst_name so that when no repo class carries it — an
+            // imported library class — the old bare-name fallback is left exactly
+            // as it was. This pass adds a fact, it never removes one.
+            else { field_key = `#static:${obj.text}`; method = c.text; }
+          } else if (obj?.type === 'member_expression' &&
+                     obj.childForFieldName?.('object')?.type === 'this') {
+            // `this.serializer.serialize(…)` — a call on a class FIELD, and the
+            // shape TypeScript writes most. The field's own declaration is usually
+            // far above, and often in a base class in another file, so the key names
+            // the class rather than a position. This file's name goes in front for
+            // the same reason C++ needs it: two classes of one name in one repo
+            // would otherwise share the key. The resolver falls back to the
+            // class-wide key and then walks the extends chain.
+            const fieldName = obj.childForFieldName?.('property')?.text;
+            const cls = defs.filter((d) => d.kind === 'class' && within(c, d)).sort(innermostFirst)[0];
+            if (fieldName && cls) {
+              field_key = `${file}|${cls.name}#field:${fieldName}`;
+              method = c.text;
+            }
           }
         }
       }
@@ -1404,8 +1981,16 @@ export async function extract({ file, lang, langId, scm, source, pyRepoModules =
     // A plain-identifier call to a builtin or a predeclared type names nothing in
     // the repo. Marked here, once, so neither the resolver nor the gap report has
     // to keep a Go word list in SQL.
-    const external = lang === 'go' && c.node?.type !== 'field_identifier' &&
-      (GO_BUILTINS.has(c.text) || GO_PREDECLARED_TYPES.has(c.text)) ? 1 : 0;
+    //
+    // TypeScript's version of the same fact is a call written ON a global object,
+    // `JSON.parse(s)`. The `#static:` key above is exactly the case where the
+    // receiver is a plain name that no local binds, so it is the one place where
+    // "this is the global" can be said. A repo that declares its own class of that
+    // name overrides it later — see resolveTsStaticCalls.
+    const external = (lang === 'go' && c.node?.type !== 'field_identifier' &&
+      (GO_BUILTINS.has(c.text) || GO_PREDECLARED_TYPES.has(c.text))) ||
+      ((lang === 'ts' || lang === 'js') && field_key?.startsWith('#static:') &&
+        JS_GLOBALS.has(field_key.slice('#static:'.length))) ? 1 : 0;
     // Was the call written on something? Recorded for every language, because the
     // resolver then refuses a target that is not a member of a type — `end`
     // declared inside one method body can never answer `response.end()`.

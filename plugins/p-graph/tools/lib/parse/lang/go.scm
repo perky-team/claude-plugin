@@ -22,6 +22,13 @@
 (type_spec name: (type_identifier) @name type: (struct_type)) @definition.struct
 (struct_type (field_declaration_list (field_declaration) @field.decl))
 (type_spec name: (type_identifier) @name type: (interface_type)) @definition.interface
+; The methods an interface declares. A call written through an interface is Go's
+; defining idiom, and the interface node had no members for it to land on:
+; measured, 328 interfaces in hugo and 66 in caddy owned 0 methods between them,
+; while 1,241 hugo call edges and 91 caddy ones pointed straight at one.
+; `method_spec` only ever appears in an interface body; an EMBEDDED interface is a
+; constraint_elem, not a method_spec, so it stays out on its own.
+(interface_type (method_spec name: (field_identifier) @name)) @definition.method
 (type_spec name: (type_identifier) @name) @definition.type
 (type_alias name: (type_identifier) @name) @definition.type
 

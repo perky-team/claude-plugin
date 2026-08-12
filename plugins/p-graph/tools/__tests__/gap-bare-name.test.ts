@@ -63,7 +63,11 @@ describe('a bare-name query keeps the gap report', () => {
 
   it('keeps a same-name gap reachable when the bare name matches symbols in two packages', async () => {
     // "Bar" lives on foo.X and on baz.Y. call.go imports foo, not baz, and calls
-    // Bar on an interface field, so the call stays ambiguous. Asked by the bare
+    // Bar on a field of a third-party type, so the call stays ambiguous: the source
+    // states a type, which refuses the bare-name fallback, and no repo symbol
+    // carries it. (An interface field used to do this job; an interface method is a
+    // symbol now, so the call would land on it and this test would be measuring
+    // nothing.) Asked by the bare
     // name "Bar", both foo.X.Bar and baz.Y.Bar match — one whose package call.go
     // can reach, one it cannot. Scoring the row against only one of them (which
     // symbol happens to be checked first is an implementation detail, not
@@ -81,8 +85,8 @@ func (y *Y) Bar() {}
 `);
     write('call/call.go', `package call
 import "x/foo"
-type Iface interface { Bar() }
-type C struct { v Iface }
+import "github.com/third/ext"
+type C struct { v ext.Thing }
 func (c *C) Do() { c.v.Bar() }
 `);
     const store = openStore(':memory:');
@@ -91,7 +95,7 @@ func (c *C) Do() { c.v.Bar() }
     const rows = store.gapsFor('Bar');
     const row = rows.find((r) => r.file === 'call/call.go');
     expect(row).toBeTruthy();
-    expect(row.reason).toBe('ambiguous');
+    expect(row.reason).toBe('library');
     expect(row.reachable).toBe(1);
 
     store.close();

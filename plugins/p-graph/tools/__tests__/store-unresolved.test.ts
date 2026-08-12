@@ -17,10 +17,15 @@ function write(rel, src) {
 
 // Fixture in the shape that made the graph lie: one method name on two types,
 // reached through an interface field, an interface parameter and a local variable.
-// The local variable states its type, so that call site resolves. The two
-// interface shapes cannot supply a target — which implementation runs is a
-// runtime decision — so those call sites stay unresolved, and the graph must SAY
-// so instead of answering "no callers".
+// Every one of them resolves now — the two interface receivers land on the
+// interface's own method, which is what the source names. Which implementation
+// runs is still a runtime decision, and the graph still says so: each CONCRETE
+// type gets an `interface` row naming the interface that carries the calls. See
+// interface-reach.test.ts.
+//
+// So the gaps this file is about had to come from somewhere else. `logs.Report` is
+// a field of a third-party type: the source states a type, so the bare-name
+// fallback is refused, and no repo symbol carries it, so nothing resolves.
 function writeAmbiguousFixture() {
   write('internal/store/store.go', `package store
 type Store interface {
@@ -51,6 +56,11 @@ func ServeLocal() []string {
 	return p.ListGroups()
 }
 `);
+  write('internal/logs/logs.go', `package logs
+import "github.com/third/ext"
+type Sink struct{ out ext.Writer }
+func (s *Sink) Report() { s.out.ListGroups() }
+`);
   // A second layer: HandleTyped is itself called through an interface field and
   // its name is ambiguous, so the call at line 7 is where an impact walk stops.
   write('internal/http/router.go', `package http
@@ -71,11 +81,11 @@ describe('unresolved call-site reporting', () => {
     await indexFull({ root: dir, store, ignorePatterns: [] });
 
     const st = store.status();
-    // 4 ListGroups call sites + 1 HandleTyped call site. Two can be typed: the
-    // concrete field (s.pg.ListGroups) and the local variable (p.ListGroups).
-    // The two interface receivers cannot.
-    expect(st.call_edges).toBe(5);
-    expect(st.unresolved_calls).toBe(3);
+    // 5 ListGroups call sites + 1 HandleTyped call site. All but one resolve: the
+    // concrete field, the local variable and the two interface receivers (to the
+    // interface's own method). The one left is the third-party field in logs.
+    expect(st.call_edges).toBe(6);
+    expect(st.unresolved_calls).toBe(1);
 
     store.close();
   }, 30000);
@@ -88,16 +98,21 @@ describe('unresolved call-site reporting', () => {
     // Asking by qname must still surface the call sites left bare: they carry
     // the target's bare name, which is exactly why they could not be attributed.
     const rows = store.gapsFor('store.Postgres.ListGroups');
-    // Line 12 (the local variable) is absent: it resolves now, so it is an answer
-    // rather than a gap. Lines 7 and 9 are the two interface receivers.
-    expect(rows.map((r) => `${r.file}:${r.line}`)).toEqual([
-      'internal/api/server.go:7',
-      'internal/api/server.go:9',
+    // Lines 7 and 9 are the two interface receivers — reported with the interface
+    // named, not as gaps. Line 4 of logs is the one real gap: a third-party field.
+    expect(rows.map((r) => `${r.file}:${r.line} ${r.reason}`)).toEqual([
+      'internal/api/server.go:7 interface',
+      'internal/api/server.go:9 interface',
+      // A third-party field types the receiver, so the graph can PROVE this is
+      // not the target. Still reported, under its own reason, and no longer in
+      // the listed block the reader is told to grep.
+      'internal/logs/logs.go:4 library',
     ]);
     expect(rows[0].src_qname).toBe('api.Server.HandleList');
     expect(rows[0].dst_name).toBe('ListGroups');
+    expect(rows[0].via).toBe('store.Store.ListGroups');
     // The bare name works too — that is what a user usually types.
-    expect(store.gapsFor('ListGroups')).toHaveLength(2);
+    expect(store.gapsFor('ListGroups')).toHaveLength(3);
     // A symbol nothing calls ambiguously reports nothing.
     expect(store.gapsFor('api.Serve')).toEqual([]);
 
@@ -109,11 +124,13 @@ describe('unresolved call-site reporting', () => {
     const store = openStore(':memory:');
     await indexFull({ root: dir, store, ignorePatterns: [] });
 
-    const rows = store.gapsFrom('api.Server.HandleList');
+    // HandleList's own call resolves now, so it has nothing to report. The one
+    // symbol that still makes an unresolved call is logs.Sink.Report.
+    expect(store.gapsFrom('api.Server.HandleList')).toEqual([]);
+    const rows = store.gapsFrom('logs.Sink.Report');
     expect(rows).toHaveLength(1);
     expect(rows[0].dst_name).toBe('ListGroups');
-    expect(rows[0].line).toBe(7);
-    // The call that resolved is not reported as a gap.
+    expect(rows[0].line).toBe(4);
     expect(store.gapsFrom('api.Server.HandleTyped')).toEqual([]);
 
     store.close();
@@ -124,18 +141,23 @@ describe('unresolved call-site reporting', () => {
     const store = openStore(':memory:');
     await indexFull({ root: dir, store, ignorePatterns: [] });
 
-    // impact() walks resolved edges only: it reaches the two call sites it can
-    // type and stops at HandleTyped, whose own caller is an unresolved interface
-    // call.
+    // impact() walks resolved edges only, and a call written on the interface
+    // resolves to the INTERFACE method — so it does not carry the walk into the
+    // concrete type. Postgres.ListGroups is reached by the two calls that name a
+    // concrete receiver.
     expect(store.impact('store.Postgres.ListGroups').map((n) => n.qname).sort())
       .toEqual(['api.ServeLocal', 'api.Server.HandleTyped']);
-    // The frontier report must include BOTH the target's own bare call sites and
-    // the one where the walk stopped one level up.
+    // The frontier report must carry the target's own rows AND the one where the
+    // walk stopped a level up. Router.Route now resolves to http.Handler.HandleTyped,
+    // so it arrives as an interface row on HandleTyped rather than as a gap.
     const rows = store.gapsAround('store.Postgres.ListGroups');
-    expect(rows.map((r) => `${r.file}:${r.line}`)).toEqual([
-      'internal/api/server.go:7',
-      'internal/api/server.go:9',
-      'internal/http/router.go:8',
+    expect(rows.map((r) => `${r.file}:${r.line} ${r.reason}`)).toEqual([
+      'internal/api/server.go:7 interface',
+      'internal/api/server.go:9 interface',
+      // A third-party field types the receiver, so the graph can PROVE this is
+      // not the target. Still reported, under its own reason, and no longer in
+      // the listed block the reader is told to grep.
+      'internal/logs/logs.go:4 library',
     ]);
 
     store.close();
@@ -285,9 +307,9 @@ func TestX(t *testing.T) { t.Errorf("boom") }
     expect(row).toBeTruthy();
     expect(row.reachable).toBe(0); // far/ never imports logs/
     // A bare dst_name ("Errorf", from t.Errorf()) carries no qualifier, so the
-    // qualifier rule below does not touch it — it stays classified on bare-name
-    // candidates alone, same as before that rule existed.
-    expect(row.reason).toBe('ambiguous');
+    // `testing.T` types the receiver and is not a repo type, so the row is
+    // reported as `library`: refused, counted, and not listed as a place to grep.
+    expect(row.reason).toBe('library');
     store.close();
   }, 30000);
 

@@ -15,8 +15,12 @@ const write = (rel, src) => {
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'pg-gap-'));
   mkdirSync(join(dir, '.git')); mkdirSync(join(dir, '.pgraph'));
-  // ListGroups lives on two types and is called through an interface field, so
-  // the call site cannot be attributed and the graph must say so.
+  // ListGroups lives on two types and is called through an interface field. The
+  // call now resolves — to the INTERFACE method, which is what the source names —
+  // so it is no longer a gap for either concrete type. What each concrete type
+  // gets instead is the `ℹ … reach this method through …` line: the same warning,
+  // with the interface named. See interface-reach.test.ts for why that trade had
+  // to be made deliberately rather than allowed to happen.
   write('internal/store/pg.go', `package store
 type Store interface {
 	ListGroups() []string
@@ -41,10 +45,12 @@ describe('cli reports where the graph gave up', () => {
   it('warns after an empty callers list instead of implying there are none', () => {
     run(['index', '--full']);
     const text = run(['callers', 'store.Postgres.ListGroups']);
-    expect(text).toContain('1 call site missing from this answer');
+    expect(text).toContain('1 call site reach');
+    expect(text).toContain('through store.Store.ListGroups');
     expect(text).toContain('internal/api/server.go:6');
     expect(text).toContain('api.Server.HandleList -> ListGroups');
-    expect(text).toContain('Confirm with a text search');
+    // No grep to do: the graph named the interface, which a text search cannot.
+    expect(text).not.toContain('Confirm with a text search');
   }, 30000);
 
   it('carries the gaps in --json for callers, callees and impact', () => {
@@ -57,27 +63,33 @@ describe('cli reports where the graph gave up', () => {
       src_qname: 'api.Server.HandleList',
     });
 
+    // The call resolves now, so HandleList has a callee and no gap.
     const callees = JSON.parse(run(['callees', 'api.Server.HandleList', '--json']));
-    expect(callees.callees).toEqual([]);
-    expect(callees.gaps).toHaveLength(1);
-    expect(callees.gaps[0].dst_name).toBe('ListGroups');
+    expect(callees.callees.map((r) => r.qname)).toEqual(['store.Store.ListGroups']);
+    expect(callees.gaps).toEqual([]);
 
     const impact = JSON.parse(run(['impact', 'store.Postgres.ListGroups', '--json']));
     expect(impact.impact).toEqual([]);
     expect(impact.gaps).toHaveLength(1);
+    expect(impact.gaps[0].reason).toBe('interface');
   }, 30000);
 
   it('shows the unattributed share in status', () => {
     run(['index', '--full']);
-    expect(run(['status'])).toContain('unattributed calls 1/1');
-    expect(JSON.parse(run(['status', '--json'])).unresolved_calls).toBe(1);
+    // Nothing is unattributed any more: the one call reaches the interface method.
+    expect(run(['status'])).toContain('unattributed calls 0/1');
+    expect(JSON.parse(run(['status', '--json'])).unresolved_calls).toBe(0);
   }, 30000);
 
   it('says a missing trace path may be a gap, not proof of no path', () => {
     run(['index', '--full']);
+    // There is no static path to the CONCRETE method — the chain goes through the
+    // interface — and with nothing unattributed the note has no share to quote.
     const text = run(['trace', 'api.Server.HandleList', 'store.Postgres.ListGroups']);
     expect(text).toContain('no path');
-    expect(text).toContain('1/1');
+    // The path to the interface method is real and the trace finds it.
+    expect(run(['trace', 'api.Server.HandleList', 'store.Store.ListGroups']))
+      .toContain('store.Store.ListGroups');
   }, 30000);
 
   it('stays quiet when nothing was dropped', () => {
@@ -113,7 +125,9 @@ func TestB(t *testing.T) { t.Errorf("b") }
 `);
     run(['index', '--full']);
     const text = run(['callers', 'logs.Adapter.Errorf']);
-    expect(text).toContain('2 same-name call sites in files that do not import');
+    // `testing.T` types both receivers, so the graph can prove neither is the
+    // target: counted under the library line, not listed.
+    expect(text).toContain('2 call sites whose receiver the source types as a library type');
     expect(text).not.toContain('far/far_test.go:3');   // counted, not listed
     expect(text).not.toContain('far/far_test.go:4');
   }, 30000);
@@ -126,7 +140,11 @@ func Do() { fmt.Println("x") }
     run(['index', '--full']);
     const text = run(['callees', 'svc.Do']);
     expect(text).toContain('1 call the graph found nothing to link to');
-    expect(text).not.toContain('svc/svc.go:3');
+    // Counted, not listed: no gap row for it. Asserted against the gap-row
+    // shape (four spaces, then file:line) rather than the bare path — the
+    // header line names svc.Do's own definition, which is a different claim.
+    expect(text).not.toMatch(/^ {4}svc\/svc\.go:3\b/m);
+    expect(text).not.toContain('call sites missing from this answer');
   }, 30000);
 
   it('does not claim a repo-type conversion "leaves the repo" — it never left', () => {
@@ -189,12 +207,16 @@ type X struct{}
 func (x *X) Mid() { CallsRoot() }
 func CallsRoot() { a.Root() }
 `);
-    // A same-name (ambiguous) call to "Mid" in package b itself — through an
-    // interface field, so it stays unresolved. Package c gives "Mid" a second
-    // repo candidate so the bare name is not unique and Pass B cannot resolve it.
+    // A same-name (ambiguous) call to "Mid" in package b itself. The receiver is a
+    // field of a THIRD-PARTY type: the source states a type, so the bare-name
+    // fallback is refused, and no repo symbol carries it, so nothing resolves.
+    // (An interface field used to do this job. It no longer does — an interface
+    // method is a symbol now and the call lands on it — and this test is about how
+    // a frontier gap is SCORED, not about interfaces.) Package c gives "Mid" a
+    // second repo candidate so the bare name is not unique either.
     write('b/caller.go', `package b
-type Iface interface { Mid() }
-type Caller struct { v Iface }
+import "github.com/third/ext"
+type Caller struct { v ext.Thing }
 func (c *Caller) DoMid() { c.v.Mid() }
 `);
     write('c/c.go', `package c
