@@ -96,6 +96,19 @@ A local code knowledge graph with a bundled `pgraph` CLI. Indexes the project (T
 
 Why it matters: `impact` returns the whole transitive set in one small answer, including callers that never mention the symbol's name and so are invisible to grep. Ambiguous names stay unresolved rather than linked to a guess, so the graph never invents an edge. Queries refresh the changed files first, so day-to-day freshness needs no manual sync.
 
+Measured against a grep-only agent on seven public repos, 19 structural questions, three runs a side:
+
+| Language | Repos | Call sites found, grep / p-graph | Invented | Cost, grep / p-graph | Cost gap |
+|---|---|---|---|---|---|
+| Go | hugo, caddy, gin | 331 of 336 / **334 of 336** | 51 / **17** | $0.300 / **$0.251** | **−16%** |
+| Python | flask, requests, httpx | 135 of 135 / 135 of 135 | 0 / 0 | $0.184 / $0.180 | −2% |
+| C++ | leveldb, re2, spdlog | 476 of 480 / **477 of 480** | 0 / 0 | **$0.301** / $0.327 | **+9%** |
+| TypeScript | nest, got, axios | **459 of 459** / 446 of 459 | **0** / 2 | $0.177 / $0.171 | −3% |
+
+Every row of every language is in the plugin's own
+[README](./plugins/p-graph/README.md#every-row-per-language); how it was measured, and every pass that
+went the other way, is in [docs/measured-benefit.md](./plugins/p-graph/docs/measured-benefit.md).
+
 Requires Node ≥ 22.5 (built-in `node:sqlite`).
 
 Skills: `init`, `sync`, `query`, `help`.
