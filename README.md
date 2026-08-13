@@ -96,14 +96,31 @@ A local code knowledge graph with a bundled `pgraph` CLI. Indexes the project (T
 
 Why it matters: `impact` returns the whole transitive set in one small answer, including callers that never mention the symbol's name and so are invisible to grep. Ambiguous names stay unresolved rather than linked to a guess, so the graph never invents an edge. Queries refresh the changed files first, so day-to-day freshness needs no manual sync.
 
-Measured against a grep-only agent on seven public repos, 19 structural questions, three runs a side:
+**It pays off on a big repository, and not on a small one.** That is the clearest thing the measurement
+says. On the eleven questions that follow the calls — "what breaks if I change X", "how does X reach
+Y" — split by how big the repository is:
+
+| | cost | time | steps | call sites invented |
+|---|---|---|---|---|
+| gin 80 files, leveldb 132, flask, requests | grep **25% cheaper** | grep **55% faster** | grep **18% fewer** | 12 → **5** |
+| caddy 325 files, hugo 905 | p-graph **52% cheaper** | p-graph **55% faster** | p-graph **63% fewer** | 24 → **3** |
+
+Accuracy goes p-graph's way in both; money and time only above some size between leveldb (132 files,
+9k call edges) and caddy (326 files, 24k). Both big points are Go, so that threshold is a Go result —
+Python and C++ have no follow-the-calls question on a big repository, and TypeScript has none at all.
+On hugo one question ran $1.06 against $0.30 and 27 steps against 7.7 — and grep invented 21 call
+sites against 15 real ones, because a text search returns occurrences and working out what each one
+meant is where the money goes.
+
+Measured against a grep-only agent on twelve public repos, 42 structural questions, three runs a side.
+On the thirty "who calls X" questions, which is the shape grep is best at:
 
 | Language | Repos | Call sites found, grep / p-graph | Invented | Cost, grep / p-graph | Cost gap |
 |---|---|---|---|---|---|
 | Go | hugo, caddy, gin | 331 of 336 / **334 of 336** | 51 / **17** | $0.300 / **$0.251** | **−16%** |
-| Python | flask, requests, httpx | 135 of 135 / 135 of 135 | 0 / 0 | $0.184 / $0.180 | −2% |
+| Python | flask, requests, httpx | 135 of 135 / 135 of 135 | 0 / 0 | $0.181 / **$0.171** | **−5%** |
 | C++ | leveldb, re2, spdlog | 476 of 480 / **477 of 480** | 0 / 0 | **$0.301** / $0.327 | **+9%** |
-| TypeScript | nest, got, axios | **459 of 459** / 446 of 459 | **0** / 2 | $0.177 / $0.171 | −3% |
+| TypeScript | nest, got, axios | **459 of 459** / 446 of 459 | **0** / 2 | $0.166 / **$0.155** | **−7%** |
 
 Every row of every language is in the plugin's own
 [README](./plugins/p-graph/README.md#every-row-per-language); how it was measured, and every pass that

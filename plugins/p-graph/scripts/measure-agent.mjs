@@ -644,6 +644,184 @@ const QUESTIONS = [
     question: 'The signature of the function `GetBuffer` in the `bufferpool` package is about to change. Which functions in this repository would have to be updated, including the ones affected only indirectly? Give file paths and line numbers.',
     truth: null,
   },
+
+  // ---------------------------------------------------------------------------
+  // Questions that are NOT "list every call site".
+  //
+  // Thirty of the thirty-one questions above are one shape, and it is the shape
+  // grep is best at. The question a graph exists for — follow the calls — was
+  // asked once and could not be scored. These are that shape, scored.
+  //
+  // How the truth was built, and why there are not more of them. Every list
+  // below was walked by hand with grep, one name at a time, and every hop was
+  // read in the source. That is slow, and worse, it is unreliable for exactly
+  // the reason p-graph exists: a bare-name walk through leveldb's `Evict` came
+  // back with 52 "callers" and through `UpdateStats` with 116, nearly all of
+  // them different methods that share a name. So the targets here were chosen
+  // to make the truth PROVABLE, not to make the questions hard:
+  //   - the target's name is unique in the repository, so grep cannot conflate
+  //     it with an overload;
+  //   - the chain closes within a few hops, or the question names its own
+  //     bound ("and every function that calls those");
+  //   - test files, examples and benchmarks are out, and the question says so.
+  // A target whose chain runs through a common name — an interface method, a
+  // constructor, `Get`, `Next`, `Seek` — has no truth this method can settle,
+  // and none was included on a guess.
+  //
+  // Scored exactly like the recall questions: a claimed `file:line` counts for
+  // a function when it lands between that function's first line and the line
+  // where it makes the call. Naming the function and naming the call both count.
+  {
+    // Six functions, five hops, one chain, and every name on it is unique in
+    // the repo. grep has to walk it a name at a time; the graph is one call.
+    id: 'gin-readnthline-impact', repo: 'gin', lang: 'Go', kind: 'reach',
+    question: 'The signature of the function `readNthLine` is about to change. Which functions in this repository would have to be updated — including the ones that reach it only indirectly, through other functions? Ignore test files and the examples directory. Give the file path and line number of each.',
+    // Each pair is a whole function: its first line to its closing brace, so a
+    // claim that names the function and a claim that names the call both count.
+    //   stack 119-145, CustomRecoveryWithWriter 53-92, RecoveryWithWriter 45-50,
+    //   Recovery 35-37, CustomRecovery 40-42, Default gin.go 236-241.
+    truth: [
+      ...T('recovery.go', [[145, 119], [92, 53], [50, 45], [37, 35], [42, 40]]),
+      ...T('gin.go', [[241, 236]]),
+    ],
+    neutral: [N('recovery.go', 147, 174)],
+  },
+  {
+    // Four functions, three hops, all in one file — the small end of the shape,
+    // kept because it is the size a real question usually is.
+    id: 'gin-authheader-impact', repo: 'gin', lang: 'Go', kind: 'reach',
+    question: 'The signature of the function `authorizationHeader` is about to change. Which functions in this repository would have to be updated, including the ones that reach it only indirectly? Ignore test files. Give the file path and line number of each.',
+    truth: [
+      // processAccounts 76-89, BasicAuthForRealm 48-68, BasicAuthForProxy 98-116,
+      // BasicAuth 72-74.
+      ...T('auth.go', [[89, 76], [68, 48], [116, 98], [74, 72]]),
+    ],
+    neutral: [N('auth.go', 91, 94)],
+  },
+  {
+    // Python, and the chain runs through two properties, which is the shape
+    // that makes a text search awkward: `self.host` is not written `get_host`.
+    id: 'requests-gethost-impact', repo: 'requests', lang: 'Python', kind: 'reach',
+    question: 'The method `get_host` of the `MockRequest` class is about to change. Which methods in this repository would have to be updated, including the ones that reach it only indirectly? Ignore test files. Give the file path and line number of each.',
+    truth: [
+      // get_origin_req_host 57-58, host 110-111, origin_req_host 106-107.
+      ...T('src/requests/cookies.py', [[58, 57], [111, 110], [107, 106]]),
+    ],
+    neutral: [N('src/requests/cookies.py', 53, 54)],
+  },
+  {
+    // The bound is in the question, because the chain does not close: above
+    // `get_source` it is Jinja calling into the loader, not this repo.
+    id: 'flask-explaintemplate-impact', repo: 'flask', lang: 'Python', kind: 'reach',
+    question: 'The signature of the function `explain_template_loading_attempts` is about to change. Which functions in this repository call it, and which functions call those? Two levels. Ignore test files. Give the file path and line number of each.',
+    truth: [
+      ...T('src/flask/templating.py', [[82, 64], [61, 57]]),
+    ],
+    neutral: [N('src/flask/debughelpers.py', 124, 160)],
+  },
+
+  // The same shape on a BIG repository, which is the whole point of these two.
+  // The nine questions above sit on gin (80 files), leveldb (132), flask and
+  // requests. On those, grep walks a chain by reading two or three files and the
+  // graph's fixed cost — a query plus a banner — does not pay itself back. The
+  // one transitive question this study had before was on hugo, thousands of
+  // files, and there the graph was half the cost and a seventh of the steps.
+  // So the suspicion is that the win scales with the SIZE of the repository, not
+  // with the shape of the question. These two test it: same shape, same scoring,
+  // 325 files and 905 files.
+  //
+  // Both are bounded to one package, and the bound is in the question. Without
+  // it the chain leaves the package through an exported name and the truth would
+  // be a list I cannot close — which would score a correct answer as invented.
+  {
+    id: 'caddy-addnode-impact', repo: 'caddy', lang: 'Go', kind: 'reach',
+    question: 'The signature of the method `addNode` on `importGraph` is about to change. Which functions in the `caddyconfig/caddyfile` package would have to be updated, including the ones that reach it only indirectly? Ignore test files. Give the file path and line number of each.',
+    truth: [
+      // addNodes 39-44. Everything else is in parse.go: doImport 356-587,
+      // addresses 210-292, directives 320-355, directive 636-686, begin 146-209,
+      // blockContents 293-319, parseOne 141-145, parseAll 122-140, Parse 39-58.
+      ...T('caddyconfig/caddyfile/importgraph.go', [[44, 39]]),
+      ...T('caddyconfig/caddyfile/parse.go', [[587, 356], [292, 210], [355, 320],
+        [686, 636], [209, 146], [319, 293], [145, 141], [140, 122], [58, 39]]),
+    ],
+    neutral: [N('caddyconfig/caddyfile/importgraph.go', 29, 38)],
+  },
+  {
+    id: 'hugo-isgitmodule-impact', repo: 'hugo', lang: 'Go', kind: 'reach',
+    question: 'The signature of the function `isGitModule` is about to change. Which functions in the `hugolib` package would have to be updated, including the ones that reach it only indirectly? Ignore test files and ignore `integrationtest_builder.go`. Give the file path and line number of each.',
+    truth: [
+      // newGitInfo 110-159, loadModuleRepos 160-187, loadGitInfo 546-571,
+      // newHugoSites 462-625, NewHugoSites 199-461.
+      ...T('hugolib/gitinfo.go', [[159, 110], [187, 160]]),
+      ...T('hugolib/hugo_sites.go', [[571, 546]]),
+      ...T('hugolib/site.go', [[625, 462], [461, 199]]),
+    ],
+    neutral: [N('hugolib/gitinfo.go', 98, 109)],
+  },
+
+  // --- "how does X reach Y" ---------------------------------------------------
+  // A path, not a set. grep has to guess the middle; the graph has `trace`.
+  {
+    id: 'gin-trace-default-readnthline', repo: 'gin', lang: 'Go', kind: 'trace',
+    question: 'Show the chain of calls that leads from the function `Default` to the function `readNthLine` in this repository. Name every function on the path, with its file and line number. Ignore test files.',
+    truth: [
+      ...T('gin.go', [[241, 236]]),
+      ...T('recovery.go', [[37, 35], [50, 45], [92, 53], [145, 119], [174, 151]]),
+    ],
+    neutral: [],
+  },
+  {
+    id: 'gin-trace-basicauth-authheader', repo: 'gin', lang: 'Go', kind: 'trace',
+    question: 'Show the chain of calls that leads from the function `BasicAuth` to the function `authorizationHeader` in this repository. Name every function on the path, with its file and line number. Ignore test files.',
+    truth: [
+      ...T('auth.go', [[74, 72], [68, 48], [89, 76], [94, 91]]),
+    ],
+    neutral: [],
+  },
+  {
+    // C++, and the middle of the path is a method whose name appears once, so
+    // the truth is settled. The two ends are not: `Open` and `Evict` are both
+    // written on several classes, which is what makes the question worth asking.
+    id: 'leveldb-trace-open-evict', repo: 'leveldb', lang: 'C++', kind: 'trace',
+    question: 'Show the chain of calls that leads from `leveldb::DB::Open` to `leveldb::TableCache::Evict` in this repository. Name every function on the path, with its file and line number. Ignore test files.',
+    truth: [
+      // DB::Open 1503-1544, DBImpl::RemoveObsoleteFiles 225-290, Evict 114-118.
+      ...T('db/db_impl.cc', [[1544, 1503], [290, 225]]),
+      ...T('db/table_cache.cc', [[118, 114]]),
+    ],
+    neutral: [],
+  },
+
+  // --- "what does this end up calling" ---------------------------------------
+  // The other direction, never asked before. grep must read each body in turn.
+  {
+    id: 'gin-recovery-callees', repo: 'gin', lang: 'Go', kind: 'callees',
+    question: 'Starting from the function `Recovery`, which functions defined in the file recovery.go does it end up calling — directly or through other functions? Give the file path and line number of each.',
+    truth: [
+      // RecoveryWithWriter 45-50, CustomRecoveryWithWriter 53-92,
+      // defaultHandleRecovery 109-116, secureRequestDump 98-107,
+      // timeFormat 202-204, stack 119-145, readNthLine 151-174, function 177-199.
+      // `IsDebugging` is reached too and is deliberately NOT here: it lives in
+      // mode.go, and the question is bounded to this file so the set is closed.
+      ...T('recovery.go', [[50, 45], [92, 53], [116, 109], [107, 98], [204, 202],
+        [145, 119], [174, 151], [199, 177]]),
+    ],
+    neutral: [N('recovery.go', 35, 37)],
+  },
+
+  // --- "is this still used" ---------------------------------------------------
+  // The question asked before deleting something. The trap question above asks
+  // it where the answer is "nothing"; this asks it where the answer is "yes,
+  // twice, and both are in one function" — which is the harder answer to trust.
+  {
+    id: 'gin-securerequestdump-usage', repo: 'gin', lang: 'Go', kind: 'usage',
+    question: 'Is the function `secureRequestDump` used anywhere in this repository outside test files? If it is, give the file path and line number of every use. If it is not, say so.',
+    truth: [
+      // Both uses sit inside CustomRecoveryWithWriter, 53-92.
+      ...T('recovery.go', [[75, 53], [72, 53]]),
+    ],
+    neutral: [N('recovery.go', 94, 107)],
+  },
 ];
 
 const args = process.argv.slice(2);
@@ -937,7 +1115,10 @@ function doScore() {
   console.log('\n== by language, the list questions ==\n');
   const byLang = new Map();
   for (const q of QUESTIONS) {
-    if (q.kind === 'impact' || !q.truth?.length) continue;
+    // Only the "list every call site" questions. The transitive, trace, callees
+    // and usage questions are a different shape and are reported apart, so that
+    // adding them cannot quietly move a per-language number this page published.
+    if (q.kind !== 'recall' || !q.truth?.length) continue;
     if (!byLang.has(q.lang)) byLang.set(q.lang, []);
     byLang.get(q.lang).push(q.id);
   }
@@ -999,7 +1180,9 @@ function noise() {
   // an empty answer is the correct one, and that is the question a graph is
   // most likely to get wrong. The impact question is a different shape and is
   // reported on its own.
-  const list = QUESTIONS.filter((q) => q.kind !== 'impact');
+  // The noise floor is quoted for the "who calls X" set and nothing else, so
+  // the number stays comparable with every earlier pass of this page.
+  const list = QUESTIONS.filter((q) => q.kind === 'recall' || q.kind === 'trap');
   const mean = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0);
   const sd = (xs) => {
     if (xs.length < 2) return 0;
@@ -1044,6 +1227,56 @@ function noise() {
     return `${rs.filter((r) => LIMITS.test(r.answer)).length} of ${rs.length}`;
   };
   console.log(`\nanswers that flag their own limits — grep ${flags('base')}, p-graph ${flags('graph')}`);
+}
+
+// The questions that are not "list every call site": follow the calls forward,
+// follow them back, show the path, is it still used. Reported apart from the
+// recall set on purpose — they are a different shape, and mixing them would
+// move a per-language number that earlier passes of this page published.
+function followTheCalls() {
+  const scored = JSON.parse(readFileSync(join(work, 'scored.json'), 'utf-8'));
+  const kinds = ['reach', 'trace', 'callees', 'usage', 'impact'];
+  const qs = QUESTIONS.filter((q) => kinds.includes(q.kind));
+  if (!qs.length) return;
+  const mean = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0);
+  console.log(`\n== the ${qs.length} questions that follow the calls ==\n`);
+  const rows = qs.map((q) => {
+    const side = (arm) => {
+      const rs = scored.filter((r) => r.arm === arm && r.id === q.id);
+      return {
+        found: rs.reduce((a, r) => a + r.found, 0),
+        of: rs.reduce((a, r) => a + r.of, 0),
+        wrong: rs.reduce((a, r) => a + r.wrong, 0),
+        cost: mean(rs.map((r) => r.cost_usd ?? 0)),
+        sec: mean(rs.map((r) => (r.duration_ms ?? 0) / 1000)),
+        turns: mean(rs.map((r) => r.num_turns ?? 0)),
+      };
+    };
+    const b = side('base'); const g = side('graph');
+    return [q.id, q.kind, q.lang, String(q.truth?.length ?? '-'),
+      q.truth?.length ? `${b.found}/${b.of} · ${g.found}/${g.of}` : '- · -',
+      `${b.wrong} · ${g.wrong}`,
+      `${b.cost.toFixed(2)} · ${g.cost.toFixed(2)}`,
+      `${b.sec.toFixed(0)} · ${g.sec.toFixed(0)}`,
+      `${b.turns.toFixed(1)} · ${g.turns.toFixed(1)}`];
+  });
+  const head = ['question', 'kind', 'lang', 'truth', 'found grep · p-graph', 'wrong',
+    '$ grep · p-graph', 's grep · p-graph', 'turns grep · p-graph'];
+  const w = head.map((h, i) => Math.max(h.length, ...rows.map((r) => r[i].length)));
+  const line = (c) => c.map((x, i) => x.padEnd(w[i])).join('  ');
+  console.log(line(head));
+  console.log(w.map((n) => '-'.repeat(n)).join('  '));
+  rows.forEach((r) => console.log(line(r)));
+
+  const ids = new Set(qs.filter((q) => q.truth?.length).map((q) => q.id));
+  const side = (arm) => scored.filter((r) => r.arm === arm && ids.has(r.id));
+  const sum = (rs, k) => rs.reduce((a, r) => a + r[k], 0);
+  const b = side('base'); const g = side('graph');
+  if (b.length && g.length) {
+    console.log(`\nscored ones together — found ${sum(b, 'found')}/${sum(b, 'of')} against ${sum(g, 'found')}/${sum(g, 'of')}`
+      + `, invented ${sum(b, 'wrong')} against ${sum(g, 'wrong')}`
+      + `, ${(sum(b, 'num_turns') / b.length || 0).toFixed(1)} steps against ${(sum(g, 'num_turns') / g.length || 0).toFixed(1)}`);
+  }
 }
 
 function transcriptIndex() {
@@ -1091,10 +1324,10 @@ function byLanguage() {
   const scored = JSON.parse(readFileSync(join(work, 'scored.json'), 'utf-8'));
   const index = transcriptIndex();
   const mean = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0);
-  const langs = [...new Set(QUESTIONS.filter((q) => q.truth?.length).map((q) => q.lang))];
+  const langs = [...new Set(QUESTIONS.filter((q) => q.kind === 'recall' && q.truth?.length).map((q) => q.lang))];
 
   for (const lang of langs) {
-    const qs = QUESTIONS.filter((q) => q.lang === lang && q.truth?.length);
+    const qs = QUESTIONS.filter((q) => q.lang === lang && q.kind === 'recall' && q.truth?.length);
     console.log(`\n== ${lang} ==\n`);
     const rows = qs.map((q) => {
       const side = (arm) => {
@@ -1164,8 +1397,8 @@ function boxes() {
     return `${d >= 0 ? '+' : ''}${d.toFixed(0)}%`;
   };
 
-  for (const lang of [...new Set(QUESTIONS.filter((q) => q.truth?.length).map((q) => q.lang))]) {
-    const qs = QUESTIONS.filter((q) => q.lang === lang && q.truth?.length);
+  for (const lang of [...new Set(QUESTIONS.filter((q) => q.kind === 'recall' && q.truth?.length).map((q) => q.lang))]) {
+    const qs = QUESTIONS.filter((q) => q.lang === lang && q.kind === 'recall' && q.truth?.length);
     const ids = qs.map((q) => q.id);
     const impactQ = QUESTIONS.find((q) => q.lang === lang && q.kind === 'impact');
     const runsOf = (arm, list) => scored.filter((r) => r.arm === arm && list.includes(r.id));
@@ -1323,7 +1556,7 @@ function toolUse() {
   console.log('column to read for cost. An extra step is paid for by re-reading, not by writing.');
 }
 
-if (flag('score')) { doScore(); noise(); toolUse(); byLanguage(); boxes(); }
+if (flag('score')) { doScore(); noise(); followTheCalls(); toolUse(); byLanguage(); boxes(); }
 else if (phase === 'base' || phase === 'graph') { await runArm(String(phase)); }
 else {
   console.log('use --phase base | --phase graph | --score');

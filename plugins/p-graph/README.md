@@ -43,7 +43,7 @@ After edits, run `/reload-plugins` inside Claude Code to pick them up without re
 | C++ | `.cpp` `.cc` `.cxx` `.h` `.hpp` |
 | Python | `.py` |
 
-Every language now has a type table: `pgraph` records the type the source writes next to a name and checks a call against it. Go and C++ are the most complete, TypeScript came last, and Python reads only a name bound to a constructor. What is left over is a guess — see [Name resolution](#name-resolution).
+Every language now has a type table: `pgraph` records the type the source writes next to a name and checks a call against it. Go and C++ are the most complete. Python reads parameter, variable and field annotations, `-> T` on a def, an `@property` getter's return type, a name bound to a constructor, and `with C() as x`. A plain `.js` file has no annotations to read, but a name bound to `new C()` is read there too — until recently nothing in a `.js` file was. What is left over is a guess — see [Name resolution](#name-resolution).
 
 **C++ is narrower than the other three.** It indexes a method defined outside its class (`bool Table::Save(int id) { … }` in the `.cc`, `class Table` in the `.h`), and it resolves both a call written `Class::method(...)` and a plain `method(...)` written inside the class or namespace that owns it — the lookup walks outward the way C++ does. Ask for a symbol however C++ writes it: `Table::Save`, `ns::Table::Save`, or just `Save`. On leveldb's `WriteBatchInternal::Count`, `callers` gives 11 rows, all correct, with nothing missing.
 
@@ -340,35 +340,71 @@ The graph is purely local — there is no remote service, no MCP server, and no 
 
 ## Measured benefit
 
-[`docs/measured-benefit.md`](./docs/measured-benefit.md) runs the contest: the same 31 structural
+[`docs/measured-benefit.md`](./docs/measured-benefit.md) runs the contest: the same 42 structural
 questions put to the same agent twice — once with nothing but `grep` and `Read`, once with p-graph
-installed. **Twelve public repos, three per language**, 186 runs in the current set.
+installed. **Twelve public repos, three per language**, 252 runs in the current set.
 
-**Two things hold up. p-graph invents a third as many call sites, and it tells you when it might be
-short. On price there is no difference.**
+**The plugin pays for itself on a big repository, and not on a small one.** On the eleven questions
+that follow the calls — "what breaks if I change X", "how does X reach Y" — split by repository size:
+
+| | cost | time | steps | call sites invented |
+|---|---|---|---|---|
+| gin 80 files, leveldb 132, flask, requests | grep **25% cheaper** | grep **55% faster** | grep **18% fewer** | 12 → **5** |
+| caddy 325 files, hugo 905 | p-graph **52% cheaper** | p-graph **55% faster** | p-graph **63% fewer** | 24 → **3** |
+
+Accuracy goes p-graph's way in both; money and time only above some size between leveldb (132 files,
+9k call edges) and caddy (326 files, 24k). Both big points are Go, so that threshold is a Go result —
+Python and C++ have no follow-the-calls question on a big repository, and TypeScript has none at all.
+The single hugo question ran **$1.06 against $0.30**, 27 steps against 7.7, and grep invented 21 call
+sites against 15 real ones. On a small repository the chain often lives in one file: grep opens it
+once and sees everything, while the graph pays a query per hop.
+
+Sizes, read out of each repository's own graph:
+
+| Repository | Language | Files | Symbols | Call edges |
+|---|---|---:|---:|---:|
+| nest | TypeScript | 1,728 | 13,037 | 38,315 |
+| **hugo** | Go | **930** | 10,314 | 55,499 |
+| **caddy** | Go | **326** | 3,656 | 23,642 |
+| axios | JavaScript | 240 | 3,462 | 14,343 |
+| spdlog | C++ | 152 | 2,563 | 8,239 |
+| **leveldb** | C++ | **132** | 2,155 | 9,241 |
+| **gin** | Go | **99** | 1,552 | 9,191 |
+| re2 | C++ | 89 | 1,760 | 8,273 |
+| got | TypeScript | 85 | 3,505 | 14,329 |
+| **flask** | Python | **83** | 1,619 | 3,905 |
+| httpx | Python | 60 | 1,241 | 4,188 |
+| **requests** | Python | 37 | 807 | 2,684 |
+
+Bold rows carry the split. **Both big points are Go**, so the threshold is a Go result: Python and C++
+have no follow-the-calls question on a big repository, and TypeScript has none of that shape at all.
+
+On the thirty "who calls X" questions, which is the shape grep is best at, two things hold up:
+**p-graph invents a third as many call sites, and it tells you when it might be short. On price there
+is no difference.**
 
 | What was measured | grep | p-graph | Gap | Verdict |
 |---|---|---|---|---|
 | "who calls X" — call sites found | **1401 of 1410** | 1392 of 1410 | −9 | **grep** |
 | "who calls X" — call sites invented | 51 | **19** | −63% | **p-graph** |
-| "who calls X" — cost per question | $0.241 | $0.239 | −1% (0.1 SE) | **noise** |
-| "who calls X" — time per question | 44.5 s | 44.6 s | +0% (0.0 SE) | **noise** |
-| "who calls X" — steps per question | 7.6 | 7.3 | −4% (0.6 SE) | **noise** |
-| "who calls X" — context read back | **632k** | 679k | +7% | **grep** |
-| "who calls X" — text searches | 3.7 | **1.9** | −49% | **p-graph** |
+| "who calls X" — cost per question | $0.238 | $0.233 | −2% (0.3 SE) | **noise** |
+| "who calls X" — time per question | 44.0 s | 42.0 s | −5% (0.5 SE) | **noise** |
+| "who calls X" — steps per question | 7.7 | **6.6** | −14% (**2.6 SE**) | **p-graph** |
+| "who calls X" — context read back | **627k** | 638k | +2% | **grep** |
+| "who calls X" — text searches | 3.7 | **1.6** | −57% | **p-graph** |
 | "what breaks if X changes" — cost | $0.86 | **$0.42** | −51% | **p-graph** |
 | "what breaks if X changes" — time | 237 s | **91 s** | −62% | **p-graph** |
 | "what breaks if X changes" — steps | 50 | **7** | −85% | **p-graph** |
-| Answers that admit their own limits | 8% (7/93) | **45% (42/93)** | +37 pts | **p-graph** |
+| Answers that admit their own limits | 4% (4/93) | **44% (41/93)** | +40 pts | **p-graph** |
 
 Per language — three repositories each:
 
 | Language | Repos | Call sites found, grep / p-graph | Invented | Cost, grep / p-graph | Cost gap |
 |---|---|---|---|---|---|
 | Go | hugo, caddy, gin | 331 of 336 / **334 of 336** | 51 / **17** | $0.300 / **$0.251** | **−16%** |
-| Python | flask, requests, httpx | 135 of 135 / 135 of 135 | 0 / 0 | $0.184 / $0.180 | −2% |
+| Python | flask, requests, httpx | 135 of 135 / 135 of 135 | 0 / 0 | $0.181 / **$0.171** | **−5%** |
 | C++ | leveldb, re2, spdlog | 476 of 480 / **477 of 480** | 0 / 0 | **$0.301** / $0.327 | **+9%** |
-| TypeScript | nest, got, axios | **459 of 459** / 446 of 459 | **0** / 2 | $0.177 / $0.171 | −3% |
+| TypeScript | nest, got, axios | **459 of 459** / 446 of 459 | **0** / 2 | $0.166 / **$0.155** | **−7%** |
 
 **noise** means the gap is under two standard errors. **tie** means the same number on both sides.
 
@@ -415,15 +451,20 @@ p-graph's answers list far more call sites, because they list them right.
 |---|---|---|---|---|
 | "who calls X" — call sites found | 135 of 135 | 135 of 135 | +0% | tie |
 | "who calls X" — call sites invented | 0 | 0 | 0% | tie |
-| "who calls X" — cost | $0.184 | $0.180 | −2% | tie |
-| "who calls X" — time | 31 s | 32 s | +3% | tie |
-| "who calls X" — tool calls | **4.3** | 4.8 | +12% | grep |
-| "who calls X" — output tokens / context read | **3,168 / 386k** | 5,538 / 433k | +75% / +12% | grep |
-| "who calls X" — text searches | 3.1 | **1.3** | −59% | **p-graph** |
-| Answers that admit their own limits | 20% (3/15) | **40% (6/15)** | +20 pts | **p-graph** |
+| "who calls X" — cost | $0.181 | **$0.171** | −5% | **p-graph** |
+| "who calls X" — time | 34 s | **30 s** | −12% | **p-graph** |
+| "who calls X" — tool calls | 4.0 | **3.5** | −13% | **p-graph** |
+| "who calls X" — output tokens / context read | **2,979** / 365k | 4,029 / **352k** | +35% / −4% | grep |
+| "who calls X" — text searches | 2.6 | **0.6** | −77% | **p-graph** |
+| Answers that admit their own limits | 0% (0/15) | **47% (7/15)** | +47 pts | **p-graph** |
 
-Python is the one language where the graph reads no types at all — flask and requests carry almost no
-annotations, and every type row in those two graphs is a dead-end marker. The result is an honest tie.
+Python used to be a tie, because the graph read none of the types Python writes. It now reads them —
+parameter, variable and field annotations, `-> T`, `@property`, `with C() as x` — and it won every row
+it can win. Member calls resolved with certainty went 20.8% → 31.2% on httpx and 17.4% → 21.1% on
+requests. `callers "Cookies.set"` used to print seven rows to go and grep for, none of which was a
+call of `Cookies.set`; it now prints none. Read the cost and time gaps against the noise floor: at
+five questions they are a fraction of a standard error. The search row and the banners are the real
+change.
 
 **C++** — leveldb, re2, spdlog
 
@@ -448,26 +489,37 @@ it: `re2::Prog::size` runs $1.46 against $1.11. Five fixes this round took the c
 |---|---|---|---|---|
 | "who calls X" — call sites found | **459 of 459** | 446 of 459 | −3% | grep |
 | "who calls X" — call sites invented | **0** | 2 | — | grep |
-| "who calls X" — cost | $0.177 | $0.171 | −3% | tie |
-| "who calls X" — time | **29 s** | 32 s | +12% | grep |
-| "who calls X" — tool calls | **4.5** | 4.8 | +7% | grep |
-| "who calls X" — output tokens / context read | **4,610 / 355k** | 6,304 / 406k | +37% / +14% | grep |
-| "who calls X" — text searches | 2.3 | **1.2** | −49% | **p-graph** |
-| Answers that admit their own limits | 0% (0/27) | **48% (13/27)** | +48 pts | **p-graph** |
+| "who calls X" — cost | $0.166 | **$0.155** | −7% | **p-graph** |
+| "who calls X" — time | 25 s | 25 s | −3% | tie |
+| "who calls X" — tool calls | 4.8 | **3.2** | −33% | **p-graph** |
+| "who calls X" — output tokens / context read | 4,827 / 353k | **3,672 / 316k** | −24% / −11% | **p-graph** |
+| "who calls X" — text searches | 2.7 | **0.3** | −89% | **p-graph** |
+| Answers that admit their own limits | 0% (0/27) | **41% (11/27)** | +41 pts | **p-graph** |
 
-Every one of the 13 missed call sites is in axios, which is plain JavaScript. With no annotations to
-read, `AxiosHeaders.has` degrades to matching by name: the answer mixes true call sites and calls on a
-`Set` into one UNVERIFIED block, and the agent drops real ones along with the false. nest and got, both
-written in TypeScript, are level with grep on every question.
+TypeScript used to lose steps, tokens and context. Two rounds fixed it. The first was not "JavaScript
+has no annotations" — it was that `js.scm` had no rule for a variable at all, so in a `.js` file
+p-graph recorded no binding and no type, and every receiver became a bare-name guess. axios is 191
+`.js` files against 23 `.ts`, and it had **9 of 7,940 member calls resolved with certainty — 0.1%**.
+The second found that TypeScript's **return types were never read either** — all three graphs held
+zero `#ret` rows — that a call on an imported name (`Test.createTestingModule(...)`) was guessed at a
+repo symbol 264 times in nest, and that a constructor parameter property was skipped whenever a
+decorator came first, which in nest is nearly always.
+
+`callers "AxiosHeaders.has"` went from 0 certain rows and 18 guesses to 11 certain rows covering 24
+call sites, and its run from 12.7 steps to 6.7. nest's guesses went 906 → 630.
+
+Recall did not move: 10 of the 13 missed sites are still `AxiosHeaders.has` and 3 are `Options.merge`
+in got. In both the graph's own answer is now right and the agent under-reports it — see
+[docs/measured-benefit.md](docs/measured-benefit.md).
 
 Every table comes from `measure-agent.mjs --score`. Re-make them with the commands in
 [docs/measured-benefit.md](docs/measured-benefit.md#run-it-again).
 
 C++ is where the gap is widest, and it was the other way round two rounds ago. Reading the type the
-source writes on a receiver took leveldb's guesses from 58% of resolved edges to 5%. TypeScript was
-the last language where p-graph lost — +9% cost, +13% tool calls — and reading the type written on a
-class field turned that into −18% cost and −52% tool calls, with nest's certain `x.m()` rows going
-2,819 → 3,750. See [docs/measured-benefit.md](docs/measured-benefit.md).
+source writes on a receiver took leveldb's guesses from 58% of resolved edges to 5%. The same fix in
+TypeScript — reading the type written on a class field — took nest's certain `x.m()` rows from 2,819
+to 3,750 and made TypeScript win every row on the repositories measured at the time; adding axios
+later took that win back. See [docs/measured-benefit.md](docs/measured-benefit.md).
 
 The first pass did not read like that: p-graph was 48% dearer and 59% slower, because `callers`
 returned caller *functions* and not call *sites* — 0 of 32 of the lines the question asked for — so
