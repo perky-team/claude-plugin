@@ -822,6 +822,258 @@ const QUESTIONS = [
     ],
     neutral: [N('recovery.go', 94, 107)],
   },
+
+  // --- the two big repositories ----------------------------------------------
+  // Added because the size split could not be read per language. Every "big"
+  // point the study had was Go — caddy and hugo — so "p-graph pays off above
+  // some size" was a Go claim wearing a general coat. C++ and Python had no
+  // repository above the line at all: the largest were spdlog at 152 files and
+  // flask at 83, against caddy's 326.
+  //
+  // rocksdb and django clear it and then some, read out of their own graphs:
+  // rocksdb 1,454 files and 318,655 call edges, django 3,036 and 195,077.
+  // leveldb, the C++ point they are compared against, has 9,241. So these two
+  // do not BRACKET the threshold, they overshoot it — they answer "does the win
+  // hold on a big C++ or Python repository", not "where does it turn over".
+  //
+  // rocksdb is leveldb's descendant on purpose: `TotalFileSize` below is the
+  // same symbol name as the leveldb question, in the same domain, so size is
+  // very nearly the only thing that changes between the two.
+  {
+    id: 'rocksdb-totalfilesize', repo: 'rocksdb', lang: 'C++', kind: 'recall',
+    question: 'List every place in this repository that calls the function `TotalFileSize`. For each one give the file path and the line number. Do not list the definition itself.',
+    truth: [
+      // IsTrivialMove 554, SetupOtherInputs 524, NumLevelBytes 4738,
+      // MaxNextLevelOverlappingBytes 4880.
+      ...T('db/compaction/compaction.cc', [[612, 554]]),
+      ...T('db/compaction/compaction_picker.cc', [[571, 524], [572, 524], [591, 524], [623, 524]]),
+      ...T('db/version_set.cc', [[4741, 4738], [4886, 4880]]),
+    ],
+    // The definition, and the declaration in the header.
+    neutral: [N('db/compaction/compaction.cc', 58, 64),
+      N('db/compaction/compaction.h', 692, 692)],
+  },
+  {
+    // 19 call sites in 9 files, and the reason this one is here: grep for
+    // `SetSequence` also returns `SetSequenceNumber` in backup_engine.cc, a
+    // different method whose name merely contains the target's. The question
+    // rules it out so the truth list stays closed.
+    id: 'rocksdb-setsequence', repo: 'rocksdb', lang: 'C++', kind: 'recall',
+    question: 'List every place in this repository that calls `WriteBatchInternal::SetSequence` (including calls written without the `WriteBatchInternal::` prefix from inside that class). For each one give the file path and the line number. Do not list the definition or its declaration, and do not list calls to `SetSequenceNumber`, which is a different method.',
+    truth: [
+      ...T('db/db_impl/db_impl_write.cc', [[2335, 2309], [2456, 2426], [2511, 2495]]),
+      ...T('db/db_impl/db_impl_open.cc', [[1159, 1073], [2758, 2636]]),
+      // Inside RecoveryTestHelper::FillData 1811, not the TEST_F above it.
+      ...T('db/db_wal_test.cc', [[1862, 1811]]),
+      ...T('db/write_batch_test.cc', [[180, 174], [196, 192], [208, 206], [209, 206],
+        [259, 257], [852, 832]]),
+      // Two overloads of WriteBatchInternal::InsertInto, 3264 and 3298. Both
+      // write the call unqualified, from inside the class.
+      ...T('db/write_batch.cc', [[3285, 3264], [3315, 3298]]),
+      ...T('java/rocksjni/write_batch_test.cc', [[166, 161]]),
+      ...T('db/wal_manager_test.cc', [[79, 74], [151, 130]]),
+      ...T('table/table_test.cc', [[5030, 5028]]),
+      ...T('util/udt_util.cc', [[373, 348]]),
+    ],
+    // The definition, the declaration, and the two design docs that print the
+    // call in prose. The docs are not code and both sides quote them.
+    neutral: [N('db/write_batch.cc', 794, 796),
+      N('db/write_batch_internal.h', 165, 165),
+      N('docs/components/write_flow/01_write_apis.md', 42, 42),
+      N('docs/components/write_flow/05_sequence_numbers.md', 29, 29)],
+  },
+  {
+    // Picked over `WriteBatchInternal::Count`, which cannot be scored: `Count(`
+    // appears 71 times in db/ alone and several classes own one, so the truth
+    // list would not close. This name is unique in the repository and has no
+    // overload — and 5 of its 17 text hits are comments, so a text search has
+    // real work to do.
+    id: 'rocksdb-expandinputs', repo: 'rocksdb', lang: 'C++', kind: 'recall',
+    question: 'List every place in this repository that calls the method `ExpandInputsToCleanCut` of `CompactionPicker`, whether written as a plain call from inside the class or through a pointer such as `compaction_picker_->` or `picker_->`. For each one give the file path and the line number. Do not list the definition, its declaration, or mentions in comments.',
+    truth: [
+      ...T('db/compaction/compaction_picker.cc', [[559, 524], [592, 524], [613, 524],
+        [863, 668], [1272, 1246]]),
+      ...T('db/compaction/compaction_picker_level.cc', [[199, 172], [434, 349], [456, 349],
+        [866, 811], [903, 811]]),
+      ...T('db/compaction/compaction_picker_universal.cc', [[1404, 1253], [1737, 1715]]),
+    ],
+    // The definition, the declaration with its comment, and the four comments
+    // that name the method without calling it.
+    neutral: [N('db/compaction/compaction_picker.cc', 275, 319),
+      N('db/compaction/compaction_picker.h', 190, 195),
+      N('db/compaction/compaction_job.cc', 1727, 1727),
+      N('db/compaction/compaction_picker_level.cc', 886, 886),
+      N('db/db_compaction_test.cc', 12375, 12404)],
+  },
+  {
+    // The smallest provable list in the set: three call sites in a 3,036-file
+    // repository, and `pgraph callers` says `complete` on it.
+    id: 'django-escape-leading-slashes', repo: 'django', lang: 'Python', kind: 'recall',
+    question: 'List every place in this repository that calls the function `escape_leading_slashes`. For each one give the file path and the line number. Do not list the definition itself or the import statements.',
+    truth: [
+      // get_full_path_with_slash 76, _reverse_with_prefix 755, test 491.
+      ...T('django/middleware/common.py', [[85, 76]]),
+      ...T('django/urls/resolvers.py', [[813, 755]]),
+      ...T('tests/utils_tests/test_http.py', [[498, 491]]),
+    ],
+    neutral: [N('django/utils/http.py', 337, 345)],
+  },
+  {
+    // Calls written from eight different modules, most of them inside `__hash__`
+    // or an `identity` property — the shape a reader has to open the file for.
+    id: 'django-make-hashable', repo: 'django', lang: 'Python', kind: 'recall',
+    question: 'List every place in this repository that calls the function `make_hashable`. For each one give the file path and the line number. Do not list the definition itself, the two recursive calls inside it, or the import statements.',
+    // 18 sites, and the last three were added AFTER the first scoring run: all
+    // six answers, both arms, named admin/utils.py 444 and 445 and
+    // exceptions.py 246, and all three are real. The first truth list was built
+    // from a repo-wide text search that silently returned a short list — the
+    // exact failure this whole page says a hand-built list is prone to. The
+    // measurement caught it because both arms agreed against the list.
+    truth: [
+      ...T('django/forms/models.py', [[862, 825]]),
+      ...T('django/utils/tree.py', [[85, 79]]),
+      ...T('django/db/models/sql/compiler.py', [[196, 99], [534, 480]]),
+      ...T('django/db/models/query_utils.py', [[222, 216]]),
+      ...T('django/db/models/lookups.py', [[181, 180]]),
+      ...T('django/db/models/fields/reverse_related.py', [[145, 139], [390, 386]]),
+      ...T('django/db/models/expressions.py', [[538, 529]]),
+      ...T('django/db/models/base.py', [[1356, 1354], [1359, 1354]]),
+      ...T('tests/utils_tests/test_hashable.py', [[20, 6], [29, 22], [36, 31]]),
+      // Both calls are in ValidationError.__hash__, 236.
+      ...T('django/core/exceptions.py', [[242, 236], [246, 236]]),
+      // display_for_field 433.
+      ...T('django/contrib/admin/utils.py', [[444, 433], [445, 433]]),
+    ],
+    // The whole definition, which contains the two recursive calls the question
+    // rules out — so citing either counts for neither side.
+    neutral: [N('django/utils/hashable.py', 4, 26)],
+  },
+  {
+    // The one with a trap a text search walks straight into: line 470 of
+    // test_hashers.py writes the name as a STRING, inside a mock.patch. It does
+    // replace the function at run time and it is not a call site, so it counts
+    // for neither side.
+    id: 'django-get-random-string', repo: 'django', lang: 'Python', kind: 'recall',
+    question: 'List every place in this repository that calls the function `get_random_string` from `django.utils.crypto`. For each one give the file path and the line number. Do not list the definition itself, the import statements, or documentation files.',
+    truth: [
+      ...T('django/tasks/backends/immediate.py', [[21, 19], [80, 75]]),
+      ...T('django/tasks/backends/dummy.py', [[31, 26]]),
+      ...T('django/middleware/csrf.py', [[56, 55]]),
+      ...T('tests/messages_tests/test_fallback.py', [[137, 124], [154, 144]]),
+      ...T('tests/messages_tests/test_cookie.py', [[143, 124]]),
+      ...T('django/db/backends/oracle/creation.py', [[414, 409]]),
+      ...T('django/core/management/utils.py', [[86, 81]]),
+      ...T('django/core/files/storage/base.py', [[73, 67]]),
+      ...T('django/contrib/auth/hashers.py', [[58, 39], [109, 100], [249, 241]]),
+      ...T('django/contrib/sessions/backends/base.py', [[200, 197], [206, 204]]),
+    ],
+    // The definition, the mock.patch string, and the three release notes.
+    neutral: [N('django/utils/crypto.py', 67, 78),
+      N('tests/auth_tests/test_hashers.py', 470, 470),
+      N('docs/internals/deprecation.txt', 498, 498),
+      N('docs/releases/3.1.txt', 813, 813),
+      N('docs/releases/4.0.txt', 750, 750)],
+  },
+
+  // --- follow the calls, on the two big repositories --------------------------
+  // The reason these exist. The size split this page publishes was measured on
+  // the eleven questions that follow the calls, and every BIG point in it was a
+  // Go repository — caddy and hugo. So "the graph pays off above some size" was
+  // a Go result stated in general terms. The six recall questions above put
+  // rocksdb and django in the study but they cannot settle it: for "who calls X"
+  // this page's own answer is that cost is NOISE, so a cost gap on that shape
+  // argues nothing either way.
+  //
+  // These four are the shape the claim is about. Each pair is a whole function,
+  // first line to closing brace, so a claim naming the function and one naming
+  // the call both count — the same convention the gin and caddy questions use.
+  //
+  // Both are bounded to TWO LEVELS, the way the flask question is, because the
+  // full transitive closure on a repository this size does not close by hand:
+  // `NumLevelBytes` alone has 20 text hits. A bound the question states is
+  // honest; a truth list built on a guess is not.
+  {
+    id: 'rocksdb-totalfilesize-impact', repo: 'rocksdb', lang: 'C++', kind: 'reach',
+    question: 'The signature of the function `TotalFileSize`, declared in db/compaction/compaction.h, is about to change. Which functions in the `db/compaction` directory call it, and which functions call those? Two levels. Ignore test files. Give the file path and line number of each.',
+    truth: [
+      // Level 1 inside db/compaction: IsTrivialMove 554-632, SetupOtherInputs
+      // 524-648. Level 2: ReportStartedCompaction 226-271,
+      // PickCompactionForCompactRange 668-956, SetupOtherInputsIfNeeded 481-529,
+      // PickIncrementalForReduceSizeAmp 1253-1486,
+      // BuildCompactionToNextLevel 1760-1860.
+      ...T('db/compaction/compaction.cc', [[632, 554]]),
+      ...T('db/compaction/compaction_picker.cc', [[648, 524], [956, 668]]),
+      ...T('db/compaction/compaction_job.cc', [[271, 226]]),
+      ...T('db/compaction/compaction_picker_level.cc', [[529, 481]]),
+      ...T('db/compaction/compaction_picker_universal.cc', [[1486, 1253], [1860, 1760]]),
+    ],
+    // The definition and its declaration. Then the two functions in
+    // db/version_set.cc that also call TotalFileSize directly — they are real
+    // callers and the question's own bound puts them outside, so naming them is
+    // neither a hit nor a mistake. Last, two comments that write
+    // `SetupOtherInputs` without calling it.
+    neutral: [N('db/compaction/compaction.cc', 58, 64),
+      N('db/compaction/compaction.h', 692, 692),
+      N('db/version_set.cc', 4738, 4742),
+      N('db/version_set.cc', 4880, 4893),
+      // CompactFilesImpl 1749-2030 and BackgroundCompaction 4352-5237 both call
+      // IsTrivialMove for real. They live in db/db_impl, which the question's
+      // own bound puts outside — so naming them is neither a hit nor a mistake,
+      // exactly as for the two in db/version_set.cc above. Added after the first
+      // scoring run, which counted them against both arms.
+      N('db/db_impl/db_impl_compaction_flush.cc', 1749, 2030),
+      N('db/db_impl/db_impl_compaction_flush.cc', 4352, 5237),
+      // Comments and one string literal that write the names without calling.
+      N('db/compaction/compaction_picker.cc', 893, 893),
+      N('db/compaction/compaction_picker_universal.cc', 1411, 1411),
+      N('db/db_impl/db_impl.h', 2747, 2747),
+      N('monitoring/thread_status_impl.cc', 112, 112),
+      N('db/merge_helper.cc', 611, 611)],
+  },
+  {
+    // A path, not a set, on the big C++ repository. Two hops, and the middle one
+    // is the only function on it — so the truth is settled.
+    id: 'rocksdb-trace-compactrange-totalfilesize', repo: 'rocksdb', lang: 'C++', kind: 'trace',
+    question: 'Show the chain of calls that leads from `CompactionPicker::PickCompactionForCompactRange` to the function `TotalFileSize` in this repository. Name every function on the path, with its file and line number. Ignore test files.',
+    truth: [
+      ...T('db/compaction/compaction_picker.cc', [[956, 668], [648, 524]]),
+      ...T('db/compaction/compaction.cc', [[64, 58]]),
+    ],
+    neutral: [],
+  },
+  {
+    // django. Six functions over two levels, and the last two were added AFTER
+    // the first scoring run for the same reason `make_hashable` was: all six
+    // answers, both arms, named common.py:109 and urls/base.py:98, and both are
+    // real. Three times now a repo-wide text search has handed back a SHORT list
+    // — two hits for `get_full_path_with_slash` where there are three, two for
+    // `_reverse_with_prefix` where there are three. Every list here is now
+    // cross-checked with a second tool, which is the only reason this one is
+    // right.
+    id: 'django-escape-slashes-impact', repo: 'django', lang: 'Python', kind: 'reach',
+    question: 'The signature of the function `escape_leading_slashes` is about to change. Which functions in this repository call it, and which functions call those? Two levels. Ignore test files. Give the file path and line number of each.',
+    truth: [
+      // Level 1: get_full_path_with_slash 76-98, _reverse_with_prefix 755-842.
+      // Level 2: process_request 34-60 and process_response 100-117 both call
+      // the first; resolvers.reverse 752-753 and base.reverse 28-108 both call
+      // the second.
+      ...T('django/middleware/common.py', [[98, 76], [60, 34], [117, 100]]),
+      ...T('django/urls/resolvers.py', [[842, 755], [753, 752]]),
+      ...T('django/urls/base.py', [[108, 28]]),
+    ],
+    // The definition, and the one call the question rules out — the test.
+    neutral: [N('django/utils/http.py', 337, 345),
+      N('tests/utils_tests/test_http.py', 490, 498)],
+  },
+  {
+    id: 'django-trace-processrequest-escapeslashes', repo: 'django', lang: 'Python', kind: 'trace',
+    question: 'Show the chain of calls that leads from the `process_request` method of `CommonMiddleware` to the function `escape_leading_slashes` in this repository. Name every function on the path, with its file and line number. Ignore test files.',
+    truth: [
+      ...T('django/middleware/common.py', [[60, 34], [98, 76]]),
+      ...T('django/utils/http.py', [[345, 337]]),
+    ],
+    neutral: [],
+  },
 ];
 
 const args = process.argv.slice(2);

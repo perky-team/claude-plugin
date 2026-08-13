@@ -96,31 +96,98 @@ A local code knowledge graph with a bundled `pgraph` CLI. Indexes the project (T
 
 Why it matters: `impact` returns the whole transitive set in one small answer, including callers that never mention the symbol's name and so are invisible to grep. Ambiguous names stay unresolved rather than linked to a guess, so the graph never invents an edge. Queries refresh the changed files first, so day-to-day freshness needs no manual sync.
 
-**It pays off on a big repository, and not on a small one.** That is the clearest thing the measurement
-says. On the eleven questions that follow the calls — "what breaks if I change X", "how does X reach
-Y" — split by how big the repository is:
+**Measured against a grep-only agent: fourteen public repos, 52 structural questions, 312 runs, three
+runs a side.** Below are the 36 "who calls X" questions — the shape grep is best at — split by
+language and by how big the repository is. The size line falls between leveldb (132 files, 9k call
+edges) and caddy (326 files, 24k).
 
-| | cost | time | steps | call sites invented |
-|---|---|---|---|---|
-| gin 80 files, leveldb 132, flask, requests | grep **25% cheaper** | grep **55% faster** | grep **18% fewer** | 12 → **5** |
-| caddy 325 files, hugo 905 | p-graph **52% cheaper** | p-graph **55% faster** | p-graph **63% fewer** | 24 → **3** |
+Big repositories:
 
-Accuracy goes p-graph's way in both; money and time only above some size between leveldb (132 files,
-9k call edges) and caddy (326 files, 24k). Both big points are Go, so that threshold is a Go result —
-Python and C++ have no follow-the-calls question on a big repository, and TypeScript has none at all.
-On hugo one question ran $1.06 against $0.30 and 27 steps against 7.7 — and grep invented 21 call
-sites against 15 real ones, because a text search returns occurrences and working out what each one
-meant is where the money goes.
+**Go** — hugo 930 files / 55.5k call edges, caddy 326 / 23.6k · 5 questions
 
-Measured against a grep-only agent on twelve public repos, 42 structural questions, three runs a side.
-On the thirty "who calls X" questions, which is the shape grep is best at:
+| | grep | p-graph | Gap |
+|---|---|---|---|
+| Call sites found | 226 of 228 | 226 of 228 | tie |
+| Invented | 51 | **17** | **−67%** |
+| Cost per question | $0.338 | **$0.290** | **−14%** |
+| Time per question | 72 s | **61 s** | **−15%** |
 
-| Language | Repos | Call sites found, grep / p-graph | Invented | Cost, grep / p-graph | Cost gap |
-|---|---|---|---|---|---|
-| Go | hugo, caddy, gin | 331 of 336 / **334 of 336** | 51 / **17** | $0.300 / **$0.251** | **−16%** |
-| Python | flask, requests, httpx | 135 of 135 / 135 of 135 | 0 / 0 | $0.181 / **$0.171** | **−5%** |
-| C++ | leveldb, re2, spdlog | 476 of 480 / **477 of 480** | 0 / 0 | **$0.301** / $0.327 | **+9%** |
-| TypeScript | nest, got, axios | **459 of 459** / 446 of 459 | **0** / 2 | $0.166 / **$0.155** | **−7%** |
+**TypeScript** — nest 1,728 / 38.3k · 5 questions
+
+| | grep | p-graph | Gap |
+|---|---|---|---|
+| Call sites found | 177 of 177 | 177 of 177 | tie |
+| Invented | 0 | 0 | tie |
+| Cost per question | $0.142 | **$0.130** | **−8%** |
+| Time per question | **20 s** | 22 s | +8% |
+
+**C++** — rocksdb 1,454 / 318.7k · 3 questions
+
+| | grep | p-graph | Gap |
+|---|---|---|---|
+| Call sites found | **114 of 114** | 108 of 114 | **grep** |
+| Invented | 0 | 0 | tie |
+| Cost per question | $0.127 | **$0.093** | **−26%** |
+| Time per question | 21 s | **14 s** | **−34%** |
+
+**Python** — django 3,036 / 195.1k · 3 questions
+
+| | grep | p-graph | Gap |
+|---|---|---|---|
+| Call sites found | 108 of 108 | 108 of 108 | tie |
+| Invented | 0 | 0 | tie |
+| Cost per question | **$0.097** | $0.130 | +34% |
+| Time per question | **17 s** | 20 s | +18% |
+
+Small repositories:
+
+**Go** — gin 99 / 9.2k · 2 questions
+
+| | grep | p-graph | Gap |
+|---|---|---|---|
+| Call sites found | 105 of 108 | **108 of 108** | **p-graph** |
+| Invented | 0 | 0 | tie |
+| Cost per question | $0.170 | **$0.160** | **−6%** |
+| Time per question | 45 s | **31 s** | **−32%** |
+
+**TypeScript** — axios 240 / 14.3k, got 85 / 14.3k · 4 questions
+
+| | grep | p-graph | Gap |
+|---|---|---|---|
+| Call sites found | **282 of 282** | 269 of 282 | **grep** |
+| Invented | **0** | 2 | **grep** |
+| Cost per question | $0.195 | **$0.185** | **−5%** |
+| Time per question | 32 s | **29 s** | **−11%** |
+
+**C++** — spdlog 152 / 8.2k, leveldb 132 / 9.2k, re2 89 / 8.3k · 9 questions
+
+| | grep | p-graph | Gap |
+|---|---|---|---|
+| Call sites found | 476 of 480 | **477 of 480** | **p-graph** |
+| Invented | 0 | 0 | tie |
+| Cost per question | **$0.302** | $0.328 | +8% |
+| Time per question | **53 s** | 58 s | +11% |
+
+**Python** — flask 83 / 3.9k, httpx 60 / 4.2k, requests 37 / 2.7k · 5 questions
+
+| | grep | p-graph | Gap |
+|---|---|---|---|
+| Call sites found | 135 of 135 | 135 of 135 | tie |
+| Invented | 0 | 0 | tie |
+| Cost per question | $0.180 | **$0.172** | **−4%** |
+| Time per question | 34 s | **30 s** | **−12%** |
+
+**Read these tables for accuracy, not for size.** Size decides nothing here: big C++ runs 26% cheaper
+and big Python 34% dearer, and on this question shape the study's own answer is that cost is noise
+(−2%, 0.3 standard errors). What does hold is that p-graph invents a third as many call sites, and all
+51 of grep's inventions are on big Go.
+
+The size effect lives on the other question shape — "what breaks if I change X", "how does X reach Y".
+There p-graph is **43% cheaper, 51% faster and takes 57% fewer steps** on the big repositories, and
+26% dearer on the small ones, now measured on Go, C++ and Python alike.
+
+One known defect shows up above: C++ finds 108 of 114 because a receiver declared as a *subclass*
+does not reach a method defined on its base class — and the answer still prints `complete`.
 
 Every row of every language is in the plugin's own
 [README](./plugins/p-graph/README.md#every-row-per-language); how it was measured, and every pass that

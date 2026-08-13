@@ -39,6 +39,12 @@ const REPOS = {
   requests: ['https://github.com/psf/requests.git', '1f6589ec3a1ee910f9a65cc3ceac60b26677bc0e'],
   got: ['https://github.com/sindresorhus/got.git', 'e3924aa1e53a6ca3eb93a43618ce532442a89b40'],
   leveldb: ['https://github.com/google/leveldb.git', '7ee830d02b623e8ffe0b95d59a74db1e58da04c5'],
+  // The two big ones, added so the size split can be read per language and not
+  // only on Go. rocksdb is leveldb's descendant, which makes the C++ pair a
+  // size-only comparison; django is the Python one. Both were cloned shallow at
+  // these commits, so upstream moving does not move the numbers.
+  rocksdb: ['https://github.com/facebook/rocksdb.git', '2dc6bc51b498c7fcae16e78a54de9058181c8b75'],
+  django: ['https://github.com/django/django.git', 'c6be0bf3bb744d234947cefd6def9f31d9655800'],
 };
 
 // The 22 symbols the original acceptance test used, with the answer size it
