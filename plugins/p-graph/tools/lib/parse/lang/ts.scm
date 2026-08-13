@@ -56,6 +56,13 @@
 (call_expression function: (member_expression property: (property_identifier) @reference.call))
 (new_expression constructor: (identifier) @reference.call)
 (import_statement source: (string) @reference.import)
+;; The NAMES an import binds, not the module it reads from. A call written on
+;; one of them — `Test.createTestingModule(...)` is @nestjs/testing's Test — is a
+;; call on someone else's value, and the import statement says so outright. The
+;; whole clause is captured and the driver reads the three shapes out of it
+;; (default, `* as ns`, and each specifier's alias or name), because a query
+;; cannot express "the alias if there is one, otherwise the name".
+(import_statement (import_clause) @import.binding)
 
 ;; Names a TypeScript/JavaScript scope binds to a value. A call written on one of
 ;; these can only be resolved once we know what the name holds, so the binding has

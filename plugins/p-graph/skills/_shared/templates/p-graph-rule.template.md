@@ -16,14 +16,16 @@ endings mean opposite things:
 | The answer ends with | What it means | What to do |
 |---|---|---|
 | `✓ complete — …` | the graph found nothing missing | **stop. Do not grep. Report the list as it stands.** |
+| `✓ no gaps — but every row above is a guess …` | nothing is missing, and nothing is settled either | do not grep for more rows; **open the rows you have** and say which survived |
 | `⚠ N call sites missing from this answer` | the graph knows it is short | grep to close the gap, then report both |
 | `no symbol named X in the graph` | nothing carries that name | check the spelling with `pgraph search X` — this is **not** "nothing calls it" |
 | `ℹ N call sites reach this method through I` | the calls are written on an interface, so no call names this method | **do not grep.** Report both: this method has no direct callers, and N calls reach it through `I`. Which implementation runs is a run-time decision |
 | neither line | the graph is too old to build the report | treat it as short, and grep |
 
-With `--json` the same thing is the `complete` field. Re-running a text search
-over a `✓ complete` answer was measured and it changes nothing: it costs about a
-third more per question and finds no extra call site.
+With `--json` the same thing is the `complete` field, and `all_guessed` is the
+second line above. Re-running a text search over a `✓ complete` answer was
+measured and it changes nothing: it costs about a third more per question and
+finds no extra call site.
 
 | Question | Command |
 |---|---|

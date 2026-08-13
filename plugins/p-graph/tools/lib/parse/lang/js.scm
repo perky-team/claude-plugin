@@ -19,8 +19,32 @@
 ;; CALLBACK_DEF_TYPES there for why.
 (call_expression arguments: (arguments [(arrow_function) (function_expression) (generator_function)] @definition.function))
 
+;; Names a JavaScript scope binds to a value — the same rules ts.scm has carried
+;; since the TypeScript round, which this file never got. Without them a .js file
+;; recorded no binding and no type at all: every identifier receiver fell through
+;; to the "#static:" key, matched no class of that name, and became a bare-name
+;; guess. Measured on axios, which is 191 .js files against 23 .ts, that left
+;; 9 of 7,940 member calls resolved with certainty — 0.1%, the lowest in the study,
+;; while `const headers = new AxiosHeaders()` sat one line above the call.
+;;
+;; The parameter rule is the OPPOSITE of ts.scm's, and it has to be. In the
+;; TypeScript grammar a plain parameter always parses as a required_parameter
+;; wrapping the identifier; in this grammar it is a bare identifier directly under
+;; formal_parameters, and required_parameter does not exist at all. A pattern the
+;; grammar can never produce does not match nothing — it fails to compile, and
+;; takes every other capture in this file with it.
+(formal_parameters (identifier) @var.decl)
+(assignment_pattern left: (identifier) @var.decl)
+(rest_pattern (identifier) @var.decl)
+(variable_declarator name: (identifier) @var.decl)
+;; `x => x.foo()` writes its one parameter without brackets, so it is a direct
+;; child of the arrow function rather than a formal_parameters list.
+(arrow_function parameter: (identifier) @var.decl)
+
 ;; references
 (call_expression function: (identifier) @reference.call)
 (call_expression function: (member_expression property: (property_identifier) @reference.call))
 (new_expression constructor: (identifier) @reference.call)
 (import_statement source: (string) @reference.import)
+;; The NAMES an import binds — see the same rule in ts.scm.
+(import_statement (import_clause) @import.binding)

@@ -195,11 +195,26 @@ export async function runCommand(ctx) {
   // test — and, more importantly, a reader skimming — tells them apart.
   const COMPLETE = '✓ complete — no gaps: the graph accounted for every call site it found.';
   const COMPLETE_IMPACT = '✓ complete — no gaps, and no edge was refused.';
+  // The one case where "complete" would be read as "stop" and be wrong. The gap
+  // report really is empty, so the claim below is still about gaps only — but
+  // when every row above is a guess there is nothing settled to stop on, and the
+  // rule's other instruction (open each guess) is the one that applies.
+  // Deliberately does NOT contain the word "complete": a reader skims for it.
+  // Measured on axios: `callers "AxiosHeaders.has"` printed 18 guesses, no
+  // certain row, and `✓ complete`. That run cost 16.7 steps against grep's 9.7
+  // and dropped 10 real call sites.
+  const NO_GAPS_ALL_GUESSED = '✓ no gaps — but every row above is a guess, so nothing here is settled.'
+    + ' Open each one before relying on it.';
 
   // `complete` is passed in, never derived here: only the caller knows whether
   // its own command left something else out (impact refuses guessed edges), and
   // `gapsOff` means the report could not be built at all — an empty list there
   // is the one case where claiming completeness would be a lie.
+  // Were there rows above, and was every one of them a guess? Only then does the
+  // completeness line change — a majority rule would need a threshold to defend,
+  // and "all of them" is a fact with nothing to argue about.
+  const allGuessed = (rows) => rows.length > 0 && rows.every((r) => r.guess);
+
   const emitGaps = (rows, complete = false, line = COMPLETE) => {
     const { viaInterface, listed, unrelated, library, external } = gapCounts(rows);
     // Printed before everything else, and grouped by the interface that carries
@@ -270,24 +285,30 @@ export async function runCommand(ctx) {
     // be complete about, so an unknown name can never earn the line.
     const known = store.symbolsNamed(target);
     const complete = !gapsOff && known.length > 0 && nothingMissing(gaps);
+    // `complete` stays a claim about the GAP report, and that claim is true even
+    // here, so it is not corrupted. The new fact gets its own field.
+    const guessedOnly = allGuessed(rows);
     if (opts.json) return emitJson({ callers: rows, targets: known, gaps, complete,
+      ...(guessedOnly ? { all_guessed: true } : {}),
       ...(gapsOff ? { gaps_unavailable: true } : {}) });
     emitTargets(target);
     printCertainThenGuessed(rows, 'caller');
     noteGapsOff();
-    return emitGaps(gaps, complete);
+    return emitGaps(gaps, complete, guessedOnly ? NO_GAPS_ALL_GUESSED : COMPLETE);
   }
   if (command === 'callees') {
     const target = needArg('a symbol');
     const rows = store.callees(target), gaps = store.gapsFrom(target);
     const known = store.symbolsNamed(target);
     const complete = !gapsOff && known.length > 0 && nothingMissing(gaps);
+    const guessedOnly = allGuessed(rows);
     if (opts.json) return emitJson({ callees: rows, targets: known, gaps, complete,
+      ...(guessedOnly ? { all_guessed: true } : {}),
       ...(gapsOff ? { gaps_unavailable: true } : {}) });
     emitTargets(target);
     printCertainThenGuessed(rows, 'callee');
     noteGapsOff();
-    return emitGaps(gaps, complete);
+    return emitGaps(gaps, complete, guessedOnly ? NO_GAPS_ALL_GUESSED : COMPLETE);
   }
   if (command === 'impact') {
     const target = needArg('a symbol');

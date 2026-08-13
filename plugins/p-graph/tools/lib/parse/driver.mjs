@@ -45,6 +45,62 @@ const GO_PREDECLARED_TYPES = new Set([
   'string', 'uint', 'uint8', 'uint16', 'uint32', 'uint64', 'uintptr',
 ]);
 
+// Python's builtin functions and types. `set(xs)`, `len(xs)`, `open(p)` name the
+// language, never this repo — the same fact GO_BUILTINS records for Go and
+// JS_GLOBALS for TypeScript, and the last of the four languages to get one.
+// Measured on httpx: `callers "Cookies.set"` listed `len(set(urls))` and
+// `set(params)` as call sites the reader should go and grep for. They are not
+// call sites of anything in the repo, and that banner cost the run ten steps
+// against grep's five.
+//
+// A repo may declare its own `def set(...)`, and Python's scoping then makes a
+// plain call mean the declaration. That is settled after every file is stored,
+// by resolvePyShadowedBuiltins — the same two-step Go uses for `max`.
+const PY_BUILTINS = new Set([
+  'abs', 'aiter', 'all', 'anext', 'any', 'ascii', 'bin', 'bool', 'breakpoint',
+  'bytearray', 'bytes', 'callable', 'chr', 'classmethod', 'compile', 'complex',
+  'delattr', 'dict', 'dir', 'divmod', 'enumerate', 'eval', 'exec', 'filter',
+  'float', 'format', 'frozenset', 'getattr', 'globals', 'hasattr', 'hash', 'help',
+  'hex', 'id', 'input', 'int', 'isinstance', 'issubclass', 'iter', 'len', 'list',
+  'locals', 'map', 'max', 'memoryview', 'min', 'next', 'object', 'oct', 'open',
+  'ord', 'pow', 'print', 'property', 'range', 'repr', 'reversed', 'round', 'set',
+  'setattr', 'slice', 'sorted', 'staticmethod', 'str', 'sum', 'super', 'tuple',
+  'type', 'vars', 'zip',
+]);
+
+// The name a Python annotation writes, or null when it is not a plain name.
+//
+// Deliberately narrow. `Response` and `"Response"` (a forward reference, which
+// is what `from __future__ import annotations` turns every annotation into at
+// runtime) are read; `Optional[Response]`, `A | B` and `list[str]` are not.
+// Taking the inner type of a subscript is a further step, and recording the
+// WRONG type is worse than recording none: a type that leads nowhere makes
+// Pass B refuse the bare-name fallback, so a mistake here deletes real rows.
+//
+// A dotted name is translated through the file's imports exactly as a
+// module-qualified call is. `httpx.Response` inside httpx becomes the bare
+// `Response` and matches the repo node; `asyncio.Event` keeps its path, which
+// no node carries — and that is the point, because the type is not ours.
+function pyTypeName(ann, pyModules, pyRepoModules) {
+  let n = ann;
+  if (n?.type === 'type') n = n.namedChild?.(0) ?? null;
+  if (!n) return null;
+  if (n.type === 'string') {
+    const inner = n.text.replace(/^[a-zA-Z]*['"]{1,3}|['"]{1,3}$/g, '').trim();
+    return /^[A-Za-z_][\w.]*$/.test(inner) ? inner : null;
+  }
+  if (n.type === 'identifier') return n.text;
+  if (n.type === 'attribute') {
+    const path = pyObjectPath(n.childForFieldName?.('object'));
+    const attr = n.childForFieldName?.('attribute');
+    if (!path || !attr) return null;
+    const modulePath = pyModules.get(path[0]);
+    const full = modulePath ? [modulePath, ...path.slice(1)].join('.') : path.join('.');
+    return pyRepoModules?.paths.has(full) ? attr.text : `${full}.${attr.text}`;
+  }
+  return null;
+}
+
 // JavaScript's own global objects. `Object.assign(…)`, `JSON.parse(…)`,
 // `Reflect.getMetadata(…)` name the language and the runtime, never this repo — the
 // same fact GO_BUILTINS above records for Go, which TypeScript had no equivalent of.
@@ -255,7 +311,58 @@ function tsBindsAsTypeParam(node, name) {
 // typed as some repo class of the same name, and `T.logic()` would resolve as
 // CERTAIN off nothing but a name collision — the exact false-knowledge bug
 // this whole feature exists to remove.
-function tsStatedTypeName(declNode) {
+// The type a TypeScript def declares as its result. Go has read this since the
+// start and Python since the round before; all three TypeScript graphs in the
+// study held zero such rows, in the language that writes a return type most.
+//
+// `Promise<Foo>` is unwrapped to Foo. An async function is annotated that way
+// and the value every caller uses is the awaited one; a Promise's own methods
+// are `then` and `catch`, which no repo class answers, so the unwrap cannot
+// cost a real row. It can be wrong only for code that calls a Foo method on an
+// un-awaited promise, which does not run.
+//
+// A union, an inline object type and anything else that names no single type
+// are refused, for the reason the whole file repeats: a wrong type deletes real
+// rows, because Pass B stops guessing once a type is recorded.
+function tsReturnTypeName(node) {
+  let fn = node;
+  if (fn && !/function|method_definition|method_signature/.test(fn.type)) {
+    fn = findChild(fn, (n) => /^(arrow_function|function_expression|function_declaration)$/.test(n.type)) ?? fn;
+  }
+  const ann = fn?.childForFieldName?.('return_type');
+  let t = ann?.type === 'type_annotation' ? ann.namedChild(0) : ann;
+  if (t?.type === 'generic_type') {
+    const base = t.childForFieldName?.('name');
+    if (base?.text === 'Promise' || base?.text === 'Awaited') {
+      t = t.childForFieldName?.('type_arguments')?.namedChild(0) ?? null;
+    }
+  }
+  if (!t) return null;
+  if (t.type === 'type_identifier') return t.text;
+  if (t.type === 'nested_type_identifier') return t.text.replace(/\s/g, '');
+  if (t.type === 'generic_type') {
+    const base = t.childForFieldName?.('name');
+    if (base?.type === 'type_identifier') return base.text;
+    if (base?.type === 'nested_type_identifier') return base.text.replace(/\s/g, '');
+  }
+  return null;
+}
+
+// The first descendant matching a predicate, breadth-first and shallow — used
+// to find the function inside a declaration that wraps one.
+function findChild(node, pred, depth = 3) {
+  if (!node || depth < 0) return null;
+  for (let i = 0; i < (node.namedChildCount ?? 0); i++) {
+    const c = node.namedChild(i);
+    if (!c) continue;
+    if (pred(c)) return c;
+    const deeper = findChild(c, pred, depth - 1);
+    if (deeper) return deeper;
+  }
+  return null;
+}
+
+function tsStatedTypeName(declNode, ownerClass = null) {
   const ann = declNode?.childForFieldName?.('type');          // `c: Conn`
   const t = ann?.type === 'type_annotation' ? ann.namedChild(0) : ann;
   // A dotted name (`foo.Bar`) is never a type parameter — a type parameter is
@@ -276,10 +383,48 @@ function tsStatedTypeName(declNode) {
   }
   // `const c = new Conn()`. The initialiser names the type outright, which is the
   // same fact Go reads from `x := &T{}`.
+  //
+  // `const request = firstRequest ?? new Request(...)` names it just as plainly,
+  // and that is the shape got writes: whichever branch runs, the value is a
+  // Request. Only `??` and `||` count, and only when exactly one operand
+  // constructs — two different constructors name two types, and picking one
+  // would be a guess wearing knowledge's clothes.
   const value = declNode?.childForFieldName?.('value');
-  if (value?.type === 'new_expression') {
-    const ctor = value.childForFieldName?.('constructor');
-    if (ctor?.type === 'identifier') return named(ctor.text);
+  const ctorOf = (n) => {
+    if (n?.type !== 'new_expression') return null;
+    const ctor = n.childForFieldName?.('constructor');
+    return ctor?.type === 'identifier' ? ctor.text : null;
+  };
+  const direct = ctorOf(value);
+  if (direct) return named(direct);
+  if (value?.type === 'binary_expression' && ['??', '||'].includes(value.childForFieldName?.('operator')?.text ?? '')) {
+    const left = value.childForFieldName?.('left');
+    const right = value.childForFieldName?.('right');
+    // The side that does NOT construct has to be a plain name or an empty
+    // value. `a ?? new A()` means "a if it has one, else a fresh A", so `a` is
+    // an A — that is the language's own contract. Anything else on that side —
+    // a ternary, a call, another constructor — can be a different type, and
+    // then naming one of them would be a guess dressed as knowledge.
+    const plain = (n) => ['identifier', 'null', 'undefined', 'member_expression'].includes(n?.type ?? '');
+    const ctorLeft = ctorOf(left); const ctorRight = ctorOf(right);
+    if (ctorRight && !ctorLeft && plain(left)) return named(ctorRight);
+    if (ctorLeft && !ctorRight && plain(right)) return named(ctorLeft);
+  }
+  // `const s = make()` and `const s = await this.build()`. What the value IS
+  // depends on what the callee returns, which is a fact recorded separately
+  // under "<qname>#ret" — the same two-step Go and Python use. Only a bare name
+  // and a call on `this` are read: anything else needs to know what the
+  // receiver holds first, and that is a different question.
+  let call = value;
+  if (call?.type === 'await_expression') call = call.namedChild?.(0) ?? call;
+  if (call?.type === 'call_expression') {
+    const fn = call.childForFieldName?.('function');
+    if (fn?.type === 'identifier') return `#ret:${fn.text}`;
+    if (fn?.type === 'member_expression' && fn.childForFieldName?.('object')?.type === 'this'
+        && ownerClass) {
+      const prop = fn.childForFieldName?.('property')?.text;
+      if (prop) return `#ret:${ownerClass}.${prop}`;
+    }
   }
   return null;
 }
@@ -923,6 +1068,23 @@ function pyObjectPath(obj) {
 // ambiguous. Returns the owner def, or null when the receiver isn't the enclosing
 // object (a plain variable, or a `this` inside a nested function whose container
 // is not a type).
+// Does a JS/TS definition keep the `this` of the scope around it? An arrow
+// function does; `function () {}`, a generator and a method each get their own.
+// A definition captured through a WRAPPER — `const f = (x) => …` anchors on the
+// lexical_declaration, a field on the field definition — is an arrow by
+// construction: every wrapping capture in ts.scm and js.scm requires an
+// `(arrow_function)` child, so there is no other shape to tell apart.
+const JS_OWN_THIS = new Set([
+  'function_expression', 'generator_function', 'function_declaration',
+  'method_definition', 'class_declaration', 'class',
+]);
+function jsKeepsOuterThis(def) {
+  const t = def?.node?.type;
+  if (!t) return false;
+  if (t === 'arrow_function') return true;
+  return !JS_OWN_THIS.has(t);
+}
+
 function selfCallOwner(c, lang, defs, enclosing) {
   if (!enclosing?.container_id) return null;
   const parent = c.node?.parent;
@@ -934,8 +1096,42 @@ function selfCallOwner(c, lang, defs, enclosing) {
   // by-name check to it: a TS variable called `self` must not be mistaken for it.
   const isSelf = lang === 'py' ? (recv.text === 'self' || recv.text === 'cls') : recv.type === 'this';
   if (!isSelf) return null;
-  const owner = defs.find((d) => d.id === enclosing.container_id);
-  return owner && OWNER_KINDS.has(owner.kind) ? owner : null;
+  // Between the call and the definition that owns it there may be a `function`
+  // expression that no capture turned into a definition of its own — a callback
+  // inside a named method is deliberately attributed to the method. That is
+  // right for the caller, and wrong for `this`: a plain `function` gets its own.
+  // Reading the nodes in between is the only place that can be seen.
+  if (lang === 'ts' || lang === 'js') {
+    // Compare positions, not objects: every parent walk hands back a fresh
+    // wrapper for the same node, so `!==` would always be true.
+    const en = enclosing.node;
+    for (let n = c.node?.parent; n; n = n.parent) {
+      if (en && n.startIndex === en.startIndex && n.endIndex === en.endIndex) break;
+      if (JS_OWN_THIS.has(n.type) && n.type !== 'class_declaration' && n.type !== 'class') return null;
+    }
+  }
+  // Walk out until a type is reached. One level is the ordinary case — the call
+  // is in a method and the method's container is the class — but a call written
+  // inside a CLOSURE inside a method is one level deeper, and stopping there
+  // dropped it to a bare-name guess. Measured on got: `Request._onRequest`'s
+  // error handler is an arrow function holding `this._beforeError(...)`.
+  //
+  // Which closures pass `this` through is a language rule, not a guess:
+  //   - an arrow function does not rebind `this`; a plain `function` does, so a
+  //     walk through one would claim a class the call may never see.
+  //   - a nested `def` in Python closes over the enclosing `self`, so any
+  //     function-like container is fine there.
+  // C++ is left alone: whether a lambda has `this` depends on its capture list.
+  let node = enclosing;
+  for (let hops = 0; node && hops < 8; hops++) {
+    const up = defs.find((d) => d.id === node.container_id);
+    if (!up) return null;
+    if (OWNER_KINDS.has(up.kind)) return up;
+    if (lang === 'py') { node = up; continue; }
+    if ((lang === 'ts' || lang === 'js') && jsKeepsOuterThis(node)) { node = up; continue; }
+    return null;
+  }
+  return null;
 }
 
 // The node types the "function passed as a call argument" capture can produce.
@@ -1028,6 +1224,14 @@ export async function extract({ file, lang, langId, scm, source, pyRepoModules =
     ? pyOwnPackage(file, pyRepoModules.byFile.get(file) ?? null) : null;
   const pyModules = lang === 'py'
     ? pyModuleNames(caps, pyRepoModules?.paths ?? null, pyOwnPkg) : null;
+  // Every name a plain `import` binds, repo or not. pyModules above keeps only
+  // this repo's modules, on purpose — a call qualified by a library module is
+  // not a repo call. But `x = asyncio.Event()` needs the other half of that
+  // fact: the head IS a module, so the value comes from outside the repo and
+  // the gap report can count the row instead of listing it.
+  const pyLibModules = lang === 'py'
+    ? new Set([...pyModuleNames(caps, null, pyOwnPkg).keys()]
+      .filter((n) => !pyModules.has(n))) : null;
 
   const defKinds = ['function', 'method', 'class', 'struct', 'interface', 'type', 'enum', 'namespace'];
   const defs = [];
@@ -1497,11 +1701,63 @@ export async function extract({ file, lang, langId, scm, source, pyRepoModules =
       pyVarKeys.get(c.text).push({ key, span });
     }
     // `close_server = threading.Event()` and `jar = RequestsCookieJar()` look the
-    // same to a parser: a name bound to the result of a call. Record the callee
-    // under the name's key, exactly as Go does for `x := pkg.Make()`. The resolver
-    // then finds the repo class and answers certainly, or finds nothing — and a
-    // call on that name is refused instead of guessing the one repo method that
-    // shares its bare name. Those guesses were 39 false rows on psf/requests.
+    // same to a parser: a name bound to the result of a call. Record what the
+    // call produces under the name's key, exactly as Go does for
+    // `x := pkg.Make()`. The resolver then finds the repo class and answers
+    // certainly, or finds nothing — and a call on that name is refused instead
+    // of guessing the one repo method that shares its bare name. Those guesses
+    // were 39 false rows on psf/requests.
+    //
+    // The result is one of two shapes, and which one matters:
+    //   "#ret:<callee>" — ask the resolver what that callee returns.
+    //   a plain dotted name — `asyncio.Event()` is a call into an IMPORTED
+    //     module, so the value comes from outside the repo whatever the callee
+    //     is. Written as a type rather than a marker, so the gap report can say
+    //     so and count the row instead of listing it.
+    // Does a local or a parameter shadow this name here? The same question
+    // pyNamesAValue answers for the call loop further down; asked here too
+    // because that one is declared later and would still be in its dead zone.
+    const pyBindsAValue = (name, node) => {
+      const line = node.startPosition.row + 1, col = node.startPosition.column;
+      return (pyValueNames.get(name) ?? []).some((s) =>
+        posLE(s.startLine, s.startCol, line, col) && posLE(line, col, s.endLine, s.endCol));
+    };
+
+    const pyBoundType = (value, boundName) => {
+      let v = value;
+      // `r = await client.send(...)` puts an `await` node on the right, not a
+      // `call`, so nothing at all used to be recorded for r. httpx writes 70
+      // bindings that way, and four of them are the call sites missing from
+      // `callers "Response.raise_for_status"`.
+      if (v?.type === 'await') v = v.namedChild?.(0) ?? v;
+      if (v?.type !== 'call') return null;
+      const fn = v.childForFieldName?.('function');
+      if (!fn) return null;
+      if (fn.type === 'identifier') {
+        // `q = q.set(...)` — a row saying "q is whatever q.set returns" can
+        // only be worked out from q's type, the very thing it is meant to
+        // supply. It never resolves, and a second row for one key is read as a
+        // conflict, so it silently deletes the type the first binding stated.
+        return fn.text === boundName ? null : `#ret:${fn.text}`;
+      }
+      if (fn.type !== 'attribute') return null;
+      // `mod.Cls()`: the head is translated through this file's imports, the
+      // same way a module-qualified CALL is. A repo module leaves the class
+      // reachable by its own (bare) qname.
+      const path = pyObjectPath(fn.childForFieldName?.('object'));
+      const attr = fn.childForFieldName?.('attribute');
+      if (!path || !attr) return null;
+      const modulePath = pyModules.get(path[0]);
+      const full = modulePath ? [modulePath, ...path.slice(1)].join('.') : path.join('.');
+      if (pyRepoModules?.paths.has(full)) return `#ret:${attr.text}`;
+      // `asyncio.Event()` — the head names an imported library module, so the
+      // value is not this repo's whatever the callee does. Recorded as a type
+      // rather than a marker, which is what lets the gap report say so.
+      if (pyLibModules.has(path[0]) && !pyBindsAValue(path[0], fn)) return `${full}.${attr.text}`;
+      if (path[0] === boundName) return null; // circular, as above
+      return `#ret:${full}.${attr.text}`; // a call on a value — the head is not a module
+    };
+
     for (const c of caps) {
       if (c.name !== 'var.local') continue;
       const assign = c.node?.parent;
@@ -1510,39 +1766,180 @@ export async function extract({ file, lang, langId, scm, source, pyRepoModules =
       // fresh wrapper for the same node, so `!==` is always true.
       const left = assign.childForFieldName?.('left');
       if (!left || left.startIndex !== c.node.startIndex) continue; // not a plain `x = …`
-      const value = assign.childForFieldName?.('right');
-      if (value?.type !== 'call') continue;
-      const fn = value.childForFieldName?.('function');
-      if (!fn) continue;
-      let callee = null;
-      if (fn.type === 'identifier') callee = fn.text;
-      else if (fn.type === 'attribute') {
-        // `mod.Cls()`: the head is translated through this file's imports, the same
-        // way a module-qualified CALL is. A repo module leaves the class reachable
-        // by its own (bare) qname; anything else keeps the dotted path, which no
-        // node carries — which is the point, because that type is not ours.
-        const path = pyObjectPath(fn.childForFieldName?.('object'));
-        const attr = fn.childForFieldName?.('attribute');
-        if (path && attr) {
-          const modulePath = pyModules.get(path[0]);
-          const full = modulePath ? [modulePath, ...path.slice(1)].join('.') : path.join('.');
-          const isRepoModule = pyRepoModules ? pyRepoModules.paths.has(full) : false;
-          callee = isRepoModule ? attr.text : `${full}.${attr.text}`;
-        }
-      }
-      if (!callee) continue;
+      // `r: Response = client.send()` states the type outright. The loop below
+      // records it, and a second row saying "whatever client.send returns"
+      // would make two types for one key — which every pass reads as a
+      // conflict and refuses. The written type wins.
+      if (assign.childForFieldName?.('type')) continue;
+      const type = pyBoundType(assign.childForFieldName?.('right'), c.text);
+      if (!type) continue;
       // The key is built exactly as the binding loop above builds it, so a row and
       // the call site that reads it cannot drift apart.
       const owner = defs.filter((d) => within(c, d)).sort(innermostFirst)[0];
       fieldTypes.push({
         key: owner ? `${owner.id}#var:${c.text}` : `${file}#var:${c.text}`,
-        type: `#ret:${callee}`, file,
+        type, file,
       });
+    }
+
+    // `with httpx.Client() as client:` — how httpx's own tests open a client,
+    // and every call on `client` afterwards hangs off that binding. The `with`
+    // protocol hands back what `__enter__` returns, and the convention every
+    // client, session and connection in these repos follows is to return
+    // itself; httpx writes it out as `def __enter__(self: T) -> T`. So the
+    // value is what the expression constructs.
+    for (const c of caps) {
+      if (c.name !== 'var.local') continue;
+      const target = c.node?.parent;
+      if (target?.type !== 'as_pattern_target') continue;
+      const as = target.parent;
+      if (as?.type !== 'as_pattern') continue;
+      const type = pyBoundType(as.namedChild?.(0), c.text);
+      if (!type) continue;
+      const owner = defs.filter((d) => within(c, d)).sort(innermostFirst)[0];
+      fieldTypes.push({
+        key: owner ? `${owner.id}#var:${c.text}` : `${file}#var:${c.text}`,
+        type, file,
+      });
+    }
+
+    // The type the source WRITES. Python was the only supported language whose
+    // annotations p-graph never read: the whole of `field_types` for a Python
+    // repo was the `x = Call()` rows above. Measured on three repositories,
+    // member calls resolved with certainty were 5.8% on flask, 17.4% on
+    // requests and 20.8% on httpx.
+    //
+    // Three places carry a type, and all three land under the SAME key the
+    // binding loop built, so Pass F answers them with no new pass:
+    //   `def f(r: Response)`     — typed_parameter / typed_default_parameter
+    //   `r: Response = client()` — an assignment with a type field
+    // and the third, a def's `-> T`, goes under "<qname>#ret" for Pass R.
+    for (const c of caps) {
+      if (c.name !== 'var.local') continue;
+      const p = c.node?.parent;
+      let ann = null;
+      if (p?.type === 'typed_parameter' || p?.type === 'typed_default_parameter') {
+        ann = p.childForFieldName?.('type');
+      } else if (p?.type === 'assignment') {
+        const left = p.childForFieldName?.('left');
+        if (left && left.startIndex === c.node.startIndex) ann = p.childForFieldName?.('type');
+      }
+      const type = pyTypeName(ann, pyModules, pyRepoModules);
+      if (!type) continue;
+      const owner = defs.filter((d) => within(c, d)).sort(innermostFirst)[0];
+      fieldTypes.push({
+        key: owner ? `${owner.id}#var:${c.text}` : `${file}#var:${c.text}`,
+        type, file,
+      });
+    }
+
+    // `def fetch() -> Response:` — the same row shape Go has written for
+    // months, so Pass R follows `#ret:fetch` to it with nothing new added.
+    for (const d of defs) {
+      if (d.kind !== 'function' && d.kind !== 'method') continue;
+      const type = pyTypeName(d.node?.childForFieldName?.('return_type'), pyModules, pyRepoModules);
+      if (type) fieldTypes.push({ key: `${d.qname}#ret`, type, file });
+    }
+
+    // What a class field holds, for the `self.<field>.<method>()` calls keyed
+    // above. Both key shapes are written, exactly as TypeScript does it: the
+    // call site uses the file-qualified one, and the bare one is the fallback.
+    const pushField = (cls, name, type) => {
+      if (!cls || !name || !type) return;
+      fieldTypes.push({ key: `${cls.name}#field:${name}`, type, file });
+      fieldTypes.push({ key: `${file}|${cls.name}#field:${name}`, type, file });
+    };
+    const enclosingClass = (n) => defs
+      .filter((d) => d.kind === 'class' && d.node && n.startIndex >= d.node.startIndex
+        && n.endIndex <= d.node.endIndex)
+      .sort((a, b) => (b.node.startIndex - a.node.startIndex))[0];
+
+    // `self.jar = Cookies()` and `self.jar: Cookies = jar`. The name on the left
+    // is an attribute, not a binding, so no capture ever pointed at it — the
+    // class body is walked directly instead. One walk per class, and a class
+    // body is small; the query file stays as it is, because every extra pattern
+    // there is matched against every node of every Python file and that is what
+    // made indexing flask twice as slow once already.
+    const selfAssign = (cls, n) => {
+      if (!n) return;
+      if (n.type === 'assignment') {
+        const left = n.childForFieldName?.('left');
+        if (left?.type === 'attribute' &&
+            ['self', 'cls'].includes(left.childForFieldName?.('object')?.text ?? '')) {
+          const name = left.childForFieldName?.('attribute')?.text;
+          const written = pyTypeName(n.childForFieldName?.('type'), pyModules, pyRepoModules);
+          // No annotation: fall back to what the right-hand side constructs,
+          // read exactly as a local binding is.
+          pushField(cls, name, written ?? pyBoundType(n.childForFieldName?.('right'), name));
+        }
+      }
+      for (let i = 0; i < (n.namedChildCount ?? 0); i++) selfAssign(cls, n.namedChild(i));
+    };
+    for (const d of defs) if (d.kind === 'class' && d.node) selfAssign(d, d.node);
+
+    for (const d of defs) {
+      // A name annotated in a class body — `jar: Cookies` — is a field, not a
+      // local. The annotation loop above keyed it on the class definition that
+      // holds it, which nothing reads; this is the key the call site uses.
+      if (d.kind !== 'class' || !d.node) continue;
+      const body = d.node.childForFieldName?.('body');
+      for (let i = 0; i < (body?.namedChildCount ?? 0); i++) {
+        const stmt = body.namedChild(i);
+        const a = stmt?.type === 'expression_statement' ? stmt.namedChild(0) : null;
+        if (a?.type !== 'assignment') continue;
+        const left = a.childForFieldName?.('left');
+        if (left?.type !== 'identifier') continue;
+        pushField(d, left.text, pyTypeName(a.childForFieldName?.('type'), pyModules, pyRepoModules));
+      }
+    }
+
+    // `@property def params(self) -> QueryParams` — `self.params` reads the
+    // property, so the field's type is the getter's return type. httpx writes
+    // `self.params.set(key, value)` in `URL.copy_set_param`, and this is what
+    // tells `QueryParams.set` from `Cookies.set`. Only a decorated getter
+    // counts: `self.<plain method>.x()` would be a call on a bound method,
+    // which no real code writes, and requiring the decorator keeps the fact
+    // read rather than assumed.
+    for (const d of defs) {
+      if (d.kind !== 'function' && d.kind !== 'method') continue;
+      if (!d.node) continue;
+      const dec = d.node.parent?.type === 'decorated_definition' ? d.node.parent.text : '';
+      if (!/@(?:\w+\.)*(?:property|cached_property)\b/.test(dec)) continue;
+      const type = pyTypeName(d.node.childForFieldName?.('return_type'), pyModules, pyRepoModules);
+      pushField(enclosingClass(d.node), d.name, type);
     }
   }
   // The same idea as the Python and Go binding maps: one entry per name per scope,
   // so a call written on a name can be keyed and looked up later. The position is
   // part of the key because one function can bind one name in several scopes.
+  // Every name this file's imports bind. `Test.createTestingModule(...)` is
+  // @nestjs/testing's Test, not a repo symbol, and nothing said so — the call
+  // fell through to the bare-name fallback and was guessed at whatever single
+  // repo symbol shared the method name. 264 such calls in nest.
+  const tsImported = new Set();
+  if (lang === 'ts' || lang === 'js') {
+    for (const c of caps) {
+      if (c.name !== 'import.binding') continue;
+      for (let i = 0; i < (c.node.namedChildCount ?? 0); i++) {
+        const part = c.node.namedChild(i);
+        if (!part) continue;
+        if (part.type === 'identifier') tsImported.add(part.text); // `import x from …`
+        else if (part.type === 'namespace_import') {              // `import * as ns from …`
+          const id = part.namedChild(0);
+          if (id?.type === 'identifier') tsImported.add(id.text);
+        } else if (part.type === 'named_imports') {
+          for (let j = 0; j < (part.namedChildCount ?? 0); j++) {
+            const spec = part.namedChild(j);
+            if (spec?.type !== 'import_specifier') continue;
+            // `{ Thing as Test }` binds Test, not Thing.
+            const bound = spec.childForFieldName?.('alias') ?? spec.childForFieldName?.('name');
+            if (bound?.text) tsImported.add(bound.text);
+          }
+        }
+      }
+    }
+  }
+
   const tsVarKeys = new Map(); // name -> [{ key, span }, ...]
   if (lang === 'ts' || lang === 'js') {
     for (const c of caps) {
@@ -1571,7 +1968,10 @@ export async function extract({ file, lang, langId, scm, source, pyRepoModules =
       for (const b of binds) {
         // The declaration is the parameter or the declarator, not the name node.
         const decl = b.node.parent;
-        const type = tsStatedTypeName(decl);
+        const cls = defs.filter((d) => d.kind === 'class' && d.node
+          && b.node.startIndex >= d.node.startIndex && b.node.endIndex <= d.node.endIndex)
+          .sort((x, y) => y.node.startIndex - x.node.startIndex)[0];
+        const type = tsStatedTypeName(decl, cls?.name ?? null);
         if (type) { fieldTypes.push({ key: b.key, type, file }); continue; }
         // No type stated. In TypeScript a parameter without one is typed by the
         // signature it is passed to — a library's callback, most of the time — so
@@ -1615,8 +2015,21 @@ export async function extract({ file, lang, langId, scm, source, pyRepoModules =
       // does not. `readonly` alone is an anonymous token with no node of its own,
       // so the node's own text is what says it is there.
       if (c.node.type !== 'public_field_definition') {
-        const modifier = c.node.namedChild(0)?.type === 'accessibility_modifier' ||
-          /^readonly\b/.test(c.node.text);
+        // The modifier is not always first. nest writes
+        // `@InjectModel(Cat.name) private readonly catModel: Model<Cat>`, and a
+        // decorator takes that position — which is why 157 nest fields, all of
+        // them dependency injection, were skipped and their type went in under
+        // the parameter's own key where no call site ever looks.
+        //
+        // So: any child may be the accessibility modifier, and `readonly` — an
+        // anonymous token with no node — is looked for in the text BEFORE the
+        // parameter's name rather than at the very start.
+        const kids = c.node.namedChildren ?? [];
+        const nameNode = kids.find((n) => n.type === 'identifier');
+        const head = nameNode
+          ? c.node.text.slice(0, nameNode.startIndex - c.node.startIndex) : c.node.text;
+        const modifier = kids.some((n) => n.type === 'accessibility_modifier') ||
+          /\breadonly\b/.test(head);
         if (!modifier) continue;
       }
       const name = c.node.type === 'public_field_definition'
@@ -1632,6 +2045,15 @@ export async function extract({ file, lang, langId, scm, source, pyRepoModules =
     // `class Sub extends Base`, recorded so the resolver can look a field up in the
     // class that really declares it. Only a plain name counts: `extends mixin(Base)`
     // names no single base, and guessing one would invent a whole method set.
+    // `build(): Svc` — the declared result, keyed "<qname>#ret", exactly as Go
+    // and Python write it, so Pass R follows a "#ret:build" marker to it with
+    // no new pass. All three TypeScript graphs in the study held zero of these.
+    for (const d of defs) {
+      if (d.kind !== 'function' && d.kind !== 'method') continue;
+      const type = tsReturnTypeName(d.node);
+      if (type) fieldTypes.push({ key: `${d.qname}#ret`, type, file });
+    }
+
     for (const c of caps) {
       if (c.name !== 'ts.extends') continue;
       const value = c.node.namedChild(0);
@@ -1941,6 +2363,21 @@ export async function extract({ file, lang, langId, scm, source, pyRepoModules =
           if (obj?.type === 'identifier') {
             const key = pyVarKeyAt(obj.text, obj);
             if (key) { field_key = key; method = c.text; }
+          } else if (obj?.type === 'attribute' &&
+                     ['self', 'cls'].includes(obj.childForFieldName?.('object')?.text ?? '')) {
+            // `self.jar.set(…)` — a call on a class FIELD, and the shape Python
+            // writes most. It carried no key at all until now, so no type could
+            // ever answer it: 115 such calls in httpx, 51 in flask, 36 in
+            // requests. Keyed on the class, not on a position, because the
+            // field is usually bound in `__init__` far from the call. The file
+            // goes in front for the reason C++ and TypeScript need it — two
+            // classes of one name in one repo would otherwise share the key.
+            const fieldName = obj.childForFieldName?.('attribute')?.text;
+            const cls = defs.filter((d) => d.kind === 'class' && within(c, d)).sort(innermostFirst)[0];
+            if (fieldName && cls) {
+              field_key = `${file}|${cls.name}#field:${fieldName}`;
+              method = c.text;
+            }
           }
         }
         // `c.query(...)` in TypeScript: key the call on the receiver name, exactly
@@ -1987,10 +2424,17 @@ export async function extract({ file, lang, langId, scm, source, pyRepoModules =
     // receiver is a plain name that no local binds, so it is the one place where
     // "this is the global" can be said. A repo that declares its own class of that
     // name overrides it later — see resolveTsStaticCalls.
+    //
+    // Python's version is a call written as a PLAIN NAME. `set(xs)` is the
+    // builtin; `jar.set(x)` is a method on a value and must be left alone, so
+    // the mark is refused whenever the name hangs off an attribute.
     const external = (lang === 'go' && c.node?.type !== 'field_identifier' &&
       (GO_BUILTINS.has(c.text) || GO_PREDECLARED_TYPES.has(c.text))) ||
+      (lang === 'py' && kind === 'call' && c.node?.parent?.type !== 'attribute' &&
+        PY_BUILTINS.has(c.text)) ||
       ((lang === 'ts' || lang === 'js') && field_key?.startsWith('#static:') &&
-        JS_GLOBALS.has(field_key.slice('#static:'.length))) ? 1 : 0;
+        (JS_GLOBALS.has(field_key.slice('#static:'.length)) ||
+          tsImported.has(field_key.slice('#static:'.length)))) ? 1 : 0;
     // Was the call written on something? Recorded for every language, because the
     // resolver then refuses a target that is not a member of a type — `end`
     // declared inside one method body can never answer `response.end()`.

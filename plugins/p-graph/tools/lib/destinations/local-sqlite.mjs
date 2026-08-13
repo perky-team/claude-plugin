@@ -728,6 +728,38 @@ export function openStore(dbPath, opts = {}) {
     }
   };
 
+  // Pass SP — the same idea for Python. Extraction marks a plain `set(xs)` or
+  // `len(xs)` external, because those name the language. A repo may declare its
+  // own `def set(...)`, and then a plain call to it means the declaration.
+  //
+  // A Python qname carries no module path, so "the same package" cannot be
+  // asked here the way it is for Go. The guard is the whole repo instead:
+  // exactly one node of that qname, or nothing is claimed. Two modules each
+  // declaring `def set` is the Python twin of two build-tagged Go files, and a
+  // pick between them would be a guess.
+  //
+  // As in Pass S, `external` itself is left as extraction wrote it — only
+  // dst_id is set, so nothing outlives the declaration that justified it.
+  const resolvePyShadowedBuiltins = () => {
+    const candidates = db.prepare(`
+      SELECT rowid, dst_name FROM edges
+      WHERE kind = 'call' AND dst_id IS NULL AND external = 1 AND lang = 'py'
+        AND member = 0 AND dst_name IS NOT NULL`).all();
+    if (!candidates.length) return;
+    const byQname = db.prepare(
+      `SELECT id FROM nodes WHERE qname = ? AND lang = 'py' AND kind IN ${CALLABLE} LIMIT 2`);
+    const setDst = db.prepare('UPDATE edges SET dst_id = ?, guess = 0 WHERE rowid = ?');
+    const cache = new Map();
+    for (const e of candidates) {
+      if (!cache.has(e.dst_name)) {
+        const hits = byQname.all(e.dst_name);
+        cache.set(e.dst_name, hits.length === 1 ? hits[0].id : null);
+      }
+      const id = cache.get(e.dst_name);
+      if (id) setDst.run(id, e.rowid);
+    }
+  };
+
   // Pass L — what the call site can see wins. A top-level function in JS,
   // TypeScript, Python or C++ has a BARE qname (`walk`, not `util.walk`), so the
   // exact-qname pass below treats a plain `walk(...)` written ANYWHERE in the repo
@@ -821,7 +853,7 @@ export function openStore(dbPath, opts = {}) {
   const resolveReturnTypes = () => {
     const pending = db.prepare(`
       SELECT rowid, field_key, method, lang FROM edges
-      WHERE kind = 'call' AND dst_id IS NULL AND lang IN ('go', 'py')
+      WHERE kind = 'call' AND dst_id IS NULL AND lang IN ('go', 'py', 'ts', 'js')
         AND field_key IS NOT NULL AND method IS NOT NULL`).all();
     if (!pending.length) return;
     // One row per key, and only when that key has exactly one recorded type: two
@@ -850,11 +882,37 @@ export function openStore(dbPath, opts = {}) {
     const idCache = new Map();
     db.prepare('BEGIN').run();
     try {
+      // What a recorded row states. A plain row IS the type. A "#ret:" row is
+      // one hop: the callee's declared result, or the class the callee names.
+      //
+      // Python needs one hop more, and only Python. `r = client.request()`
+      // records "#ret:client.request", where the head is a VALUE in the same
+      // scope, not a module — so the callee has no qname of its own until we
+      // know what `client` is. Two facts, both written down: `client` is a
+      // Client, and `Client.request` is declared `-> Response`. httpx's tests
+      // open a client with `with httpx.Client() as client` and then write that
+      // shape everywhere; the four call sites missing from
+      // `callers "Response.raise_for_status"` are all of it.
+      //
+      // The depth guard stops at one extra hop. A chain that needs more is a
+      // chain we would be inferring rather than reading.
+      const typeOf = (row, scope, lang, depth) => {
+        if (!row) return null;
+        if (!row.startsWith('#')) return row;
+        if (!row.startsWith('#ret:')) return null;
+        const callee = row.slice('#ret:'.length);
+        const direct = typeOfKey.get(`${callee}#ret`) ?? typeFromClass(callee, lang);
+        if (direct) return direct;
+        if (depth >= 1 || lang !== 'py' || !scope || !callee.includes('.')) return null;
+        const dot = callee.indexOf('.');
+        const head = typeOf(typeOfKey.get(`${scope}#var:${callee.slice(0, dot)}`), scope, lang, depth + 1);
+        return head ? (typeOfKey.get(`${head}.${callee.slice(dot + 1)}#ret`) ?? null) : null;
+      };
       for (const e of pending) {
         const marker = typeOfKey.get(e.field_key);
         if (!marker || !marker.startsWith('#ret:')) continue;
-        const callee = marker.slice(5);
-        const retType = typeOfKey.get(`${callee}#ret`) ?? typeFromClass(callee, e.lang);
+        const at = e.field_key.indexOf('#var:');
+        const retType = typeOf(marker, at === -1 ? null : e.field_key.slice(0, at), e.lang, 0);
         if (!retType) continue; // callee outside the repo, or several result types
         const qname = `${retType}.${e.method}`;
         const key = `${qname}|${e.lang}`;
@@ -930,6 +988,7 @@ export function openStore(dbPath, opts = {}) {
     // exact qualified name — and it only ever touches edges Pass A cannot: the
     // ones extraction marked external.
     resolveShadowedBuiltins();
+    resolvePyShadowedBuiltins();
 
     // Runs after Pass A and before every fallback: the innermost scope is the
     // better answer whenever it has one, and a scope C++ really would search is
@@ -1006,6 +1065,27 @@ export function openStore(dbPath, opts = {}) {
         AND NOT EXISTS (
           SELECT 1 FROM field_types ft
           WHERE ft.key = edges.field_key
+            -- A "#ret:" marker says the type is decided by a callee. For Go and
+            -- Python that is evidence: the callee is knowable, so failing to
+            -- resolve it means the value is not this repo's, and refusing the
+            -- guess was measured as the largest single cut in false rows.
+            -- TypeScript is the other way round and was measured that way too:
+            -- "const module = await Test.createTestingModule(...).compile()" is
+            -- everywhere in nest, nothing can read what it returns, and refusing
+            -- there threw away 190 rows that were all correct. So for TS and JS
+            -- a marker means "unknown", not "known and not this", and Pass R
+            -- above has already had its chance at it.
+            --
+            -- "Unknown" is the exact word: the marker is skipped only when
+            -- nothing at all could be learned about the callee. When the callee
+            -- DOES declare a result and it simply is not a repo class — a
+            -- function returning a node:stream Duplex — that is evidence, and
+            -- the refusal stands.
+            AND NOT (edges.lang IN ('ts','js') AND ft.type LIKE '#ret:%'
+              AND NOT EXISTS (SELECT 1 FROM field_types r
+                              WHERE r.key = substr(ft.type, 6) || '#ret')
+              AND NOT EXISTS (SELECT 1 FROM nodes cn
+                              WHERE cn.qname = substr(ft.type, 6) AND cn.kind = 'class'))
             AND NOT EXISTS (
               -- An embedded interface is not proof of promotion either: the Go
               -- decorator pattern embeds the interface, and which
@@ -1415,6 +1495,23 @@ function attachReadHelpers(store, db, hasFts) {
       const cls = fieldKey.split('#field:')[0].split('|').pop();
       written = type.get(fieldKey) ?? type.get(`${cls}#field:${field}`);
     } else written = type.get(fieldKey);
+    // One hop through a repo function's declared result. httpx writes
+    // `response_complete = create_event()` and `def create_event() -> Event`,
+    // where Event is asyncio's — so the receiver's type IS written down, two
+    // facts apart, and both of them are read from the source. Without the hop
+    // the row is listed as work for the reader; with it the report can say the
+    // receiver is not this repo's and count it in one line.
+    if (written?.startsWith('#ret:')) {
+      const callee = written.slice('#ret:'.length);
+      // A constructor call names the type outright: `cid = CaseInsensitiveDict()`
+      // makes cid a CaseInsensitiveDict whether or not that class declares the
+      // method being asked about. requests inherits `update` from
+      // MutableMapping, so nothing resolves — and four `cid.update(...)` rows
+      // were landing in the gap list of `RequestsCookieJar.update`, which they
+      // can never be a call of.
+      const declared = known.has(callee) ? callee : type.get(`${callee}#ret`);
+      written = declared && !declared.startsWith('#') ? declared : null;
+    }
     if (!written || written.startsWith('#')) return null;
     const names = new Set();
     // One alias hop, then the name itself and its tail, then one embed hop.
