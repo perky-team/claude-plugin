@@ -84,8 +84,14 @@ schema by hand, which is us doing the job instead of the agent.
 
 ## 5. Polygon
 
-A small but real JavaScript project, about 500–800 lines, with vitest already
-set up. We write it once and freeze it as a seed commit.
+A small but real JavaScript project, about 500–800 lines. We write it once and
+freeze it as a seed commit.
+
+**It has no dependencies at all.** Both the visible and the hidden tests use
+`node:test`, which ships with Node. That removes `npm install` from every part
+of this study: the agent's copy needs no setup, a snapshot is a few hundred
+kilobytes instead of a few hundred megabytes, and scoring is one `node --test`
+against a copied directory.
 
 It ships a `SPEC.md` describing one feature as about ten requirements with real
 dependencies between them — for example: load a config file → validate it →
@@ -165,13 +171,14 @@ are void and the cap has to go up before anything is published.
 
 ### Snapshots
 
-The snapshot copies the working tree without `node_modules`: 150 sessions of
-`node_modules` is tens of gigabytes for no gain. `.git` **is** copied — if the
-agent committed, that is evidence.
+The snapshot copies the whole working tree, including `.git` — if the agent
+committed, that is evidence. `node_modules` is skipped if it appears at all; the
+polygon has no dependencies, so it should never be there, and an agent that
+installs something is not going to have it counted against its disk.
 
-Scoring drops a prepared `node_modules` into the snapshot, adds the hidden
-suite, runs vitest, and throws the whole scoring directory away. The agent's own
-directory is never touched.
+Scoring copies the hidden suite into the snapshot, runs `node --test`, reads the
+TAP output, and throws the scoring directory away. The agent's own directory is
+never touched.
 
 The prompt is identical in every session and every arm, and says nothing about
 what has already been done:
@@ -217,8 +224,8 @@ hand the faster arm a better score for being faster — the same fact twice, onc
 as speed and once as reliability.
 
 This is a real improvement on the p-graph harness: there, a second model had to
-read each answer and extract the claims. Here the score is a vitest JSON report.
-It is free, exact, and identical every time.
+read each answer and extract the claims. Here the score is the TAP output of
+`node --test`. It is free, exact, and identical every time.
 
 ## 8. Not disturbing the p-graph measurement
 
@@ -271,13 +278,25 @@ than answering a question.
 
 ```
 plugins/p-tasks/scripts/
-  measure-tracker.mjs        the harness
+  measure-tracker.mjs        the CLI
+  measure-tracker/
+    arms.mjs                 install an arm into a fresh clone; preflight
+    session.mjs              run one session, record what it cost
+    snapshot.mjs             copy the tree, measure churn between copies
+    score.mjs                run the hidden suite, read TAP
+    metrics.mjs              pure sums: done, sessions to done, regression rate
+    report.mjs               the tables
   beads-arm-rule.md          the rule text the beads arm writes to CLAUDE.md
-  polygon/                   the seed project, committed
-    SPEC.md                  the feature, ~10 requirements
-    package.json src/ tests/ the visible suite
-  polygon-acceptance/        the hidden suite, committed, never copied to the agent
+  polygon/                   the seed project, committed, no dependencies
+    SPEC.md                  the feature, ~10 requirements, interfaces pinned
+    src/ tests/              stubs and the visible suite
+  polygon-reference/         a complete implementation, committed
+  polygon-acceptance/        the hidden suite, committed, never given to the agent
 ```
+
+`polygon-reference/` is how we know the hidden suite is passable at all. A suite
+nobody has ever seen go green is not ground truth, it is a guess — and a study
+whose ceiling is unreachable spends $100 to measure nothing.
 
 Commands:
 
@@ -289,8 +308,9 @@ node plugins/p-tasks/scripts/measure-tracker.mjs --arm beads
 node plugins/p-tasks/scripts/measure-tracker.mjs --score
 ```
 
-`--only <arm>-<run>` re-runs part of it after those rows are deleted, matching
-p-graph's `--only`.
+There is no `--only` flag. A finished run is one that has rows in `runs.jsonl`,
+so re-running part of the study is: delete those rows, run `--arm <name>` again.
+The harness picks up exactly what is missing.
 
 ## 12. Preflight
 
