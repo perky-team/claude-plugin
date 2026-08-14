@@ -1215,11 +1215,17 @@ describe('OFF_SETTINGS', () => {
 });
 
 describe('prepArm', () => {
-  it('leaves the none arm with no CLAUDE.md and no tracker', () => {
+  it('leaves the none arm with nothing any arm left behind', () => {
+    // Seed all of it, not only CLAUDE.md: a run directory is reused between
+    // arms, so `none` has to undo whatever the arm before it installed.
     writeFileSync(join(dir, 'CLAUDE.md'), 'stale\n');
+    mkdirSync(join(dir, 'docs', 'tasks'), { recursive: true });
+    mkdirSync(join(dir, '.beads'), { recursive: true });
+    mkdirSync(join(dir, '.claude'), { recursive: true });
     prepArm({ arm: 'none', dir, pluginDir: PLUGIN });
-    expect(existsSync(join(dir, 'CLAUDE.md'))).toBe(false);
-    expect(existsSync(join(dir, 'docs', 'tasks'))).toBe(false);
+    for (const p of ['CLAUDE.md', 'docs/tasks', '.beads', '.claude']) {
+      expect(existsSync(join(dir, p)), p).toBe(false);
+    }
   });
 
   it('gives the ptasks arm a rule and an initialised tracker', () => {
@@ -1228,12 +1234,22 @@ describe('prepArm', () => {
     expect(existsSync(join(dir, 'docs', 'tasks', '.ptasks.json'))).toBe(true);
   }, 30_000);
 
-  it('hides the arm files from git status, so the arms differ by one thing only', () => {
+  // Ask git, do not re-read our own constant. The failure this guards against
+  // is a file the tracker's installer writes that the exclude list does not
+  // name — and a test that only greps the list it is validating can never see
+  // that. This is the property the whole study rests on: the arms must differ
+  // by the tracker and by nothing else.
+  it('leaves git status clean after installing an arm', () => {
+    execFileSync('git', ['init', '--quiet'], { cwd: dir });
+    writeFileSync(join(dir, 'seed.txt'), 'seed\n');
+    execFileSync('git', ['add', '-A'], { cwd: dir });
+    execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t',
+      'commit', '--quiet', '-m', 'seed'], { cwd: dir });
+
     prepArm({ arm: 'ptasks', dir, pluginDir: PLUGIN });
-    const exclude = readFileSync(join(dir, '.git', 'info', 'exclude'), 'utf-8');
-    expect(exclude).toContain('CLAUDE.md');
-    expect(exclude).toContain('docs/tasks/');
-    expect(exclude).toContain('.beads/');
+
+    const status = execFileSync('git', ['status', '--porcelain'], { cwd: dir, encoding: 'utf-8' });
+    expect(status.trim()).toBe('');
   }, 30_000);
 });
 ```
@@ -1260,25 +1276,32 @@ const BEADS_RULE = join(HERE, '..', 'beads-arm-rule.md');
 // The operator's own machine has plugins switched on for every session. Left
 // alone they would quietly join the `none` arm and void the comparison. Each
 // arm gets back exactly one thing, through --plugin-dir or the bd binary.
+// Every plugin in this marketplace, not just the ones we remember using. A
+// plugin left on joins all three arms, which does not bias the comparison but
+// does stop `none` from being a floor — and the list of what the operator has
+// switched on is not ours to predict.
 export const OFF_SETTINGS = JSON.stringify({
-  enabledPlugins: {
-    'p-graph@perky.team': false,
-    'p-tasks@perky.team': false,
-    'p-wiki@perky.team': false,
-    'p-statusline@perky.team': false,
-    'gopls-lsp@claude-plugins-official': false,
-  },
+  enabledPlugins: Object.fromEntries([
+    ...['p-graph', 'p-tasks', 'p-wiki', 'p-statusline', 'p-flow', 'p-shed', 'p-observe', 'p-chat']
+      .map((n) => [`${n}@perky.team`, false]),
+    ['gopls-lsp@claude-plugins-official', false],
+  ]),
   language: 'English',
 });
 
+// One list, two uses. A path that an arm owns has to be both removed when the
+// arm changes and hidden from `git status`; keeping two hand-written lists in
+// step is a drift waiting to happen.
+const ARM_FILES = ['CLAUDE.md', '.claude', 'docs/tasks', '.beads'];
+
 // A dirty `git status` is a hint one arm would have and another would not, so
 // every arm's own files are excluded the same way, whichever arm is running.
-const EXCLUDE = 'CLAUDE.md\n.claude/\ndocs/tasks/\n.beads/\n';
+// A bare name in an exclude file matches a file or a directory of that name,
+// so the same list serves both without any decoration.
+const EXCLUDE = `${ARM_FILES.join('\n')}\n`;
 
 const clean = (dir) => {
-  for (const p of ['CLAUDE.md', '.claude', 'docs/tasks', '.beads']) {
-    rmSync(join(dir, p), { recursive: true, force: true });
-  }
+  for (const p of ARM_FILES) rmSync(join(dir, p), { recursive: true, force: true });
 };
 
 /** Install one arm into a fresh clone. Returns the directory. */
@@ -1314,12 +1337,25 @@ export function prepArm({ arm, dir, pluginDir }) {
  */
 export function preflight(arm) {
   if (arm !== 'beads') return;
-  const where = process.platform === 'win32' ? 'where' : 'which';
-  if (spawnSync(where, ['bd'], { encoding: 'utf-8' }).status !== 0) {
-    throw new Error('the beads arm is not ready: `bd` is not on PATH.\n'
-      + 'Install it and re-run. Running the arm without it measures the setup, not the tool.');
-  }
   if (!existsSync(BEADS_RULE)) throw new Error(`missing rule file: ${BEADS_RULE}`);
+
+  // Not "is it on PATH" but "does it work here". On Windows a `bd` that
+  // resolves to a `.cmd` shim is found by `where` and then fails to spawn,
+  // because Node cannot start a batch file without a shell. Running the real
+  // command in a scratch directory catches that, and every other broken
+  // install, before the study spends its first dollar.
+  const scratch = mkdtempSync(join(tmpdir(), 'beads-preflight-'));
+  try {
+    const r = spawnSync('bd', ['init'], { cwd: scratch, encoding: 'utf-8' });
+    if (r.error || r.status !== 0) {
+      throw new Error('the beads arm is not ready: `bd init` did not work.\n'
+        + `  ${(r.error?.message ?? (r.stderr || '').trim()) || `exit ${r.status}`}\n`
+        + 'Install beads and check `bd init` runs in an empty directory, then re-run.\n'
+        + 'Running the arm without it measures the setup, not the tool.');
+    }
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
 }
 ```
 
