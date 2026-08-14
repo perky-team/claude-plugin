@@ -46,8 +46,15 @@ const flag = (n, f = null) => {
 };
 
 // Its own work directory and its own settings file. A p-graph measurement may
-// be running at the same time and must not be disturbed.
-const work = String(flag('work', join(tmpdir(), 'ptasks-measure')));
+// be running at the same time and must not be disturbed. `--smoke` gets a
+// directory of its own too: it is a one-session pilot-of-the-pilot, and if it
+// wrote into the same runs.jsonl as everything else, `pendingWork` would read
+// its rows as a finished run and the real `--pilot` right after it would
+// silently do no work.
+export function defaultWorkDir(args) {
+  return join(tmpdir(), args.includes('--smoke') ? 'ptasks-measure-smoke' : 'ptasks-measure');
+}
+const work = String(flag('work', defaultWorkDir(args)));
 const runsFile = join(work, 'runs.jsonl');
 const settingsFile = join(work, 'ptasks-arm-settings.json');
 const maxTotalUsd = Number(flag('max-total-usd', 150));
@@ -62,6 +69,19 @@ export function pendingWork(rows, { arms, runs }) {
     }
   }
   return out;
+}
+
+/**
+ * The snapshot root for one (arm, run) pair, cleared before its first
+ * snapshot. `cpSync` merges into an existing destination rather than pruning
+ * it, so a re-run of the same pair would otherwise inherit every file an
+ * earlier, possibly bad, attempt wrote and this attempt has not touched yet —
+ * exactly the run someone is redoing because they don't trust it.
+ */
+export function clearSnapshotRoot(work, arm, run) {
+  const snapRoot = join(work, 'snapshots', `${arm}-${run}`);
+  rmSync(snapRoot, { recursive: true, force: true });
+  return snapRoot;
 }
 
 const readRows = () => (existsSync(runsFile)
@@ -97,7 +117,8 @@ function freshCopy(arm, run) {
 async function runOne(arm, run, sessions, expected) {
   const claudeBin = findClaude();
   const dir = freshCopy(arm, run);
-  const seedSnap = snapshot(dir, join(work, 'snapshots', `${arm}-${run}`, 's00'));
+  const snapRoot = clearSnapshotRoot(work, arm, run);
+  const seedSnap = snapshot(dir, join(snapRoot, 's00'));
   let prev = seedSnap;
   let consecutiveErrors = 0;
 
@@ -106,7 +127,7 @@ async function runOne(arm, run, sessions, expected) {
     const res = runSession({
       dir, arm, pluginDir: PLUGIN, settingsFile, capUsd: CAP_USD, model: MODEL, claudeBin,
     });
-    const snap = snapshot(dir, join(work, 'snapshots', `${arm}-${run}`, `s${String(session).padStart(2, '0')}`));
+    const snap = snapshot(dir, join(snapRoot, `s${String(session).padStart(2, '0')}`));
     const row = {
       arm, run, session,
       ...res,
