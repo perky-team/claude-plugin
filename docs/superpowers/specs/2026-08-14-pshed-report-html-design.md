@@ -141,15 +141,21 @@ geometry is worth testing on its own.
 
 | function | contract |
 |---|---|
-| `barsByDay(byDay, opts)` | Vertical bars, one per day. Returns an `<svg>` string. |
-| `barsByJob(byJob, opts)` | Horizontal bars, sorted by cost descending. Returns an `<svg>` string. |
+| `barsByDay(byDay, opts)` | Vertical bars, one per day, with date labels. Returns an `<svg>` string. |
 
 `opts` is `{ width, height, series, muted, grid }` — the box in CSS pixels and three
-color strings. The generators hold no palette of their own; `html.mjs` passes the
-values in, so the colors live in exactly one place. Both accept an empty input and
-return an empty-state SVG rather than a broken box. Jobs past the eighth in
-`barsByJob` fold into one `other` row, never into a ninth color — with one series
-there is no ninth color to reach for, and a chart of twenty rows is a table.
+color strings. The generator holds no palette of its own; `html.mjs` passes the values
+in, so the colors live in exactly one place. An empty or all-zero input returns an
+empty-state SVG rather than a broken box.
+
+**Cost-by-job is not SVG.** A horizontal bar is a `<div>` with a percentage width, so
+it needs no geometry, aligns with its label by construction, and reflows on a narrow
+screen — which SVG text does not. It also keeps every job name inside `html.mjs`, where
+escaping already happens; an SVG generator that drew job names would need its own copy
+of `escapeHtml` and would import it back from `html.mjs`, making the two modules
+circular. The day chart stays SVG because its labels are dates this code generates
+itself, and because bars of equal width need real geometry. Jobs past the eighth fold
+into one `other` row: a chart of twenty rows is a table.
 
 Mark rules, taken from the data-viz method and not negotiable at implementation time:
 
