@@ -1,5 +1,6 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, rmSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { OFF_SETTINGS, prepArm } from '../../scripts/measure-tracker/arms.mjs';
@@ -23,11 +24,17 @@ describe('OFF_SETTINGS', () => {
 });
 
 describe('prepArm', () => {
-  it('leaves the none arm with no CLAUDE.md and no tracker', () => {
+  it('leaves the none arm with nothing any arm left behind', () => {
+    // Seed all of it, not only CLAUDE.md: a run directory is reused between
+    // arms, so `none` has to undo whatever the arm before it installed.
     writeFileSync(join(dir, 'CLAUDE.md'), 'stale\n');
+    mkdirSync(join(dir, 'docs', 'tasks'), { recursive: true });
+    mkdirSync(join(dir, '.beads'), { recursive: true });
+    mkdirSync(join(dir, '.claude'), { recursive: true });
     prepArm({ arm: 'none', dir, pluginDir: PLUGIN });
-    expect(existsSync(join(dir, 'CLAUDE.md'))).toBe(false);
-    expect(existsSync(join(dir, 'docs', 'tasks'))).toBe(false);
+    for (const p of ['CLAUDE.md', 'docs/tasks', '.beads', '.claude']) {
+      expect(existsSync(join(dir, p)), p).toBe(false);
+    }
   });
 
   it('gives the ptasks arm a rule and an initialised tracker', () => {
@@ -36,11 +43,21 @@ describe('prepArm', () => {
     expect(existsSync(join(dir, 'docs', 'tasks', '.ptasks.json'))).toBe(true);
   }, 30_000);
 
-  it('hides the arm files from git status, so the arms differ by one thing only', () => {
+  // Ask git, do not re-read our own constant. The failure this guards against
+  // is a file the tracker's installer writes that the exclude list does not
+  // name — and a test that only greps the list it is validating can never see
+  // that. This is the property the whole study rests on: the arms must differ
+  // by the tracker and by nothing else.
+  it('leaves git status clean after installing an arm', () => {
+    execFileSync('git', ['init', '--quiet'], { cwd: dir });
+    writeFileSync(join(dir, 'seed.txt'), 'seed\n');
+    execFileSync('git', ['add', '-A'], { cwd: dir });
+    execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t',
+      'commit', '--quiet', '-m', 'seed'], { cwd: dir });
+
     prepArm({ arm: 'ptasks', dir, pluginDir: PLUGIN });
-    const exclude = readFileSync(join(dir, '.git', 'info', 'exclude'), 'utf-8');
-    expect(exclude).toContain('CLAUDE.md');
-    expect(exclude).toContain('docs/tasks/');
-    expect(exclude).toContain('.beads/');
+
+    const status = execFileSync('git', ['status', '--porcelain'], { cwd: dir, encoding: 'utf-8' });
+    expect(status.trim()).toBe('');
   }, 30_000);
 });
