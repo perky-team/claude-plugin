@@ -108,9 +108,9 @@ Big repositories:
 | | grep | p-graph | Gap |
 |---|---|---|---|
 | Call sites found | 226 of 228 | 226 of 228 | tie |
-| Invented | 51 | **17** | **−67%** |
-| Cost per question | $0.338 | **$0.290** | **−14%** |
-| Time per question | 72 s | **61 s** | **−15%** |
+| Invented | 51 | **0** | **−100%** |
+| Cost per question | $0.338 | **$0.292** | **−14%** |
+| Time per question | 72 s | **51 s** | **−29%** |
 
 **TypeScript** — nest 1,728 / 38.3k · 5 questions
 
@@ -118,17 +118,17 @@ Big repositories:
 |---|---|---|---|
 | Call sites found | 177 of 177 | 177 of 177 | tie |
 | Invented | 0 | 0 | tie |
-| Cost per question | $0.142 | **$0.130** | **−8%** |
-| Time per question | **20 s** | 22 s | +8% |
+| Cost per question | **$0.142** | $0.164 | +15% |
+| Time per question | **20 s** | 25 s | +23% |
 
 **C++** — rocksdb 1,454 / 318.7k · 3 questions
 
 | | grep | p-graph | Gap |
 |---|---|---|---|
-| Call sites found | **114 of 114** | 108 of 114 | **grep** |
+| Call sites found | 114 of 114 | 114 of 114 | tie |
 | Invented | 0 | 0 | tie |
-| Cost per question | $0.127 | **$0.093** | **−26%** |
-| Time per question | 21 s | **14 s** | **−34%** |
+| Cost per question | $0.127 | **$0.110** | **−13%** |
+| Time per question | 21 s | **16 s** | **−24%** |
 
 **Python** — django 3,036 / 195.1k · 3 questions
 
@@ -136,8 +136,8 @@ Big repositories:
 |---|---|---|---|
 | Call sites found | 108 of 108 | 108 of 108 | tie |
 | Invented | 0 | 0 | tie |
-| Cost per question | **$0.097** | $0.130 | +34% |
-| Time per question | **17 s** | 20 s | +18% |
+| Cost per question | **$0.097** | $0.107 | +10% |
+| Time per question | 17 s | **14 s** | **−16%** |
 
 Small repositories:
 
@@ -147,17 +147,17 @@ Small repositories:
 |---|---|---|---|
 | Call sites found | 105 of 108 | **108 of 108** | **p-graph** |
 | Invented | 0 | 0 | tie |
-| Cost per question | $0.170 | **$0.160** | **−6%** |
-| Time per question | 45 s | **31 s** | **−32%** |
+| Cost per question | $0.170 | **$0.145** | **−15%** |
+| Time per question | 45 s | **20 s** | **−56%** |
 
 **TypeScript** — axios 240 / 14.3k, got 85 / 14.3k · 4 questions
 
 | | grep | p-graph | Gap |
 |---|---|---|---|
-| Call sites found | **282 of 282** | 269 of 282 | **grep** |
-| Invented | **0** | 2 | **grep** |
-| Cost per question | $0.195 | **$0.185** | **−5%** |
-| Time per question | 32 s | **29 s** | **−11%** |
+| Call sites found | **282 of 282** | 254 of 282 | **grep** |
+| Invented | 0 | 0 | tie |
+| Cost per question | $0.195 | **$0.173** | **−12%** |
+| Time per question | 32 s | **28 s** | **−15%** |
 
 **C++** — spdlog 152 / 8.2k, leveldb 132 / 9.2k, re2 89 / 8.3k · 9 questions
 
@@ -165,29 +165,33 @@ Small repositories:
 |---|---|---|---|
 | Call sites found | 476 of 480 | **477 of 480** | **p-graph** |
 | Invented | 0 | 0 | tie |
-| Cost per question | **$0.302** | $0.328 | +8% |
-| Time per question | **53 s** | 58 s | +11% |
+| Cost per question | **$0.302** | $0.309 | +2% |
+| Time per question | 53 s | **48 s** | **−9%** |
 
 **Python** — flask 83 / 3.9k, httpx 60 / 4.2k, requests 37 / 2.7k · 5 questions
 
 | | grep | p-graph | Gap |
 |---|---|---|---|
 | Call sites found | 135 of 135 | 135 of 135 | tie |
-| Invented | 0 | 0 | tie |
-| Cost per question | $0.180 | **$0.172** | **−4%** |
-| Time per question | 34 s | **30 s** | **−12%** |
+| Invented | **0** | 14 | **grep** |
+| Cost per question | $0.180 | **$0.170** | **−6%** |
+| Time per question | 34 s | **27 s** | **−21%** |
 
-**Read these tables for accuracy, not for size.** Size decides nothing here: big C++ runs 26% cheaper
-and big Python 34% dearer, and on this question shape the study's own answer is that cost is noise
-(−2%, 0.3 standard errors). What does hold is that p-graph invents a third as many call sites, and all
-51 of grep's inventions are on big Go.
+**Read these tables for accuracy, not for size.** Size decides nothing here: big C++ runs 13% cheaper
+and big Python 10% dearer, and on this question shape the study's own answer is that cost is noise
+(−2%, 0.3 standard errors). What does hold is that p-graph invents far fewer call sites — 51 against
+14 across the whole set, and all 51 of grep's are on one big-Go question.
 
 The size effect lives on the other question shape — "what breaks if I change X", "how does X reach Y".
-There p-graph is **43% cheaper, 51% faster and takes 57% fewer steps** on the big repositories, and
-26% dearer on the small ones, now measured on Go, C++ and Python alike.
+There p-graph is **40% cheaper and 48% faster** on the big repositories and 22% dearer on the small
+ones, measured on Go, C++ and Python alike.
 
-One known defect shows up above: C++ finds 108 of 114 because a receiver declared as a *subclass*
-does not reach a method defined on its base class — and the answer still prints `complete`.
+**Three runs a side is not enough to read the accuracy rows closely.** Re-running only the p-graph arm
+after a C++-only change moved two languages the change cannot touch: axios lost 24 of its 75 call
+sites and requests invented 14 where it had invented none. The graph's own answers were checked and
+were unchanged and correct, so that swing is the agent writing its answer up differently from one run
+to the next. The published noise floor covers cost, time and steps — it has never covered found and
+invented.
 
 Every row of every language is in the plugin's own
 [README](./plugins/p-graph/README.md#every-row-per-language); how it was measured, and every pass that

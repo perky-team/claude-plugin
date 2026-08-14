@@ -166,6 +166,26 @@ const MEMBER_TARGET_OK =
 // `new Service()` in TS and a C++ constructor call really do target one.
 const CALLABLE = `('function','method','class')`;
 
+// Languages where "the source types the receiver as some OTHER repo type" may be
+// trusted as proof the call is not this target's, so the gap report can drop the
+// row (see collectGaps). It is proof only when the graph could have seen a BASE
+// class: a receiver typed as a subclass whose base declares the method is a real
+// call site, and it looks exactly like an unrelated type when inheritance is not
+// recorded.
+//
+//   ts, js  `extends` is captured (ts.scm) and walked in writtenReceiver.
+//   go      embedding is captured and walked, the `#embed` hop.
+//   py      inheritance is NOT recorded. Kept here anyway, and only because
+//           there is no evidence to remove it: Python scores 243 of 243 call
+//           sites in the study, so listing more rows there would add banners
+//           that send the reader to grep for nothing. Revisit with a measured
+//           Python case where a base-class call goes missing.
+//
+// cpp is absent, which is the point. Measured on rocksdb: two real call sites of
+// `CompactionPicker::ExpandInputsToCleanCut` were dropped and the answer still
+// printed `complete` — and the installed rule reads that as "stop. Do not grep."
+const DROP_ON_OTHER_TYPE = new Set(['ts', 'js', 'go', 'py']);
+
 export function openStore(dbPath, opts = {}) {
   const DatabaseSync = loadDatabaseSync();
   if (opts.readOnly) return openReadOnly(DatabaseSync, dbPath);
@@ -450,7 +470,25 @@ export function openStore(dbPath, opts = {}) {
         const holder = classes.length === 1 ? classes[0]
           : pickByScope(classes, bare, srcQname.get(e.src_id));
         if (!holder) continue;
-        const hit = byQname.get(`${holder}.${e.method}`) ?? [];
+        // The method may be declared on a BASE class, not on the type the source
+        // wrote. `picker_->ExpandInputsToCleanCut(...)` in rocksdb types picker_ as
+        // `UniversalCompactionPicker*` and the method is on its base
+        // CompactionPicker; both call sites were missing before this walk and the
+        // answer still printed `complete`.
+        //
+        // The subclass's OWN method wins, because the lookup only walks up when
+        // the current class declares nothing of that name — which is what C++ does.
+        // Each hop needs the base name to match exactly one class, so nothing here
+        // is a pick. Eight hops is past any real hierarchy and stops a cycle dead.
+        let hit = byQname.get(`${holder}.${e.method}`) ?? [];
+        for (let cur = holder, hops = 0; !hit.length && hops < 8; hops++) {
+          const base = typeOf.get(`${cur.split('.').pop()}#extends`);
+          if (!base) break;
+          const found = [...(classByName.get(base.split('.').pop()) ?? [])];
+          if (found.length !== 1) break;
+          cur = found[0];
+          hit = byQname.get(`${cur}.${e.method}`) ?? [];
+        }
         // One definition, or — when several files define their own copy under the
         // same qname — the one in the file the call is written in. That is what the
         // compiler sees, and it is the only choice that is not a coin toss. A call
@@ -1603,7 +1641,20 @@ function attachReadHelpers(store, db, hasFts) {
         const written = writtenReceiver(r.field_key);
         if (!written) return true;
         if (!written.repo) { libraryRows.add(`${r.file}|${r.line}|${r.dst_name}`); return true; }
-        return [...written.names].some((n) => owners.has(n));
+        if ([...written.names].some((n) => owners.has(n))) return true;
+        // The written type is a repo type and it is not the target's owner. For
+        // most languages that settles it — see DROP_ON_OTHER_TYPE, which lists
+        // the ones whose inheritance or embedding this indexer reads. C++ is not
+        // one of them, so the row stays as an honest gap: a subclass receiver is
+        // indistinguishable from an unrelated one here, and a short answer that
+        // says `complete` is worse than a listed row.
+        //
+        // This cannot bring back the banners the drop was built for. re2's 204
+        // `std::vector::size` rows are LIBRARY receivers and never reach this
+        // line, and a repo class that owns the name resolves the call outright,
+        // so it is not a gap candidate at all — both cases are tested in
+        // cpp-base-class-gaps.test.ts.
+        return !DROP_ON_OTHER_TYPE.has(r.lang);
       });
     }
     const candidates = candidatesByLangBare(matched);

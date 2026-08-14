@@ -92,6 +92,25 @@
 (type_definition) @cpp.alias
 (alias_declaration) @cpp.alias
 
+;; `class Derived : public Base`. A call written on a receiver the source types as
+;; Derived is a real call site of a method Base declares, and C++ was the only
+;; supported language with no way to cross that line — TypeScript walks `extends`,
+;; Go walks embedding. Measured on rocksdb: 1,623 of 3,521 class declarations
+;; write a base and the graph held none of them, which lost two of the twelve call
+;; sites of `CompactionPicker::ExpandInputsToCleanCut` and still said `complete`.
+;;
+;; The whole clause is captured and the driver reads the bases out of it, because a
+;; base can be written four ways — `Base`, `ns::Base`, `Tmpl<T>`, with or without
+;; an access specifier — and one query pattern per shape is not maintainable. The
+;; driver records a base only when the clause names exactly ONE: multiple
+;; inheritance names no single base, and picking one would invent a method set.
+;;
+;; A class whose name a macro pushed out of the parse (`class LEVELDB_EXPORT DB`)
+;; has no usable name field here, so its base is not read. That is the same limit
+;; the alias and field rules above already carry.
+(class_specifier (base_class_clause) @cpp.extends)
+(struct_specifier (base_class_clause) @cpp.extends)
+
 (declaration) @cpp.decl
 (parameter_declaration) @cpp.decl
 (field_declaration) @cpp.decl

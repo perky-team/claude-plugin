@@ -52,6 +52,51 @@ after that it is instant):
   the merge-base: `git archive <merge-base> --format=tar` into a second WSL directory and
   reuse the same `node_modules`.
 
+## After changing p-graph resolution, ASK about re-running the whole measurement
+
+**Whenever a change touches how p-graph resolves names — the parse queries under
+`tools/lib/parse/lang/*.scm`, `tools/lib/parse/driver.mjs`, the resolver passes in
+`tools/lib/destinations/local-sqlite.mjs`, or the gap report — ask the user whether to re-run
+the full measurement before treating the published numbers as still true.** Ask; do not
+launch it unprompted, and do not skip the question because the change "looks local".
+
+The full run means **every language and both repository sizes**, not the files you touched:
+
+```bash
+node plugins/p-graph/scripts/measure-agent.mjs --phase base
+node plugins/p-graph/scripts/measure-agent.mjs --phase graph
+node plugins/p-graph/scripts/measure-agent.mjs --score
+```
+
+Fourteen repositories, 52 questions, 312 runs, three runs a side. It appends to `runs.jsonl`
+and never repeats a run, so it can be stopped and restarted; `--only <id>,<id>` re-runs part
+of it after deleting those rows.
+
+Why this is a rule and not a nice-to-have — all three were measured in this repo:
+
+- **A partial re-run has twice given the wrong headline.** Six "who calls X" questions on
+  rocksdb and django said the size effect had reversed for Python. It had not: cost on that
+  question shape is noise by the study's own floor (−2%, 0.3 SE), and the size effect lives
+  on the follow-the-calls questions, which that run did not include. Measuring one shape and
+  reading the other shape's claim off it is the mistake to avoid.
+- **Adding a repository has changed the answer more than once.** The third-repository round
+  moved two conclusions, and the twelfth repository moved the cost and steps rows enough that
+  earlier claims had to be withdrawn. Numbers from a smaller set are not a floor.
+- **A language can go from tie to win without its own code changing.** Python was an honest
+  tie until annotations were read; C++ went from ahead to behind on recall when rocksdb
+  arrived and exposed a defect the three small C++ repositories never hit.
+
+State the cost when you ask. The current set is about **$10** for the answer runs plus
+extraction, and several hours of wall clock. That is cheap enough that "we changed the
+resolver and did not re-measure" is never the right trade.
+
+**Ground truth is the fragile part, not the runs.** Three truth lists in this study were
+wrong on the first pass, every time because a repo-wide text search silently returned a SHORT
+list. Cross-check every list with a second tool. The tell that a list is wrong, not the tool:
+**both arms agree against it** — when all six answers name a line the truth does not have,
+doubt the truth. Real callers that sit outside a question's stated bound belong in `neutral`,
+never counted as invented.
+
 ## Run the suite on Node 24+, on BOTH platforms
 
 **Node 22 gives a false failure that looks like a p-graph bug and is not.** Measured, not

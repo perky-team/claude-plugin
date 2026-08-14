@@ -2153,6 +2153,34 @@ export async function extract({ file, lang, langId, scm, source, pyRepoModules =
       const clsName = cls?.childForFieldName?.('name')?.text;
       if (clsName) fieldTypes.push({ key: `${clsName}#alias:${name}`, type: target, file });
     }
+    // `class Derived : public Base` -> "Derived#extends" = "Base", the same key
+    // shape ts.extends writes, so the resolver's walk is one lookup either way.
+    //
+    // Exactly one base or nothing. `class Both : public Left, public Right` names
+    // no single base and choosing one would hand Both a method set it may not
+    // have — the same rule this file applies to an ambiguous alias and to a field
+    // whose type was declared twice.
+    for (const c of caps) {
+      if (c.name !== 'cpp.extends') continue;
+      const cls = c.node.parent;
+      const name = cls?.childForFieldName?.('name')?.text;
+      if (!name) continue;
+      const bases = [];
+      for (let i = 0; i < c.node.namedChildCount; i++) {
+        const ch = c.node.namedChild(i);
+        // The names a base can be written as. An access specifier and the virtual
+        // keyword are unnamed or their own node types, so they never land here.
+        if (!ch) continue;
+        if (ch.type === 'type_identifier' || ch.type === 'qualified_identifier'
+            || ch.type === 'template_type' || ch.type === 'sized_type_specifier') {
+          bases.push(ch.text);
+        }
+      }
+      if (bases.length !== 1) continue;
+      // `ns::Base<T>` -> `ns.Base`, the spelling the graph stores qnames in.
+      const base = bases[0].replaceAll('::', '.').replace(/<.*/, '').replace(/[*&\s]+$/, '');
+      if (base && base !== name) fieldTypes.push({ key: `${name}#extends`, type: base, file });
+    }
     for (const c of caps) {
       if (c.name !== 'cpp.decl') continue;
       const type = cppWrittenType(c.node);
