@@ -26,6 +26,8 @@ export function validate(config, schema) {
     value[section] ??= {};
     value[section][key] = out;
   }
-  errors.sort((a, b) => a.path.localeCompare(b.path));
+  // Plain string compare, not `localeCompare` — the order must not depend on
+  // the machine's locale.
+  errors.sort((a, b) => (a.path === b.path ? 0 : a.path < b.path ? -1 : 1));
   return errors.length ? { ok: false, errors } : { ok: true, value };
 }

@@ -12,29 +12,34 @@ const SCHEMA = {
   'server.debug': { type: 'boolean', default: false },
 };
 
-const argv = process.argv.slice(2);
-if (argv.length === 0) process.exit(64);
+function main(argv) {
+  if (argv.length === 0) return 64;
 
-const [path, ...after] = argv;
-// `--json` picks the output format. It is never a config key.
-const wantsJson = after.includes('--json');
-const flagArgs = after.filter((arg) => arg !== '--json');
+  const [path, ...after] = argv;
+  // `--json` picks the output format. It is never a config key.
+  const wantsJson = after.includes('--json');
+  const flagArgs = after.filter((arg) => arg !== '--json');
 
-const text = readFileSync(path, 'utf-8');
+  let result;
+  try {
+    const text = readFileSync(path, 'utf-8');
+    result = resolve({ text, argv: flagArgs, schema: SCHEMA });
+  } catch (err) {
+    // R1 throwing is the case the spec names. A file that cannot be read at all
+    // lands here too, so it gets a plain message instead of a stack trace.
+    process.stderr.write(`${err.message}\n`);
+    return 2;
+  }
 
-let result;
-try {
-  result = resolve({ text, argv: flagArgs, schema: SCHEMA });
-} catch (err) {
-  // Only R1 throws in this pipeline, so this is always a parse failure.
-  process.stderr.write(`${err.message}\n`);
-  process.exit(2);
+  if (!result.ok) {
+    process.stderr.write(`${formatErrors(result.errors)}\n`);
+    return 3;
+  }
+
+  if (wantsJson) process.stdout.write(`${toJson(result.value)}\n`);
+  return 0;
 }
 
-if (!result.ok) {
-  process.stderr.write(`${formatErrors(result.errors)}\n`);
-  process.exit(3);
-}
-
-if (wantsJson) process.stdout.write(`${toJson(result.value)}\n`);
-process.exit(0);
+// Set the code and let Node exit on its own. `process.exit()` can cut a pending
+// write to a pipe short, which would show up later as a flaky test.
+process.exitCode = main(process.argv.slice(2));

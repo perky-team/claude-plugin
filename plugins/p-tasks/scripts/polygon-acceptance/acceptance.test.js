@@ -117,6 +117,10 @@ test('R4 does not change its inputs', () => {
 // R5 — parse command-line flags
 // ---------------------------------------------------------------------------
 
+test('R5 reads a flag and its value joined by an equals sign', () => {
+  assert.deepEqual(parseFlags(['--a.x=1']), { set: { a: { x: '1' } }, rest: [] });
+});
+
 test('R5 reads a flag and its value as two arguments', () => {
   assert.deepEqual(parseFlags(['--a.x', '1']), { set: { a: { x: '1' } }, rest: [] });
 });
@@ -228,8 +232,8 @@ test('R9 prints the validation errors to stderr', () => {
 // R10 — `--json`
 // ---------------------------------------------------------------------------
 
-test('R10 prints only JSON with --json', () => {
-  const r = run([withFile(FULL), '--json']);
+test('R10 prints only the paths the schema names', () => {
+  const r = run([withFile(`${FULL}[other]\nz = 1\n`), '--json']);
   assert.equal(r.status, 0);
   assert.deepEqual(JSON.parse(r.stdout),
     { server: { port: 8080, host: 'example.com', debug: true } });
