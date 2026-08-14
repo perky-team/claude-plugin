@@ -23,22 +23,42 @@ function barPath(x, y, w, h) {
 
 const round = (n) => Math.round(n * 100) / 100;
 
-export function barsByDay(byDay, { width, height, series, muted, grid }) {
+export function barsByDay(byDay, opts = {}) {
+  const { width, height, series, muted, grid } = opts;
   const days = Array.isArray(byDay) ? byDay : [];
-  const max = days.reduce((m, d) => Math.max(m, d.costUsd ?? 0), 0);
   const baseY = height - AXIS_H;
 
   const frame =
     `<line x1="0" y1="${baseY}" x2="${width}" y2="${baseY}" stroke="${grid}" stroke-width="1"/>`;
 
-  if (!days.length || max <= 0) {
-    return `<svg viewBox="0 0 ${width} ${height}" width="100%" height="${height}" role="img" aria-label="daily cost, no runs yet">`
-      + frame
-      + `<text x="${width / 2}" y="${baseY / 2}" fill="${muted}" font-size="11" text-anchor="middle">no runs yet</text>`
-      + `</svg>`;
+  // Shared by both empty states below. The label is both the visible text and,
+  // via the aria-label, the accessible name — so the two never say different things.
+  const emptyState = (label) =>
+    `<svg viewBox="0 0 ${width} ${height}" width="100%" height="${height}" role="img" aria-label="daily cost, ${label}">`
+    + frame
+    + `<text x="${width / 2}" y="${baseY / 2}" fill="${muted}" font-size="11" text-anchor="middle">${label}</text>`
+    + `</svg>`;
+
+  // costUsd is null when a day was never measured, and 0 when it was measured and
+  // cost nothing — different facts. runs is what tells them apart: a day can have
+  // real runs and a real zero cost, and that must not read as "no runs yet".
+  const hasAnyRun = days.some((d) => (d.runs ?? 0) > 0);
+  if (!days.length || !hasAnyRun) {
+    return emptyState('no runs yet');
   }
 
-  const plotH = height - PAD_T - AXIS_H;
+  // Non-finite costUsd is ignored rather than trusted: today's caller filters it
+  // out upstream, but this module must never throw or emit malformed markup no
+  // matter what it is handed, so one bad value must not poison the whole chart.
+  const max = days.reduce(
+    (m, d) => (Number.isFinite(d.costUsd) ? Math.max(m, d.costUsd) : m),
+    0,
+  );
+  if (max <= 0) {
+    return emptyState('no cost recorded');
+  }
+
+  const plotH = Math.max(0, height - PAD_T - AXIS_H);
   const slot = width / days.length;
   const barW = Math.max(1, slot - GAP);
   const bars = [];
@@ -46,11 +66,11 @@ export function barsByDay(byDay, { width, height, series, muted, grid }) {
 
   days.forEach((d, i) => {
     const x = round(i * slot + GAP / 2);
-    if (d.costUsd !== null && d.costUsd > 0) {
+    if (Number.isFinite(d.costUsd) && d.costUsd > 0) {
       const h = round((d.costUsd / max) * plotH);
       const y = round(baseY - h);
       bars.push(
-        `<path class="bar" d="${barPath(x, y, round(barW), h)}" fill="${series}" data-x="${x}" data-w="${round(barW)}" data-h="${h}"/>`,
+        `<path class="bar" d="${barPath(x, y, round(barW), h)}" fill="${series}" data-x="${x}" data-y="${y}" data-w="${round(barW)}" data-h="${h}"/>`,
       );
     }
     // Only the ends are labelled. A date under every bar is unreadable at phone width,
