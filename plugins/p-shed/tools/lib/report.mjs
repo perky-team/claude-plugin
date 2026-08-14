@@ -87,7 +87,8 @@ export function aggregate(records, now, { windowDays = 7 } = {}) {
     apiMs: 0,
   };
   const byJob = {};
-  const events = [];
+  // Holds both real events and run rows; every entry here ends up in `recent`.
+  const feed = [];
 
   for (const rec of Array.isArray(records) ? records : []) {
     const ts = num(rec?.ts);
@@ -97,7 +98,7 @@ export function aggregate(records, now, { windowDays = 7 } = {}) {
     // A row carrying `action` and no `outcome` is not a run — it is an event the tick
     // recorded (today: a reclaimed deploy pause). It moves no counter.
     if (rec.action !== undefined && rec.outcome === undefined) {
-      events.push({ ts, job, kind: String(rec.action), detail: eventDetail(rec) });
+      feed.push({ ts, job, kind: String(rec.action), detail: eventDetail(rec) });
       continue;
     }
 
@@ -135,10 +136,10 @@ export function aggregate(records, now, { windowDays = 7 } = {}) {
       if (j.lastTs === null || ts > j.lastTs) j.lastTs = ts;
     }
 
-    events.push({ ts, job, kind: runKind(rec), detail: runDetail(rec) });
+    feed.push({ ts, job, kind: runKind(rec), detail: runDetail(rec) });
   }
 
-  events.sort((a, b) => b.ts - a.ts);
+  feed.sort((a, b) => b.ts - a.ts);
 
   return {
     windowDays,
@@ -147,7 +148,7 @@ export function aggregate(records, now, { windowDays = 7 } = {}) {
     totals,
     byDay,
     byJob,
-    recent: events.slice(0, RECENT_CAP),
+    recent: feed.slice(0, RECENT_CAP),
     skippedLines: 0,
   };
 }
