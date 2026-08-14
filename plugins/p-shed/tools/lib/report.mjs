@@ -157,21 +157,37 @@ export function aggregate(records, now, { windowDays = 7 } = {}) {
 
 // When each job runs next, for the page's most-read column. Pure.
 //
-// Three rules sit above the raw matcher, and each one exists because without it the
-// column would be confidently wrong:
+// `due` means one thing: the tick will launch this job on its very next run. Every rule
+// below exists because some state makes the raw matcher answer something else:
 //
-//   1. `isDue` first. p-shed catches missed ticks up — it scans from
-//      max(lastRun, now - 24h) — so a job whose slot passed while it was blocked is due
-//      NOW. Printing nextRun()'s answer for such a job promises a time hours away for a
-//      job that launches in sixty seconds.
-//   2. The caller passes EFFECTIVE jobs (profile applied). A speed profile rewrites
+//   1. The caller passes EFFECTIVE jobs (profile applied). A speed profile rewrites
 //      `schedule` and `enabled` in memory, and status.mjs already resolves through
 //      effectiveJobs so it "can never report a schedule the scheduler will not act on".
 //      This function inherits that guarantee by never reading jobs.yml itself.
-//   3. A pending `retryNotBefore` beats the cron time: the job relaunches then.
+//   2. A job with no `lastRun` has never run. The tick's baseline gate (tick.mjs, the
+//      `!st || lastRun == null` branch) writes a starting point and skips THAT tick
+//      rather than launching, so `isDue` must never be asked about this job — it would
+//      say yes for anything more frequent than daily, since it treats a missing
+//      `lastRun` as "24 hours ago".
+//   3. A job whose own previous run is still alive is not due either. The tick's
+//      duplicate guard skips a launch while the pidfile is alive, and it runs before the
+//      schedule is even consulted. `lastRun` marks when the run STARTED, so a job that
+//      overruns its own interval can look overdue while it is still going.
+//   4. A pending `retryNotBefore` beats the cron time: the job relaunches then. Checked
+//      before `isDue` so a missed slot with a still-future backoff reports the backoff
+//      time, not a launch that will not happen.
+//   5. `isDue` last. p-shed catches missed ticks up — it scans from
+//      max(lastRun, now - 24h) — so a job whose slot passed while it was blocked is due
+//      NOW. Printing nextRun()'s answer for such a job promises a time hours away for a
+//      job that launches in sixty seconds.
 //
 // A job that is disabled, paused, or breaker-tripped is not scheduled at all, and gets
 // `at: null` rather than a time that will not happen.
+//
+// One tick gate is NOT modelled here: a due job whose concurrency group is held by a
+// live groupmate (`skipped-group`). That needs live pid reads across every job in the
+// group, which this pure `(jobs, statusJobs, now)` function cannot do — it sees one job
+// at a time. Such a job reads as `due` here even though the tick will skip it.
 export function computeNext(jobs, statusJobs, now) {
   const byId = new Map((statusJobs ?? []).map((j) => [j.id, j]));
   const out = {};
@@ -181,15 +197,25 @@ export function computeNext(jobs, statusJobs, now) {
       out[job.id] = { at: null, due: false };
       continue;
     }
+    let cron;
+    try { cron = parseCron(job.schedule); }
+    catch { out[job.id] = { at: null, due: false }; continue; }
+
+    if (st.lastRun == null) {
+      out[job.id] = { at: nextRun(cron, now), due: false };
+      continue;
+    }
+    if (st.running === true) {
+      out[job.id] = { at: nextRun(cron, now), due: false };
+      continue;
+    }
+
     const retry = num(st.retryNotBefore);
     if (retry !== null) {
       out[job.id] = retry > now ? { at: retry, due: false } : { at: null, due: true };
       continue;
     }
-    let cron;
-    try { cron = parseCron(job.schedule); }
-    catch { out[job.id] = { at: null, due: false }; continue; }
-    if (isDue(cron, st.lastRun ?? null, now)) {
+    if (isDue(cron, st.lastRun, now)) {
       out[job.id] = { at: null, due: true };
       continue;
     }

@@ -61,4 +61,32 @@ describe('computeNext', () => {
     const next = computeNext([{ id: 'bad', schedule: 'not a cron', enabled: true }], [status({ id: 'bad' })], NOW);
     expect(next.bad).toEqual({ at: null, due: false });
   });
+
+  it('is not due for a job that has never run, even though isDue would say yes', () => {
+    // No lastRun at all: the tick baselines this job on its next tick instead of
+    // launching it (tick.mjs). isDue would read the missing lastRun as "24h ago" and
+    // say yes for a job this frequent, which is exactly the wrong answer here.
+    const jobs = [{ id: 'worker', schedule: '*/15 * * * *', enabled: true }];
+    const next = computeNext(jobs, [status({ lastRun: null })], NOW);
+    expect(next.worker).toEqual({ at: at('2026-08-14T10:15:00'), due: false });
+  });
+
+  it('is not due for a job whose own previous run is still alive', () => {
+    // lastRun is stale enough that isDue would say yes, but the job's pidfile is still
+    // alive, so the tick's duplicate guard skips the launch (tick.mjs).
+    const jobs = [{ id: 'worker', schedule: '0 9 * * *', enabled: true }];
+    const next = computeNext(jobs, [status({ lastRun: at('2026-08-13T09:00:00'), running: true })], NOW);
+    expect(next.worker).toEqual({ at: at('2026-08-15T09:00:00'), due: false });
+  });
+
+  it('reports the backoff time, not due, when a missed slot meets a future retry', () => {
+    // isDue is true (the 09:00 slot was missed) AND retryNotBefore is still in the
+    // future: the tick will not launch until the backoff clears, so the retry time
+    // must win. This is the only case that tells the retry gate and the isDue gate
+    // apart, since every other test has one or the other but never both true.
+    const jobs = [{ id: 'worker', schedule: '0 9 * * *', enabled: true }];
+    const retryAt = at('2026-08-14T11:00:00');
+    const next = computeNext(jobs, [status({ lastRun: at('2026-08-13T09:00:00'), retryNotBefore: retryAt })], NOW);
+    expect(next.worker).toEqual({ at: retryAt, due: false });
+  });
 });
