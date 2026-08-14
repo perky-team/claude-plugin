@@ -232,7 +232,14 @@ Pure scheduler/launcher. Key decisions:
   about a job with no `lastRun`: it reads a missing `lastRun` as "24 hours ago", which
   counts as due for anything more frequent than daily. It also reads the EFFECTIVE
   schedule (profiles rewrite `schedule` in memory) and lets a pending `retryNotBefore`
-  win over both.
+  win over both. **A job whose own run is still alive gets `at: null`, never a guessed
+  time — checked before all of the above.** `nextRun` only answers "the next matching
+  cron minute from now"; it has no idea a run is still going and will still be going
+  when that minute arrives. Printing the guess named a launch the tick's own baseline/
+  pid-alive gates would simply not make, and since the report re-renders on a schedule,
+  the guessed time slid forward every render — a job stuck forever read as "coming up
+  soon" forever. This took three fix rounds to get right and is the rule most likely to
+  get "simplified" away next.
 - **Day buckets come from `ts` in local time, never from the log file name.** Log files
   are named by UTC date while schedules fire in local time; on UTC+3 the two disagree by
   three hours, and bucketing by file name silently drops the local end of the window.

@@ -337,9 +337,9 @@ async function main() {
       const now = Date.now();
       const status = collectStatus(root, { installed: isTickInstalled(root) });
       const { jobs } = effectiveJobs({ root, jobsData: readJobs(root), config: readConfig(root) });
-      const { records, skippedLines } = readLogRecords(root, windowStart(now));
-      // aggregate reads no files, so it cannot count unreadable lines itself.
-      const agg = { ...aggregate(records, now), skippedLines };
+      const { records, skippedLines, skippedFiles } = readLogRecords(root, windowStart(now));
+      // aggregate reads no files, so it cannot count unreadable files or lines itself.
+      const agg = { ...aggregate(records, now), skippedLines, skippedFiles };
       const html = renderHtml(status, agg, computeNext(jobs, status.jobs, now), now);
 
       if (!out) {

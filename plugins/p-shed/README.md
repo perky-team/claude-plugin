@@ -17,7 +17,7 @@ no rules — what to do lives entirely in each job's prompt and in the target fo
 
 ## Commands
 
-Tool: `node tools/pshed.mjs <command>` (all support `--json`; exit `0` ok / `1` env / `2` validation)† :
+Tool: `node tools/pshed.mjs <command>` (exit `0` ok / `1` env / `2` validation; most commands also support `--json`†):
 
 | Command | Purpose |
 |---|---|
@@ -35,7 +35,7 @@ Tool: `node tools/pshed.mjs <command>` (all support `--json`; exit `0` ok / `1` 
 | `stop` `[--kill]` | Honest teardown of the OS scheduler entry — reports `removed: true|false` (see below). `--kill` also SIGTERM→SIGKILLs any in-flight jobs (`--grace-ms` tunes the escalation delay). |
 | `install-cron` / `remove-cron` | Register/unregister the every-minute `tick` in the OS scheduler for this folder. `remove-cron` reports `removed` and warns on a cwd mismatch (see below). |
 
-† Most commands exit as stated in the header; `deploy` is an exception — see its row for the full code set. `report` is another: it never reads or writes `--json` — it always renders HTML — but its exit codes match the header anyway: `0` written, `1` no `.pshed/` or the write failed, `2` `--out` given with no value.
+† Most commands exit as stated in the header; `deploy` is an exception — see its row for the full code set. `report` ignores `--json` and always prints HTML. Its exit codes still match the header: `0` written, `1` no `.pshed/` or the write failed, `2` `--out` given with no value.
 
 ## Formats
 
@@ -483,6 +483,7 @@ path to `pshed.mjs`, the same way `install-cron` does (see above):
 
     - id: board
       schedule: "*/5 * * * *"
+      cwd: "."
       guard: "node /path/to/p-shed/tools/pshed.mjs report --out /home/me/board/index.html && exit 75"
       prompt: "(guard-only) Render the board."
 

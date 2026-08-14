@@ -1,6 +1,7 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -26,6 +27,25 @@ beforeEach(() => {
 });
 afterEach(() => { rmSync(root, { recursive: true, force: true }); });
 
+// A path -> content-hash snapshot of every FILE under `dir`, at any depth. A top-level
+// listing of `.pshed/` would miss a rewrite inside `state/`, `run/` or `logs/` — exactly
+// the claim this command makes (read-only, disturbs nothing the running scheduler
+// depends on) — so this walks the whole tree and hashes contents rather than trusting
+// names or a directory listing alone.
+function snapshotDir(dir: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  const walk = (d: string, prefix: string) => {
+    for (const name of readdirSync(d).sort()) {
+      const full = join(d, name);
+      const rel = prefix ? `${prefix}/${name}` : name;
+      if (statSync(full).isDirectory()) { walk(full, rel); continue; }
+      out[rel] = createHash('sha256').update(readFileSync(full)).digest('hex');
+    }
+  };
+  walk(dir, '');
+  return out;
+}
+
 describe('pshed report', () => {
   it('writes an HTML document to stdout', () => {
     const { out, code } = run(['report']);
@@ -41,10 +61,19 @@ describe('pshed report', () => {
     expect(readdirSync(root).filter((n) => n.includes('.tmp'))).toEqual([]);
   });
 
-  it('changes nothing under .pshed', () => {
-    const before = readdirSync(join(root, '.pshed')).sort();
+  it('changes nothing under .pshed, at any depth', () => {
+    // A top-level listing would not notice a state file rewritten inside state/,
+    // run/ or logs/ — that "disturbs nothing the scheduler depends on" claim is the
+    // branch's headline promise, so seed all three and compare recursively (B3).
+    mkdirSync(join(root, '.pshed', 'state'), { recursive: true });
+    mkdirSync(join(root, '.pshed', 'run'), { recursive: true });
+    writeFileSync(join(root, '.pshed', 'state', 'worker.json'),
+      JSON.stringify({ lastRun: 1, lastExit: 0, pid: null, consecutiveFailures: 0 }));
+    writeFileSync(join(root, '.pshed', 'run', 'worker.pid'), '12345\n');
+
+    const before = snapshotDir(join(root, '.pshed'));
     run(['report']);
-    expect(readdirSync(join(root, '.pshed')).sort()).toEqual(before);
+    expect(snapshotDir(join(root, '.pshed'))).toEqual(before);
   });
 
   it('exits 2 when --out has no value', () => {
@@ -73,5 +102,15 @@ describe('pshed report', () => {
   it('reports unreadable log lines in the footer', () => {
     writeFileSync(join(root, '.pshed', 'logs', '2026-08-13.jsonl'), '{"ts":1,\n');
     expect(run(['report']).out).toContain('1 unreadable log line(s)');
+  });
+
+  it('reports an unreadable log file separately from an unreadable line (A6)', () => {
+    // A directory sitting where a dated log file is expected is unreadable exactly
+    // like a permission error — the whole file, not a line inside it — so it must
+    // not be folded into "line(s)", which would understate how much data is missing.
+    mkdirSync(join(root, '.pshed', 'logs', '2026-08-12.jsonl'));
+    const out = run(['report']).out;
+    expect(out).toContain('1 unreadable log file(s)');
+    expect(out).not.toContain('1 unreadable log line(s)');
   });
 });

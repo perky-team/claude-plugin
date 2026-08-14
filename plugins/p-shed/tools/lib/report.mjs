@@ -161,7 +161,10 @@ export function aggregate(records, now, { windowDays = 7 } = {}) {
     byDay,
     byJob,
     recent: feed.slice(0, RECENT_CAP),
+    // aggregate() reads no files, so it cannot count unreadable ones itself — these are
+    // placeholders the CLI overwrites with readLogRecords()'s real counts.
     skippedLines: 0,
+    skippedFiles: 0,
   };
 }
 
@@ -179,9 +182,11 @@ export function aggregate(records, now, { windowDays = 7 } = {}) {
 //      job by hand and stays stateless — it writes the pidfile and never touches the
 //      state file — so `{ lastRun: null, running: true }` is reachable and ordinary,
 //      not a contradiction. That is a freshly added job, started this way before the
-//      scheduler has ticked it even once, and it must land here, not in rule 3. The
-//      tick's duplicate guard skips a launch while the pidfile is alive, and it runs
-//      before the schedule is even consulted. `lastRun` marks when the run STARTED, and
+//      scheduler has ticked it even once, and it must land here, not in rule 3. What
+//      actually protects it on the tick side is the BASELINE gate, not the pid check:
+//      tick.mjs's `!st || lastRun == null` branch fires first for exactly this state,
+//      writes a fresh baseline, and moves on — the pid-alive duplicate guard sits later
+//      in the same function and is never reached. `lastRun` marks when the run STARTED, and
 //      `nextRun` only answers "the next matching cron minute from now" — it has no idea
 //      the run is still going and will still be going when that minute arrives. Printing
 //      that guess named a launch the pid-alive guard would simply skip, and since the

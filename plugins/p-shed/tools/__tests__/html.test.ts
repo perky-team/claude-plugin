@@ -119,7 +119,8 @@ describe('renderHtml', () => {
     expect(html).toMatch(/unknown profile name/);
     // #d03b3b is STATUS.critical elsewhere on the page too, so pin the assertion to the
     // profile badge itself rather than a bare hex string that would pass by accident.
-    expect(html).toContain('badge-profile-problem" style="color:#d03b3b"');
+    // The colour lives on the badge's dot (A5) — its label text carries none.
+    expect(html).toContain('badge-profile-problem"><span class="dot" style="background:#d03b3b">');
   });
 
   it('shows a missing profile file as a warning even when no profile name resolved', () => {
@@ -129,7 +130,7 @@ describe('renderHtml', () => {
     );
     expect(html).toContain('profile —');
     expect(html).toMatch(/profile file missing/);
-    expect(html).toContain('badge-profile-warning" style="color:#fab219"');
+    expect(html).toContain('badge-profile-warning"><span class="dot" style="background:#fab219">');
   });
 
   it('shows an unreadable profile file as a warning, worded differently from missing', () => {
@@ -140,12 +141,15 @@ describe('renderHtml', () => {
     expect(html).toMatch(/profile file unreadable/);
   });
 
-  it('renders a failed run\'s output tail behind details, escaped', () => {
+  it('renders a failed run\'s output tail behind details, escaped, dated with when it ran', () => {
     const agg = aggregate([
       { ts: at('2026-08-14T09:00:00'), job: 'worker', outcome: 'failure', exit: 1, raw: '<script>alert(1)</script>' },
     ], NOW);
     const html = renderHtml(status([job({ breakerTripped: true })]), agg, {}, NOW);
-    expect(html).toContain('<details><summary>show output</summary><pre>');
+    // A self-pause usually follows a run that exited 0, so the tail can be from an
+    // OLDER failure than the one that caused the pause (C2). Dating the summary is
+    // what stops an operator reading a stale tail as the cause.
+    expect(html).toContain('<details><summary>show output (09:00)</summary><pre>');
     expect(html).not.toContain('<script>alert(1)</script>');
     expect(html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
   });
@@ -168,5 +172,125 @@ describe('renderHtml', () => {
 
   it('shows the generated time', () => {
     expect(page([job()])).toContain('14:32');
+  });
+
+  it('shows the generated date as well as the time, so a stale render cannot pass for fresh', () => {
+    // A board job whose breaker tripped days ago still writes numbers into a page
+    // rendered today. Time-only ("generated 14:32") reads as "just now" whatever day
+    // it actually is — the date is what tells an operator the render itself is stale.
+    expect(page([job()])).toContain('generated 2026-08-14 14:32');
+  });
+
+  describe('a disabled job with a stale retry (A1)', () => {
+    // Reachable state: an api-overload skip writes retryNotBefore and nothing else;
+    // a speed profile then disables the job. Nothing ever clears retryNotBefore for a
+    // job that never runs again, so jobState and computeNext must agree it is simply
+    // off, not stuck retrying forever.
+    const disabledWithStaleRetry = job({ enabled: false, retryNotBefore: at('2026-08-10T00:00:00') });
+
+    it('reads as disabled, not as a pending retry', () => {
+      const html = page([disabledWithStaleRetry]);
+      expect(html).toContain('badge-off');
+      expect(html).not.toContain('badge-retry');
+    });
+
+    it('is not counted as a problem', () => {
+      const html = page([disabledWithStaleRetry]);
+      expect(html).toContain('0 problems');
+    });
+  });
+
+  describe('cost-by-job bars (A2)', () => {
+    const manyJobRecords = (n: number) => Array.from({ length: n }, (_, i) =>
+      ({ ts: at('2026-08-14T10:00:00'), job: `job-${i + 1}`, outcome: 'success', exit: 0, usage: { costUsd: 1 } }));
+
+    it('folds jobs past the eighth into one "other" row summing their cost', () => {
+      const agg = aggregate(manyJobRecords(12), NOW);
+      const html = renderHtml(status([job()]), agg, {}, NOW);
+      const named = [...html.matchAll(/<span>(job-\d+|other)<\/span>/g)].map((m) => m[1]);
+      expect(named).toHaveLength(9); // 8 named jobs + 1 "other"
+      expect(named.filter((id) => id === 'other')).toEqual(['other']);
+      expect(html).toContain('<span>other</span><span>$4.00</span>');
+    });
+
+    it('never lets a cost bar exceed 100% of its track', () => {
+      const agg = aggregate(manyJobRecords(12), NOW);
+      const html = renderHtml(status([job()]), agg, {}, NOW);
+      const widths = [...html.matchAll(/bar-fill" style="width:([\d.]+)%/g)].map((m) => Number(m[1]));
+      expect(widths.length).toBeGreaterThan(0);
+      for (const w of widths) expect(w).toBeLessThanOrEqual(100);
+      // The folded "other" row (sum $4) is the biggest bar shown, so it is the one
+      // that must reach exactly 100% — proving the max is taken AFTER the fold.
+      expect(widths).toContain(100);
+    });
+  });
+
+  describe('next-run time formatting (A4)', () => {
+    it('shows a today time as a bare time', () => {
+      const html = page([job({ id: 'a' })], { a: { at: at('2026-08-14T18:00:00'), due: false } });
+      expect(html).toContain('<td>18:00</td>');
+    });
+
+    it('shows a tomorrow time with its date', () => {
+      const html = page([job({ id: 'a' })], { a: { at: at('2026-08-15T09:00:00'), due: false } });
+      expect(html).toContain('<td>2026-08-15 09:00</td>');
+    });
+
+    it('shows a months-away time with its date, not a bare clock time', () => {
+      const html = page([job({ id: 'a' })], { a: { at: at('2027-01-01T00:00:00'), due: false } });
+      expect(html).toContain('<td>2027-01-01 00:00</td>');
+      expect(html).not.toContain('<td>00:00</td>');
+    });
+  });
+
+  describe('Recent list dates (C7)', () => {
+    it('shows a bare time for a run from today', () => {
+      const agg = aggregate([
+        { ts: at('2026-08-14T09:00:00'), job: 'worker', outcome: 'success', exit: 0 },
+      ], NOW);
+      const html = renderHtml(status([job()]), agg, {}, NOW);
+      expect(html).toContain('<td>09:00 worker</td>');
+    });
+
+    it('shows the date for a run from an earlier day in the 7-day window', () => {
+      const agg = aggregate([
+        { ts: at('2026-08-12T09:00:00'), job: 'worker', outcome: 'success', exit: 0 },
+      ], NOW);
+      const html = renderHtml(status([job()]), agg, {}, NOW);
+      expect(html).toContain('<td>2026-08-12 09:00 worker</td>');
+    });
+  });
+
+  describe('status colour contrast (A5)', () => {
+    it('colours a badge\'s dot and icon, but leaves its label text in normal ink', () => {
+      const html = page([job({ breakerTripped: true })]);
+      // The exact markup badge() produces: colour on the dot and the icon span only,
+      // then the label as plain text with no colour of its own.
+      expect(html).toContain('badge-breaker"><span class="dot" style="background:#d03b3b"></span><span style="color:#d03b3b">⛔</span> breaker</span>');
+    });
+
+    it('keeps outcome tile numbers in normal ink, moving the status colour to a dot', () => {
+      const html = page([job()]);
+      expect(html).not.toMatch(/tile-n" style="color:/);
+      // The colour still shows, on a dot next to the tile's label — STATUS.good, here.
+      expect(html).toContain('tile-l"><span class="dot" style="background:#0ca30c"></span> ok');
+    });
+  });
+
+  describe('unreadable log files vs. lines (A6)', () => {
+    it('reports an unreadable file apart from an unreadable line', () => {
+      const agg = { ...aggregate([], NOW), skippedLines: 2, skippedFiles: 1 };
+      const html = renderHtml(status([job()]), agg, {}, NOW);
+      expect(html).toContain('1 unreadable log file(s)');
+      expect(html).toContain('2 unreadable log line(s)');
+    });
+
+    it('says nothing about unreadable logs when none were skipped', () => {
+      expect(page([job()])).not.toContain('unreadable');
+    });
+  });
+
+  it('loads its favicon from a data: URI, never from the network (C8)', () => {
+    expect(page([job()])).toContain('<link rel="icon" href="data:,">');
   });
 });

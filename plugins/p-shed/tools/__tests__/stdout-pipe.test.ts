@@ -117,13 +117,21 @@ describe('stdout survives a pipe', () => {
     // page is several hundred KB: far past the 64 KB a truncating exit caps output at.
     // Green on win32 no matter how broken the code is — pipe writes are synchronous
     // there. It only means something under WSL.
+    //
+    // piped and file are two SEPARATE spawns, and the page stamps its own "generated"
+    // time — a run straddling a minute boundary makes the two documents differ by a
+    // few digits even when neither was truncated, so a byte-for-byte comparison can
+    // fail for a reason that has nothing to do with the pipe (B2). The stamp is
+    // fixed-width, so a LENGTH match still proves neither side lost bytes; reaching the
+    // closing tag and naming the very last job proves the tail specifically survived.
     seedScheduler();
     const piped = throughPipe(['report']);
     const file = throughFile(['report']);
 
     expect(piped.status).toBe(0);
     expect(piped.stdout.length).toBeGreaterThan(PIPE_BUFFER);
-    expect(piped.stdout).toBe(file.stdout);
+    expect(piped.stdout.length).toBe(file.stdout.length);
     expect(piped.stdout.trimEnd().endsWith('</html>')).toBe(true);
+    expect(piped.stdout).toContain('job-150');
   });
 });

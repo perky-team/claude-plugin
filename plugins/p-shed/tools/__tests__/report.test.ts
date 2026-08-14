@@ -174,15 +174,22 @@ describe('windowStart', () => {
     expect(start).toBe(new Date(2026, 7, 8, 0, 0, 0, 0).getTime());
   });
 
-  describe('stepping across a DST change (Europe/Berlin)', () => {
+  describe('stepping across a DST change (Europe/Berlin) — autumn fall-back', () => {
     withTZ('Europe/Berlin');
 
+    // Berlin falls back on 2026-10-25 (clocks go 03:00 CEST -> 02:00 CET), so that
+    // day has 25 real hours. This is the direction that actually breaks a
+    // milliseconds-per-day step: stepping +24h in absolute time from local midnight
+    // on the 25th lands at 23:00 the SAME day — one date repeats and the next one
+    // is skipped, so the day index loses a bucket and a whole day of runs vanishes
+    // from the chart while still counting in the totals.
+    //
+    // The SPRING-forward direction does not expose this: a ms-per-day step from
+    // local midnight lands at 01:00 local the NEXT day — still the right calendar
+    // date — so a test pinned there passes even on broken (ms-stepping) code. Only
+    // the autumn direction proves setDate() is actually doing the work (see B1).
     it('keeps every byDay date distinct, consecutive, and ending on today', () => {
-      // Berlin springs forward on 2026-03-29. A window that starts before that
-      // date and ends after it is what a milliseconds-per-day step gets wrong:
-      // setDate() always lands on local midnight; += 86_400_000 does not, and
-      // can skip or repeat a calendar date around the transition.
-      const now = new Date(2026, 3, 2, 12, 0, 0, 0).getTime(); // 2026-04-02
+      const now = new Date(2026, 9, 28, 12, 0, 0, 0).getTime(); // 2026-10-28
       const a = aggregate([], now, { windowDays: 7 });
       const dates = a.byDay.map((d) => d.date);
 
@@ -190,7 +197,7 @@ describe('windowStart', () => {
       for (let i = 1; i < dates.length; i++) {
         expect(dayNumber(dates[i]) - dayNumber(dates[i - 1])).toBe(1);
       }
-      expect(dates[dates.length - 1]).toBe('2026-04-02');
+      expect(dates[dates.length - 1]).toBe('2026-10-28');
     });
   });
 });

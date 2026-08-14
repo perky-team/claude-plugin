@@ -69,7 +69,7 @@ describe('readLogRecords', () => {
   };
 
   it('returns an empty result when there is no log directory', () => {
-    expect(readLogRecords(root, 0)).toEqual({ records: [], skippedLines: 0 });
+    expect(readLogRecords(root, 0)).toEqual({ records: [], skippedLines: 0, skippedFiles: 0 });
   });
 
   it('reads every dated file and sorts records oldest first', () => {
@@ -91,19 +91,32 @@ describe('readLogRecords', () => {
 
   it('skips and counts a line that does not parse', () => {
     write('2026-07-16.jsonl', [JSON.stringify({ ts: 100, job: 'a' }), '{"ts":1,']);
-    const { records, skippedLines } = readLogRecords(root, 0);
+    const { records, skippedLines, skippedFiles } = readLogRecords(root, 0);
     expect(records).toHaveLength(1);
     expect(skippedLines).toBe(1);
+    expect(skippedFiles).toBe(0);
   });
 
   it('skips and counts a record with no numeric ts', () => {
     write('2026-07-16.jsonl', [JSON.stringify({ job: 'a' })]);
-    expect(readLogRecords(root, 0)).toEqual({ records: [], skippedLines: 1 });
+    expect(readLogRecords(root, 0)).toEqual({ records: [], skippedLines: 1, skippedFiles: 0 });
   });
 
   it('ignores files that are not dated jsonl', () => {
     write('2026-07-16.jsonl', [JSON.stringify({ ts: 100, job: 'a' })]);
     writeFileSync(join(paths(root).logsDir, 'cron.log'), 'noise\n');
     expect(readLogRecords(root, 0).records).toHaveLength(1);
+  });
+
+  it('counts a whole unreadable FILE separately from a bad line, not folded into it (A6)', () => {
+    // A directory where a dated log file is expected is unreadable as a log for the
+    // same reason a permission error is: readFileSync fails on the whole thing, not
+    // on one line. Portable across Windows and POSIX, unlike chmod.
+    write('2026-07-15.jsonl', [JSON.stringify({ ts: 100, job: 'a' })]);
+    mkdirSync(join(paths(root).logsDir, '2026-07-16.jsonl'));
+    const { records, skippedLines, skippedFiles } = readLogRecords(root, 0);
+    expect(records.map((r) => r.job)).toEqual(['a']);
+    expect(skippedFiles).toBe(1);
+    expect(skippedLines).toBe(0);
   });
 });

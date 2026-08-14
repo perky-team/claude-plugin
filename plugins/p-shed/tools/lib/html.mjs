@@ -31,10 +31,30 @@ export function escapeHtml(v) {
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
+const pad2 = (n) => String(n).padStart(2, '0');
+
 const hhmm = (ms) => {
   const d = new Date(ms);
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
 };
+
+const dateStr = (ms) => {
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+};
+
+function sameLocalDay(aMs, bMs) {
+  const a = new Date(aMs), b = new Date(bMs);
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+}
+
+// A timestamp shown next to `now`. Today keeps a bare time — the common case, and the
+// column is narrow on a phone — everything else also carries its date, so a next-run
+// months away, or a log row a few days old in the 7-day window, cannot be misread as
+// "today" or "just now". See A3/A4/C7 in the review that added this.
+function whenLabel(ms, now) {
+  return sameLocalDay(ms, now) ? hhmm(ms) : `${dateStr(ms)} ${hhmm(ms)}`;
+}
 
 const money = (v) => (typeof v === 'number' ? `$${v.toFixed(2)}` : '—');
 
@@ -45,13 +65,18 @@ const money = (v) => (typeof v === 'number' ? `$${v.toFixed(2)}` : '—');
 // `var(...)` instead: the series blue is a different step per mode, and a literal here
 // would freeze the light step onto the dark surface. The muted grey is `var(...)` too,
 // but only for consistency of style — its value is deliberately the SAME in both modes.
+// `enabled === false` is checked before `retryNotBefore` on purpose, matching
+// report.mjs's `computeNext` (which treats them the same way — see A1 in the review
+// that fixed this). A disabled job keeps whatever `retryNotBefore` its last skip wrote,
+// forever, since nothing clears it once the job stops running — without this order a
+// switched-off job reads as a permanent "retry pending" problem.
 function jobState(j) {
   if (j.breakerTripped) return { key: 'breaker', label: 'breaker', icon: '⛔', color: STATUS.critical, problem: true };
   if (j.paused && j.pauseOrigin === 'self') return { key: 'self-pause', label: 'paused itself', icon: '⏸', color: STATUS.serious, problem: true };
   if (j.paused) return { key: 'held', label: `paused (${j.pauseOrigin ?? 'operator'})`, icon: '⏸', color: 'var(--muted)', problem: false };
+  if (j.enabled === false) return { key: 'off', label: 'disabled', icon: '○', color: 'var(--muted)', problem: false };
   if (j.retryNotBefore != null) return { key: 'retry', label: 'retry pending', icon: '⏳', color: STATUS.warning, problem: true };
   if (j.running) return { key: 'running', label: 'running', icon: '●', color: 'var(--series)', problem: false };
-  if (j.enabled === false) return { key: 'off', label: 'disabled', icon: '○', color: 'var(--muted)', problem: false };
   return { key: 'ok', label: 'ok', icon: '○', color: STATUS.good, problem: false };
 }
 
@@ -78,10 +103,10 @@ function profileNote(profile) {
   return ` · ${parts.join(' ')}`;
 }
 
-function nextLabel(entry) {
+function nextLabel(entry, now) {
   if (!entry) return '—';
   if (entry.due) return 'due';
-  return entry.at == null ? '—' : hhmm(entry.at);
+  return entry.at == null ? '—' : whenLabel(entry.at, now);
 }
 
 function css() {
@@ -119,35 +144,45 @@ summary{cursor:pointer;color:var(--muted);font-size:12px}
 // The state key rides along as a class so tests can assert WHICH badge was chosen —
 // self-pause and operator-pause differ only in colour and wording otherwise, and that
 // distinction is the point.
+//
+// The colour lives on the dot and the icon only — never on the label text. On the light
+// surface, `warning` (1.79:1) and `serious` (2.58:1) sit below 3:1 contrast, so a
+// coloured label can be close to invisible in daylight. The label stays in normal ink so
+// it is always readable; the dot and icon still carry which colour means what (see A5).
 function badge(state) {
-  return `<span class="badge badge-${state.key}" style="color:${state.color}"><span class="dot" style="background:${state.color}"></span>${state.icon} ${escapeHtml(state.label)}</span>`;
+  return `<span class="badge badge-${state.key}"><span class="dot" style="background:${state.color}"></span><span style="color:${state.color}">${state.icon}</span> ${escapeHtml(state.label)}</span>`;
 }
 
-function problemCard(j, state, next, agg) {
+function problemCard(j, state, next, agg, now) {
   const jobAgg = agg.byJob[j.id];
   const cost = jobAgg?.costUsd;
   const detail = [
     j.breakerTripped && j.consecutiveFailures ? `${j.consecutiveFailures} fails in a row` : '',
-    j.lastRun ? `last ${hhmm(j.lastRun)}${j.lastExit == null ? '' : ` · exit ${escapeHtml(j.lastExit)}`}` : 'never run',
+    j.lastRun ? `last ${whenLabel(j.lastRun, now)}${j.lastExit == null ? '' : ` · exit ${escapeHtml(j.lastExit)}`}` : 'never run',
     j.lastSkipReason ? escapeHtml(j.lastSkipReason) : '',
-    `next ${nextLabel(next[j.id])}`,
+    `next ${nextLabel(next[j.id], now)}`,
     cost != null ? money(cost) : '',
   ].filter(Boolean).join(' · ');
   const reason = j.pauseReason ?? j.breakerReason;
   // The tail of the most recent non-success run, straight from the log — text a job
   // itself wrote, so it is escaped exactly like every other outside value. `<details>`
   // keeps it out of the way until an operator asks for it: it can run to ~2 KB.
+  //
+  // A self-pause usually follows a run that exited 0 (that is the whole reason the
+  // self-pause marker exists), so the tail shown here can be from an OLDER failed run,
+  // not the run that caused the pause. Dating the summary stops an operator reading a
+  // stale tail as the cause (see C2).
   const rawTail = jobAgg?.lastRaw;
+  const rawTailTs = jobAgg?.lastRawTs;
   return `<div class="card">
 <div class="row"><strong>${escapeHtml(j.id)}</strong>${badge(state)}</div>
 <div class="sub">${detail}</div>
 ${reason ? `<div class="reason">“${escapeHtml(reason)}”</div>` : ''}
-${rawTail ? `<details><summary>show output</summary><pre>${escapeHtml(rawTail)}</pre></details>` : ''}
+${rawTail ? `<details><summary>show output (${whenLabel(rawTailTs, now)})</summary><pre>${escapeHtml(rawTail)}</pre></details>` : ''}
 </div>`;
 }
 
 function costCard(agg) {
-  const max = Object.values(agg.byJob).reduce((m, j) => Math.max(m, j.costUsd ?? 0), 0);
   const rows = Object.entries(agg.byJob)
     .filter(([, j]) => j.costUsd != null)
     .sort((a, b) => b[1].costUsd - a[1].costUsd);
@@ -155,9 +190,17 @@ function costCard(agg) {
   const rest = rows.slice(8).reduce((s, [, j]) => s + j.costUsd, 0);
   if (rest > 0) top.push(['other', { costUsd: rest }]);
 
+  // `max` is taken over the rows actually SHOWN, after the fold — including `other`.
+  // Taking it over individual jobs only (before the fold) let a summed `other` row
+  // exceed the max and paint past 100% of its track: twelve $1 jobs gave max=$1 and
+  // other=$4, a bar at width:400% with nothing to clip it (see A2). `Math.min(100, …)`
+  // is the last-resort clamp; folding `max` in afterwards is what keeps the bars
+  // meaningful relative to each other, not just non-overflowing.
+  const max = top.reduce((m, [, j]) => Math.max(m, j.costUsd ?? 0), 0);
+
   const bars = top.map(([id, j]) => `<div>
 <div class="row"><span>${escapeHtml(id)}</span><span>${money(j.costUsd)}</span></div>
-<div class="bar-track"><div class="bar-fill" style="width:${max > 0 ? Math.round((j.costUsd / max) * 100) : 0}%"></div></div>
+<div class="bar-track"><div class="bar-fill" style="width:${max > 0 ? Math.min(100, Math.round((j.costUsd / max) * 100)) : 0}%"></div></div>
 </div>`).join('');
 
   const table = agg.byDay.map((d) =>
@@ -175,8 +218,12 @@ ${bars ? `<h2 style="margin-top:12px">Where it goes</h2>${bars}` : ''}
 
 function runsCard(agg) {
   const o = agg.totals.outcomes;
+  // The number is the thing an operator came for, so it stays in normal ink — the
+  // status colour moves to a small dot next to the label instead. A number painted in
+  // `warning` or `serious` sits below 3:1 contrast on the light surface and can be
+  // close to invisible in daylight (see A5).
   const tile = (n, label, color) =>
-    `<div><div class="tile-n" style="color:${color}">${n}</div><div class="tile-l">${label}</div></div>`;
+    `<div><div class="tile-n">${n}</div><div class="tile-l"><span class="dot" style="background:${color}"></span> ${label}</div></div>`;
   return `<div class="card">
 <h2>Runs · ${agg.windowDays} days</h2>
 <div class="hero">${agg.totals.runs}</div>
@@ -190,19 +237,32 @@ ${tile(o.guardError, 'guard err', STATUS.serious)}
 </div>`;
 }
 
-function jobsCard(jobs, agg, next) {
+function jobsCard(jobs, agg, next, now) {
   const rows = jobs.map((j) => {
     const state = jobState(j);
     const cost = agg.byJob[j.id]?.costUsd;
-    return `<tr><td>${escapeHtml(j.id)} ${badge(state)}</td><td>${nextLabel(next[j.id])}</td><td>${money(cost)}</td></tr>`;
+    return `<tr><td>${escapeHtml(j.id)} ${badge(state)}</td><td>${nextLabel(next[j.id], now)}</td><td>${money(cost)}</td></tr>`;
   }).join('');
   return `<div class="card"><h2>Jobs</h2><table><tr><td>job</td><td>next</td><td>cost</td></tr>${rows}</table></div>`;
 }
 
-function recentCard(agg) {
+function recentCard(agg, now) {
   const rows = agg.recent.map((e) =>
-    `<tr><td>${hhmm(e.ts)} ${escapeHtml(e.job ?? '—')}</td><td>${escapeHtml(e.detail)}</td></tr>`).join('');
+    `<tr><td>${whenLabel(e.ts, now)} ${escapeHtml(e.job ?? '—')}</td><td>${escapeHtml(e.detail)}</td></tr>`).join('');
   return `<div class="card"><h2>Recent</h2><table>${rows || '<tr><td colspan="2">nothing yet</td></tr>'}</table></div>`;
+}
+
+// One line covering both ways a log read can come up short: a whole FILE that could
+// not be read (permission error, mid-write) and a single LINE inside a readable file
+// that did not parse. They are counted separately in logs.mjs — folding a file into
+// the line count understated the damage (a whole day of runs can vanish with the
+// footer still calling it "1 line"), so the wording must name whichever actually
+// happened, together when both did, and say nothing when neither did (see A6).
+function unreadableLogNote(agg) {
+  const parts = [];
+  if (agg.skippedFiles) parts.push(`${agg.skippedFiles} unreadable log file(s)`);
+  if (agg.skippedLines) parts.push(`${agg.skippedLines} unreadable log line(s)`);
+  return parts.length ? ` · ${parts.join(' · ')}` : '';
 }
 
 export function renderHtml(status, agg, next, now) {
@@ -214,6 +274,7 @@ export function renderHtml(status, agg, next, now) {
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="data:,">
 <title>p-shed · ${escapeHtml(status.task)}</title>
 <style>${css()}</style></head>
 <body>
@@ -221,14 +282,14 @@ export function renderHtml(status, agg, next, now) {
 <div class="card">
 <h1>p-shed · ${escapeHtml(status.task)}</h1>
 <div class="sub">${head}</div>
-<div class="sub">generated ${hhmm(now)} · cron ${status.installed === null ? 'unknown' : status.installed ? 'installed' : 'NOT installed'}${profileNote(status.profile)}${status.paused ? ' · SCHEDULER PAUSED' : ''}</div>
+<div class="sub">generated ${dateStr(now)} ${hhmm(now)} · cron ${status.installed === null ? 'unknown' : status.installed ? 'installed' : 'NOT installed'}${profileNote(status.profile)}${status.paused ? ' · SCHEDULER PAUSED' : ''}</div>
 </div>
-${problems.map(({ j, state }) => problemCard(j, state, next, agg)).join('')}
+${problems.map(({ j, state }) => problemCard(j, state, next, agg, now)).join('')}
 ${costCard(agg)}
 ${runsCard(agg)}
-${jobsCard(healthy.map((s) => s.j), agg, next)}
-${recentCard(agg)}
-<div class="card sub">window ${agg.windowDays} days · ${agg.skippedLines} unreadable log line(s)</div>
+${jobsCard(healthy.map((s) => s.j), agg, next, now)}
+${recentCard(agg, now)}
+<div class="card sub">window ${agg.windowDays} days${unreadableLogNote(agg)}</div>
 </div>
 </body></html>`;
 }
