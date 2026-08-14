@@ -122,6 +122,27 @@ describe('aggregate', () => {
     expect(a.byJob.worker.costUsd).toBeNull();
   });
 
+  it('keeps the most recent non-success run\'s raw tail per job, unmodified', () => {
+    const a = aggregate([
+      run({ job: 'worker', outcome: 'failure', exit: 1, raw: 'first failure output', ts: at('2026-08-14T09:00:00') }),
+      run({ job: 'worker', outcome: 'failure', exit: 1, raw: 'second failure output', ts: at('2026-08-14T10:00:00') }),
+    ], NOW);
+    expect(a.byJob.worker.lastRaw).toBe('second failure output');
+  });
+
+  it('picks the newer raw tail regardless of record order', () => {
+    const a = aggregate([
+      run({ job: 'worker', outcome: 'failure', exit: 1, raw: 'newer', ts: at('2026-08-14T10:00:00') }),
+      run({ job: 'worker', outcome: 'failure', exit: 1, raw: 'older', ts: at('2026-08-14T09:00:00') }),
+    ], NOW);
+    expect(a.byJob.worker.lastRaw).toBe('newer');
+  });
+
+  it('does not carry a raw tail from a successful run', () => {
+    const a = aggregate([run({ job: 'worker', outcome: 'success', raw: 'should not appear' })], NOW);
+    expect(a.byJob.worker.lastRaw).toBeNull();
+  });
+
   it('adds up tokens and skips fields that are not numbers', () => {
     const a = aggregate([
       run({ usage: { in: 10, out: 5, cacheRead: 'x', turns: 2 } }),

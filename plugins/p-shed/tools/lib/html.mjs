@@ -42,8 +42,9 @@ const money = (v) => (typeof v === 'number' ? `$${v.toFixed(2)}` : '—');
 //
 // Status colours are literal hex because they are mode-invariant by design — the same
 // four steps clear their contrast floor on both surfaces. The two non-status colours are
-// `var(...)` instead: the series blue and the muted grey have a different step per mode,
-// and a literal here would freeze the light step onto the dark surface.
+// `var(...)` instead: the series blue is a different step per mode, and a literal here
+// would freeze the light step onto the dark surface. The muted grey is `var(...)` too,
+// but only for consistency of style — its value is deliberately the SAME in both modes.
 function jobState(j) {
   if (j.breakerTripped) return { key: 'breaker', label: 'breaker', icon: '⛔', color: STATUS.critical, problem: true };
   if (j.paused && j.pauseOrigin === 'self') return { key: 'self-pause', label: 'paused itself', icon: '⏸', color: STATUS.serious, problem: true };
@@ -52,6 +53,29 @@ function jobState(j) {
   if (j.running) return { key: 'running', label: 'running', icon: '●', color: 'var(--series)', problem: false };
   if (j.enabled === false) return { key: 'off', label: 'disabled', icon: '○', color: 'var(--muted)', problem: false };
   return { key: 'ok', label: 'ok', icon: '○', color: STATUS.good, problem: false };
+}
+
+// A profile with nothing wrong shows only its name (or is absent, when collectStatus
+// omits the field entirely — see status.mjs). `problem` and `warning` must show even
+// when `name` is null: that is the case an operator most needs to catch, because the
+// scheduler is quietly ticking at its default pace instead of the one configured.
+// Wording matches lib/profile.mjs's own comment on what each field means:
+//   problem 'unknown-name'   the name resolved but the table has no such entry, so
+//                            NO overrides are applied.
+//   warning 'file-missing'   the configured profile file could not be read at all.
+//   warning 'file-unreadable' the file exists but reading it failed.
+function profileNote(profile) {
+  if (!profile) return '';
+  const parts = [`profile ${profile.name ? escapeHtml(profile.name) : '—'}`];
+  if (profile.problem === 'unknown-name') {
+    parts.push(badge({ key: 'profile-problem', label: 'unknown profile name, no overrides applied', icon: '⛔', color: STATUS.critical }));
+  }
+  if (profile.warning === 'file-missing') {
+    parts.push(badge({ key: 'profile-warning', label: 'profile file missing', icon: '⚠', color: STATUS.warning }));
+  } else if (profile.warning === 'file-unreadable') {
+    parts.push(badge({ key: 'profile-warning', label: 'profile file unreadable', icon: '⚠', color: STATUS.warning }));
+  }
+  return ` · ${parts.join(' ')}`;
 }
 
 function nextLabel(entry) {
@@ -89,7 +113,7 @@ td+td{text-align:right}
 pre{white-space:pre-wrap;word-break:break-word;font-size:11px;color:var(--ink2);margin:6px 0 0}
 details{margin-top:8px}
 summary{cursor:pointer;color:var(--muted);font-size:12px}
-.reason{color:var(--ink2);font-size:12px;margin-top:2px}`;
+.reason{color:var(--ink2);font-size:12px;margin-top:2px;word-break:break-word}`;
 }
 
 // The state key rides along as a class so tests can assert WHICH badge was chosen —
@@ -100,7 +124,8 @@ function badge(state) {
 }
 
 function problemCard(j, state, next, agg) {
-  const cost = agg.byJob[j.id]?.costUsd;
+  const jobAgg = agg.byJob[j.id];
+  const cost = jobAgg?.costUsd;
   const detail = [
     j.breakerTripped && j.consecutiveFailures ? `${j.consecutiveFailures} fails in a row` : '',
     j.lastRun ? `last ${hhmm(j.lastRun)}${j.lastExit == null ? '' : ` · exit ${escapeHtml(j.lastExit)}`}` : 'never run',
@@ -109,10 +134,15 @@ function problemCard(j, state, next, agg) {
     cost != null ? money(cost) : '',
   ].filter(Boolean).join(' · ');
   const reason = j.pauseReason ?? j.breakerReason;
+  // The tail of the most recent non-success run, straight from the log — text a job
+  // itself wrote, so it is escaped exactly like every other outside value. `<details>`
+  // keeps it out of the way until an operator asks for it: it can run to ~2 KB.
+  const rawTail = jobAgg?.lastRaw;
   return `<div class="card">
 <div class="row"><strong>${escapeHtml(j.id)}</strong>${badge(state)}</div>
 <div class="sub">${detail}</div>
 ${reason ? `<div class="reason">“${escapeHtml(reason)}”</div>` : ''}
+${rawTail ? `<details><summary>show output</summary><pre>${escapeHtml(rawTail)}</pre></details>` : ''}
 </div>`;
 }
 
@@ -136,7 +166,7 @@ function costCard(agg) {
   return `<div class="card">
 <h2>Cost · ${agg.windowDays} days</h2>
 <div class="hero">${money(agg.totals.costUsd)}</div>
-${barsByDay(agg.byDay, { width: 320, height: 96, series: PALETTE.light.series, muted: PALETTE.light.muted, grid: PALETTE.light.grid })}
+${barsByDay(agg.byDay, { width: 320, height: 96, series: 'var(--series)', muted: 'var(--muted)', grid: 'var(--grid)' })}
 ${bars ? `<h2 style="margin-top:12px">Where it goes</h2>${bars}` : ''}
 <details class="table-view"><summary>table</summary>
 <table><tr><td>day</td><td>runs</td><td>cost</td></tr>${table}</table></details>
@@ -172,7 +202,7 @@ function jobsCard(jobs, agg, next) {
 function recentCard(agg) {
   const rows = agg.recent.map((e) =>
     `<tr><td>${hhmm(e.ts)} ${escapeHtml(e.job ?? '—')}</td><td>${escapeHtml(e.detail)}</td></tr>`).join('');
-  return `<div class="card"><h2>Recent</h2><table>${rows || '<tr><td>nothing yet</td></tr>'}</table></div>`;
+  return `<div class="card"><h2>Recent</h2><table>${rows || '<tr><td colspan="2">nothing yet</td></tr>'}</table></div>`;
 }
 
 export function renderHtml(status, agg, next, now) {
@@ -191,7 +221,7 @@ export function renderHtml(status, agg, next, now) {
 <div class="card">
 <h1>p-shed · ${escapeHtml(status.task)}</h1>
 <div class="sub">${head}</div>
-<div class="sub">generated ${hhmm(now)} · cron ${status.installed === null ? 'unknown' : status.installed ? 'installed' : 'NOT installed'}${status.profile?.name ? ` · profile ${escapeHtml(status.profile.name)}` : ''}${status.paused ? ' · SCHEDULER PAUSED' : ''}</div>
+<div class="sub">generated ${hhmm(now)} · cron ${status.installed === null ? 'unknown' : status.installed ? 'installed' : 'NOT installed'}${profileNote(status.profile)}${status.paused ? ' · SCHEDULER PAUSED' : ''}</div>
 </div>
 ${problems.map(({ j, state }) => problemCard(j, state, next, agg)).join('')}
 ${costCard(agg)}

@@ -82,6 +82,79 @@ describe('renderHtml', () => {
     expect(page([job()])).not.toContain('$0.00');
   });
 
+  it('shows a measured zero cost as $0.00, not as a dash', () => {
+    const agg = aggregate([{ ts: at('2026-08-14T10:00:00'), job: 'worker', outcome: 'success', exit: 0, usage: { costUsd: 0 } }], NOW);
+    const html = renderHtml(status([job()]), agg, {}, NOW);
+    expect(html).toContain('$0.00');
+  });
+
+  it('gives each job state its own badge', () => {
+    const html = page([
+      job({ id: 'a', breakerTripped: true }),
+      job({ id: 'b', retryNotBefore: at('2026-08-14T15:00:00') }),
+      job({ id: 'c', running: true }),
+      job({ id: 'd', enabled: false }),
+      job({ id: 'e' }),
+    ]);
+    expect(html).toContain('badge-breaker');
+    expect(html).toContain('badge-retry');
+    expect(html).toContain('badge-running');
+    expect(html).toContain('badge-off');
+    expect(html).toContain('badge-ok');
+  });
+
+  it('draws the daily chart with the theme colour variables, not literal light-mode hex', () => {
+    const agg = aggregate([{ ts: at('2026-08-14T10:00:00'), job: 'worker', outcome: 'success', exit: 0, usage: { costUsd: 1.5 } }], NOW);
+    const html = renderHtml(status([job()]), agg, {}, NOW);
+    expect(html).toContain('fill="var(--series)"');
+    expect(html).not.toContain('fill="#2a78d6"');
+  });
+
+  it('shows an unknown profile name as a problem, badged in the critical colour', () => {
+    const html = renderHtml(
+      { ...status([job()]), profile: { name: 'turbo', source: 'env', problem: 'unknown-name' } },
+      aggregate([], NOW), {}, NOW,
+    );
+    expect(html).toContain('turbo');
+    expect(html).toMatch(/unknown profile name/);
+    // #d03b3b is STATUS.critical elsewhere on the page too, so pin the assertion to the
+    // profile badge itself rather than a bare hex string that would pass by accident.
+    expect(html).toContain('badge-profile-problem" style="color:#d03b3b"');
+  });
+
+  it('shows a missing profile file as a warning even when no profile name resolved', () => {
+    const html = renderHtml(
+      { ...status([job()]), profile: { name: null, source: 'none', file: '/etc/pace.txt', warning: 'file-missing' } },
+      aggregate([], NOW), {}, NOW,
+    );
+    expect(html).toContain('profile —');
+    expect(html).toMatch(/profile file missing/);
+    expect(html).toContain('badge-profile-warning" style="color:#fab219"');
+  });
+
+  it('shows an unreadable profile file as a warning, worded differently from missing', () => {
+    const html = renderHtml(
+      { ...status([job()]), profile: { name: 'fast', source: 'default', file: '/etc/pace.txt', warning: 'file-unreadable' } },
+      aggregate([], NOW), {}, NOW,
+    );
+    expect(html).toMatch(/profile file unreadable/);
+  });
+
+  it('renders a failed run\'s output tail behind details, escaped', () => {
+    const agg = aggregate([
+      { ts: at('2026-08-14T09:00:00'), job: 'worker', outcome: 'failure', exit: 1, raw: '<script>alert(1)</script>' },
+    ], NOW);
+    const html = renderHtml(status([job({ breakerTripped: true })]), agg, {}, NOW);
+    expect(html).toContain('<details><summary>show output</summary><pre>');
+    expect(html).not.toContain('<script>alert(1)</script>');
+    expect(html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
+  });
+
+  it('shows no output details on a problem card when no raw tail was recorded', () => {
+    const html = page([job({ breakerTripped: true })]);
+    expect(html).not.toContain('show output');
+  });
+
   it('defines both colour schemes', () => {
     const html = page([job()]);
     expect(html).toContain('#2a78d6');

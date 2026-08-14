@@ -131,11 +131,21 @@ export function aggregate(records, now, { windowDays = 7 } = {}) {
     }
 
     if (job) {
-      const j = byJob[job] ?? (byJob[job] = { runs: 0, costUsd: null, outcomes: emptyOutcomes(), lastTs: null });
+      const j = byJob[job] ?? (byJob[job] = { runs: 0, costUsd: null, outcomes: emptyOutcomes(), lastTs: null, lastRaw: null, lastRawTs: null });
       j.runs++;
       if (key) j.outcomes[key]++;
       if (cost !== null) j.costUsd = (j.costUsd ?? 0) + cost;
       if (j.lastTs === null || ts > j.lastTs) j.lastTs = ts;
+      // The problem card on the report page shows what a failing job printed. p-shed
+      // already truncates this to about 2 KB when it writes the log line (tick.mjs's
+      // truncateOutput), so it is kept as-is here — never re-truncated — and only the
+      // newest one per job survives. `success` never carries a raw field by p-shed's
+      // own design, but the outcome check is kept explicit rather than trusting that.
+      if (rec.outcome !== 'success' && typeof rec.raw === 'string' && rec.raw
+          && (j.lastRawTs === null || ts > j.lastRawTs)) {
+        j.lastRaw = rec.raw;
+        j.lastRawTs = ts;
+      }
     }
 
     feed.push({ ts, job, kind: runKind(rec), detail: runDetail(rec) });
