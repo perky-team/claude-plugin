@@ -284,7 +284,9 @@ If `config['']?.include` is set (its value is a file name), parse that
 name's text from `files` with R1's `parseIni`, then merge with R4's
 `mergeLayers([included, config])` — the included file is the lower-priority
 layer, `config` overrides it. The `include` key itself is removed from the
-`''` section of the result; every other key in that section is kept. This
+`''` section of the result; every other key in that section is kept. If
+removing `include` leaves that section with no keys at all, the `''` section
+itself is dropped from the result — as the worked example below shows. This
 does **not** resolve an `include` found inside the included file itself —
 one level only.
 
@@ -723,6 +725,11 @@ in what they print to stdout on success.
    one of `resolve`, `check`, `explain`, `report`, exit `65`, stderr is
    `` unknown subcommand: <it>\n ``. Otherwise `<path>` is the second element
    and `[flags...]` is everything after it.
+
+`--format` takes its value only as `--format=<name>`, joined by an equals
+sign. The two-argument form `--format <name>` is not supported anywhere, and
+neither is any other control flag below: a value never arrives as the next
+argument.
 
 **Every control flag any requirement from here on introduces —**
 `--json`, `--format` (and its `=<name>`), `--strict`, `--summary`, `--diff`,
