@@ -1820,7 +1820,7 @@ const row = (arm: string, run: number, session: number, tests: Record<string, bo
      changed_lines_from_prev: 10, changed_lines_from_seed: 10 * session });
 
 describe('report', () => {
-  it('gives one row per arm with the spread, not only the mean', () => {
+  it('gives one row per arm', () => {
     const rows = [
       row('none', 1, 1, { R1: true, R2: false }),
       row('ptasks', 1, 1, { R1: true, R2: true }),
@@ -1828,12 +1828,36 @@ describe('report', () => {
     const out = report(rows);
     expect(out).toContain('| none |');
     expect(out).toContain('| ptasks |');
-    expect(out).toContain('spread');
+  });
+
+  // Two runs that disagree completely. A report that printed only the mean
+  // would say 0.50 and nothing else; this asserts the range itself, so the
+  // test cannot pass on the column header alone.
+  it('shows the range across the runs of one arm, not only the mean', () => {
+    const rows = [
+      row('ptasks', 1, 1, { R1: true, R2: true }),
+      row('ptasks', 2, 1, { R1: false, R2: false }),
+    ];
+    expect(report(rows)).toContain('0.00–1.00');
   });
 
   it('says plainly when the dollar cap bound too often to trust the numbers', () => {
     const rows = [{ ...row('none', 1, 1, { R1: true }), hit_cap: true }];
     expect(report(rows)).toContain('the cap bound');
+  });
+
+  // Twenty clean sessions in one arm and one capped session in another. Pooled,
+  // that is 1 in 21 and no warning fires; per arm, the second one capped every
+  // session it ran. The arm with the problem must be named.
+  it('does not let a clean arm dilute a capped one', () => {
+    const rows = [
+      ...Array.from({ length: 20 }, (_, i) => row('none', 1, i + 1, { R1: true })),
+      { ...row('ptasks', 1, 1, { R1: true }), hit_cap: true },
+    ];
+    const out = report(rows);
+    expect(out).toContain('the cap bound');
+    expect(out).toContain('`ptasks`');
+    expect(out).not.toContain('`none`');
   });
 
   it('does not crash on an empty study', () => {
@@ -1863,6 +1887,10 @@ const byRun = (rows) => {
   return [...runs.values()];
 };
 
+// One session in twenty. Above this the cap is shaping the result, not
+// catching a runaway, and the regression numbers stop meaning anything.
+const CAP_WARN = 0.05;
+
 const mean = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
 const fmt = (x, digits = 2) => (x === null || x === undefined ? '—' : x.toFixed(digits));
 const spread = (xs) => (xs.length < 2 ? '—' : `${fmt(Math.min(...xs))}–${fmt(Math.max(...xs))}`);
@@ -1880,6 +1908,7 @@ export function report(rows) {
 
   const lines = ['', '| arm | runs | done | spread | sessions to done | regressions / hand-over | churn | $ per run |',
     '|---|---|---|---|---|---|---|---|'];
+  const noisy = [];
   for (const arm of arms) {
     const mine = runs.filter((r) => r.arm === arm);
     const dones = mine.map((r) => done(r.sessions)).filter((x) => x !== null);
@@ -1887,15 +1916,24 @@ export function report(rows) {
     const regs = mine.map((r) => regressionRate(r.sessions)).filter((x) => x !== null);
     const churns = mine.map((r) => churn(r.sessions)).filter((x) => x !== null);
     const costs = mine.map((r) => r.sessions.reduce((n, s) => n + (s.cost_usd ?? 0), 0));
+
+    // Per arm, never pooled. The arms are expected to hit the cap at different
+    // rates — a tracker arm spends part of each session on upkeep and gets
+    // there with less code written — so a study-wide share is exactly the
+    // number that hides the problem. One capped arm among four clean ones
+    // averages down to nothing, and its own regression figure still prints as
+    // if it were sound.
+    const capped = capShare(mine.flatMap((r) => r.sessions));
+    if (capped !== null && capped > CAP_WARN) noisy.push({ arm, capped });
+
     lines.push(`| ${arm} | ${mine.length} | ${fmt(mean(dones))} | ${spread(dones)} `
       + `| ${finished.length ? fmt(mean(finished), 1) : 'never'} | ${fmt(mean(regs))} `
       + `| ${fmt(mean(churns))} | ${fmt(mean(costs))} |`);
   }
 
-  const capped = capShare(rows);
-  if (capped !== null && capped > 0.05) {
-    lines.push('', `**the cap bound in ${(capped * 100).toFixed(0)}% of sessions — `
-      + 'the regression numbers above are void until the per-session cap goes up**');
+  for (const { arm, capped } of noisy) {
+    lines.push('', `**the cap bound in ${(capped * 100).toFixed(0)}% of \`${arm}\` sessions — `
+      + `that arm's regression number above is void until the per-session cap goes up**`);
   }
   lines.push('');
   return lines.join('\n');
