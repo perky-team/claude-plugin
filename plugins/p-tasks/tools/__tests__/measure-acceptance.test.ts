@@ -12,10 +12,10 @@ const ACCEPTANCE = join(SCRIPTS, 'polygon-acceptance', 'acceptance.test.js');
 // grows or shrinks — that is the point. The gate has to notice a test that was
 // deleted, renamed out of the `R<digit>` filter, or never ran because the runner
 // died half way, and a bare "some tests ran" check notices none of those.
-const TEST_COUNT = 37;
+const TEST_COUNT = 247;
 
 // Every requirement in SPEC.md needs at least one test of its own.
-const IDS = Array.from({ length: 10 }, (_, i) => `R${i + 1}`);
+const IDS = Array.from({ length: 60 }, (_, i) => `R${i + 1}`);
 
 interface SuiteRun {
   ok: number;
