@@ -731,7 +731,7 @@ describe('barsByDay', () => {
   it('gives the tallest bar the full plot height', () => {
     const svg = barsByDay(days([1, 4]), opts);
     // height 96 - padTop 12 - axis band 14 = 70
-    expect(svg).toContain('h="70"');
+    expect(svg).toContain('data-h="70"');
   });
 
   it('leaves a 2px gap between neighbouring bars', () => {
@@ -826,7 +826,7 @@ export function barsByDay(byDay, { width, height, series, muted, grid }) {
       const h = round((d.costUsd / max) * plotH);
       const y = round(baseY - h);
       bars.push(
-        `<path class="bar" d="${barPath(x, y, round(barW), h)}" fill="${series}" data-x="${x}" data-w="${round(barW)}" h="${h}"/>`,
+        `<path class="bar" d="${barPath(x, y, round(barW), h)}" fill="${series}" data-x="${x}" data-w="${round(barW)}" data-h="${h}"/>`,
       );
     }
     // Only the ends are labelled. A date under every bar is unreadable at phone width,
@@ -1024,13 +1024,18 @@ const hhmm = (ms) => {
 const money = (v) => (typeof v === 'number' ? `$${v.toFixed(2)}` : '—');
 
 // A job is in exactly one of these states, and the order is the precedence.
+//
+// Status colours are literal hex because they are mode-invariant by design — the same
+// four steps clear their contrast floor on both surfaces. The two non-status colours are
+// `var(...)` instead: the series blue and the muted grey have a different step per mode,
+// and a literal here would freeze the light step onto the dark surface.
 function jobState(j) {
   if (j.breakerTripped) return { key: 'breaker', label: 'breaker', icon: '⛔', color: STATUS.critical, problem: true };
   if (j.paused && j.pauseOrigin === 'self') return { key: 'self-pause', label: 'paused itself', icon: '⏸', color: STATUS.serious, problem: true };
-  if (j.paused) return { key: 'held', label: `paused (${j.pauseOrigin ?? 'operator'})`, icon: '⏸', color: PALETTE.light.muted, problem: false };
+  if (j.paused) return { key: 'held', label: `paused (${j.pauseOrigin ?? 'operator'})`, icon: '⏸', color: 'var(--muted)', problem: false };
   if (j.retryNotBefore != null) return { key: 'retry', label: 'retry pending', icon: '⏳', color: STATUS.warning, problem: true };
-  if (j.running) return { key: 'running', label: 'running', icon: '●', color: PALETTE.light.series, problem: false };
-  if (j.enabled === false) return { key: 'off', label: 'disabled', icon: '○', color: PALETTE.light.muted, problem: false };
+  if (j.running) return { key: 'running', label: 'running', icon: '●', color: 'var(--series)', problem: false };
+  if (j.enabled === false) return { key: 'off', label: 'disabled', icon: '○', color: 'var(--muted)', problem: false };
   return { key: 'ok', label: 'ok', icon: '○', color: STATUS.good, problem: false };
 }
 
