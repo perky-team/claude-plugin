@@ -1598,3 +1598,202 @@ test('R52 never touches the success output on stdout', () => {
   assert.equal(r.status, 0);
   assert.equal(r.stdout, CTL_FLAT);
 });
+
+// ---------------------------------------------------------------------------
+// R53 — explain one path in one sentence
+// ---------------------------------------------------------------------------
+
+test('R53 names the value and the layer that set it, in parentheses', () => {
+  assert.equal(explainWinner({ 'a.x': { value: '1', layer: 'flags' } }, 'a.x'),
+    'a.x = 1 (set by flags)');
+});
+
+test('R53 says a path the trace does not hold was never set', () => {
+  assert.equal(explainWinner({}, 'a.x'), 'a.x was never set');
+});
+
+test('R53 says never set even when the trace holds other paths', () => {
+  assert.equal(explainWinner({ 'b.y': { value: '2', layer: 'file' } }, 'a.x'),
+    'a.x was never set');
+});
+
+// ---------------------------------------------------------------------------
+// R54 — the full layer history of every path
+// ---------------------------------------------------------------------------
+
+test('R54 keeps every layer that touched a path, in layer order', () => {
+  assert.deepEqual(
+    tracedHistory([{ a: { x: '1' } }, { a: { x: '2' } }], ['file', 'flags']),
+    { 'a.x': [{ layer: 'file', value: '1' }, { layer: 'flags', value: '2' }] },
+  );
+});
+
+test('R54 keeps a path only one layer set as a one-entry array', () => {
+  assert.deepEqual(
+    tracedHistory([{ a: { x: '1' } }, { b: { y: '2' } }], ['file', 'flags']),
+    { 'a.x': [{ layer: 'file', value: '1' }], 'b.y': [{ layer: 'flags', value: '2' }] },
+  );
+});
+
+test('R54 names a key with no section by the bare key', () => {
+  assert.deepEqual(tracedHistory([{ '': { v: '1' } }], ['flags']),
+    { v: [{ layer: 'flags', value: '1' }] });
+});
+
+// ---------------------------------------------------------------------------
+// R55 — print a layer history
+// ---------------------------------------------------------------------------
+
+test('R55 joins the layers of one path with arrows', () => {
+  assert.equal(
+    formatHistory({ 'a.x': [{ layer: 'file', value: '1' }, { layer: 'flags', value: '2' }] }),
+    'a.x: file=1 -> flags=2',
+  );
+});
+
+test('R55 sorts by path and adds no trailing newline', () => {
+  assert.equal(formatHistory({
+    'b.y': [{ layer: 'flags', value: '2' }],
+    'a.x': [{ layer: 'file', value: '1' }],
+  }), 'a.x: file=1\nb.y: flags=2');
+});
+
+test('R55 gives an empty string for an empty history', () => {
+  assert.equal(formatHistory({}), '');
+});
+
+// ---------------------------------------------------------------------------
+// R56 — `explain --full`
+// ---------------------------------------------------------------------------
+
+test('R56 prints the full layer history instead of the winner', () => {
+  const r = ctl(['explain', withFile(CTL_OK), '--full', '--server.host=x']);
+  assert.equal(r.status, 0);
+  assert.equal(r.stdout, 'server.host: defaults=localhost -> flags=x\n'
+    + 'server.mode: defaults=production\n'
+    + 'server.port: file=8080\n');
+});
+
+test('R56 leaves explain on the winner form when --full is absent', () => {
+  const r = ctl(['explain', withFile(CTL_OK), '--server.host=x']);
+  assert.equal(r.status, 0);
+  assert.equal(r.stdout, 'server.host = x (flags)\n'
+    + 'server.mode = production (defaults)\n'
+    + 'server.port = 8080 (file)\n');
+});
+
+test('R56 changes nothing about the other subcommands', () => {
+  const r = ctl(['report', withFile(CTL_OK), '--full', '--format=flat']);
+  assert.equal(r.status, 0);
+  assert.equal(r.stdout, CTL_FLAT);
+});
+
+// ---------------------------------------------------------------------------
+// R57 — flag a deprecated path
+// ---------------------------------------------------------------------------
+
+const DEP_SCHEMA = {
+  'server.host': { type: 'string' },
+  'server.legacyHost': { type: 'string', deprecated: 'server.host' },
+};
+
+test('R57 names the replacement when deprecated is a string', () => {
+  assert.deepEqual(checkDeprecated({ server: { legacyHost: 'o' } }, DEP_SCHEMA), {
+    warnings: [{ path: 'server.legacyHost', message: 'is deprecated, use server.host instead' }],
+  });
+});
+
+test('R57 names no replacement when deprecated is just true', () => {
+  assert.deepEqual(checkDeprecated({ a: { x: '1' } }, { 'a.x': { deprecated: true } }),
+    { warnings: [{ path: 'a.x', message: 'is deprecated' }] });
+});
+
+test('R57 warns about nothing when the deprecated path is not set', () => {
+  assert.deepEqual(checkDeprecated({ server: { host: 'h' } }, DEP_SCHEMA), { warnings: [] });
+});
+
+test('R57 throws a TypeError when the named replacement is not a schema path', () => {
+  assert.throws(() => checkDeprecated({}, { 'a.x': { deprecated: 'b.y' } }),
+    { name: 'TypeError', message: 'unknown replacement path: b.y' });
+});
+
+test('R57 sorts its warnings by path', () => {
+  const schema = { 'b.y': { deprecated: true }, 'a.x': { deprecated: true } };
+  const r = checkDeprecated({ a: { x: '1' }, b: { y: '2' } }, schema);
+  assert.deepEqual(r.warnings.map((w) => w.path), ['a.x', 'b.y']);
+});
+
+// ---------------------------------------------------------------------------
+// R58 — print warnings on every successful run
+// ---------------------------------------------------------------------------
+
+const CTL_DEP = '[server]\nport = 8080\nlegacyHost = old.example.com\n';
+
+test('R58 prints the warning on stderr and still exits 0', () => {
+  const r = ctl(['resolve', withFile(CTL_DEP)]);
+  assert.equal(r.status, 0);
+  assert.equal(r.stderr, 'server.legacyHost: is deprecated, use server.host instead\n');
+});
+
+test('R58 prints the warning for check too, whose stdout stays empty', () => {
+  const r = ctl(['check', withFile(CTL_DEP)]);
+  assert.equal(r.status, 0);
+  assert.equal(r.stdout, '');
+  assert.equal(r.stderr, 'server.legacyHost: is deprecated, use server.host instead\n');
+});
+
+test('R58 prints nothing on stderr when no deprecated path is set', () => {
+  const r = ctl(['resolve', withFile(CTL_OK)]);
+  assert.equal(r.status, 0);
+  assert.equal(r.stderr, '');
+});
+
+// ---------------------------------------------------------------------------
+// R59 — a second deprecated path
+// ---------------------------------------------------------------------------
+
+test('R59 warns about server.legacyHost and names server.host as its replacement', () => {
+  const r = ctl(['report', withFile(CTL_DEP), '--format=flat']);
+  assert.equal(r.status, 0);
+  assert.equal(r.stderr, 'server.legacyHost: is deprecated, use server.host instead\n');
+});
+
+test('R59 counts server.legacyHost as a key the schema names, so --strict passes', () => {
+  assert.equal(ctl(['check', withFile(CTL_DEP), '--strict']).status, 0);
+});
+
+// ---------------------------------------------------------------------------
+// R60 — deprecated paths, end to end
+// ---------------------------------------------------------------------------
+
+const CTL_DEP2 = '[server]\nport = 8080\nlegacyHost = old.example.com\nlegacyPort = 9000\n';
+
+test('R60 types server.legacyPort as an integer', () => {
+  const r = ctl(['check', withFile('[server]\nport = 8080\nlegacyPort = abc\n')]);
+  assert.equal(r.status, 3);
+  assert.match(r.stderr, /server\.legacyPort: must be an integer/);
+});
+
+test('R60 prints both warnings, sorted by path, as one formatErrors block', () => {
+  const r = ctl(['resolve', withFile(CTL_DEP2)]);
+  assert.equal(r.status, 0);
+  assert.equal(r.stderr, 'server.legacyHost: is deprecated, use server.host instead\n'
+    + 'server.legacyPort: is deprecated, use server.port instead\n');
+});
+
+test('R60 leaves stdout as whatever the subcommand normally prints', () => {
+  const r = ctl(['report', withFile(CTL_DEP2), '--format=flat']);
+  assert.equal(r.status, 0);
+  assert.equal(r.stdout, 'server.host=localhost\n'
+    + 'server.legacyHost=old.example.com\n'
+    + 'server.legacyPort=9000\n'
+    + 'server.mode=production\n'
+    + 'server.port=8080\n');
+});
+
+test('R60 exits 0 on every subcommand with both deprecated paths set', () => {
+  const p = withFile(CTL_DEP2);
+  for (const sub of ['resolve', 'check', 'explain', 'report']) {
+    assert.equal(ctl([sub, p]).status, 0, sub);
+  }
+});
