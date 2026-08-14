@@ -117,6 +117,15 @@ async function runOne(arm, run, sessions, expected) {
     appendFileSync(runsFile, `${JSON.stringify(row)}\n`);
     prev = snap;
 
+    // The brake goes here, before any early return below. A session that ends
+    // its run — because everything went green, or because it just took the
+    // third strike — would otherwise skip the check entirely, and the next run
+    // would start on money we already said we would not spend.
+    const spent = readRows().reduce((n, r) => n + (r.cost_usd ?? 0), 0);
+    if (spent > maxTotalUsd) {
+      throw new Error(`stopping: spent $${spent.toFixed(2)}, over --max-total-usd ${maxTotalUsd}`);
+    }
+
     const green = row.tests ? Object.values(row.tests) : [];
     const doneNow = green.length > 0 && green.every(Boolean);
     process.stderr.write(res.error
@@ -132,12 +141,17 @@ async function runOne(arm, run, sessions, expected) {
       process.stderr.write(`  ${arm} #${run} finished at session ${session}\n`);
       return;
     }
-    const spent = readRows().reduce((n, r) => n + (r.cost_usd ?? 0), 0);
-    if (spent > maxTotalUsd) throw new Error(`stopping: spent $${spent.toFixed(2)}, over --max-total-usd ${maxTotalUsd}`);
   }
 }
 
 async function main() {
+  // A typo turns the brake off without saying so: `Number('15O')` is NaN, and
+  // `spent > NaN` is false for every amount of money there is. Checked here
+  // rather than at module load, because the queue test imports this file.
+  if (!Number.isFinite(maxTotalUsd) || maxTotalUsd <= 0) {
+    throw new Error(`--max-total-usd must be a positive number, got: ${flag('max-total-usd')}`);
+  }
+
   mkdirSync(work, { recursive: true });
   writeFileSync(settingsFile, OFF_SETTINGS);
 
