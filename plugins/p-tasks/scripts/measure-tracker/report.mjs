@@ -41,9 +41,17 @@ export function report(rows) {
     const regs = mine.map((r) => regressionRate(r.sessions)).filter((x) => x !== null);
     const churns = mine.map((r) => churn(r.sessions)).filter((x) => x !== null);
     const costs = mine.map((r) => r.sessions.reduce((n, s) => n + (s.cost_usd ?? 0), 0));
+    // All three input counts, not `input_tokens` alone. Measured on the first
+    // real sessions: `input_tokens` came back as 18 and 54 while the same
+    // sessions read 0.5M and 1.75M cached tokens. Almost everything an agent
+    // carries arrives as cache reads, so the tax is invisible without them.
     const tokenCounts = mine.flatMap((r) => r.sessions)
-      .map((s) => s.usage?.input_tokens)
-      .filter((x) => typeof x === 'number');
+      .map((s) => (s.usage
+        ? (s.usage.input_tokens ?? 0)
+          + (s.usage.cache_read_input_tokens ?? 0)
+          + (s.usage.cache_creation_input_tokens ?? 0)
+        : null))
+      .filter((x) => typeof x === 'number' && x > 0);
 
     // Per arm, never pooled. The arms are expected to hit the cap at different
     // rates — a tracker arm spends part of each session on upkeep and gets

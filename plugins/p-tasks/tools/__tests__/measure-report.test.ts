@@ -86,12 +86,25 @@ describe('report', () => {
   // The bug: usage and num_turns were journaled every session, but the table
   // had no column for them, so the tracker's own token cost never showed up
   // in the one place a write-up would be pasted from.
-  it('adds a tokens-per-session column, averaging usage.input_tokens across the arm', () => {
+  it('adds a tokens-per-session column, averaging every input count across the arm', () => {
     const rows = [
       { ...row('ptasks', 1, 1, { R1: true }), usage: { input_tokens: 1000 } },
       { ...row('ptasks', 1, 2, { R1: true }), usage: { input_tokens: 2000 } },
     ];
     expect(armCells(report(rows), 'ptasks').at(-1)).toBe('1500');
+  });
+
+  // Measured on the first real sessions: `input_tokens` was 18 while the same
+  // session read half a million cached tokens. Counting only the first field
+  // reports a tracker tax of nearly nothing, whatever the arm actually carried.
+  it('counts cached and freshly written context, not only input_tokens', () => {
+    const rows = [
+      {
+        ...row('ptasks', 1, 1, { R1: true }),
+        usage: { input_tokens: 18, cache_read_input_tokens: 499_000, cache_creation_input_tokens: 1_000 },
+      },
+    ];
+    expect(armCells(report(rows), 'ptasks').at(-1)).toBe('500018');
   });
 
   it('shows an em dash for tokens per session when no session in the arm reported usage', () => {
