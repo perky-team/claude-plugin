@@ -2,6 +2,8 @@
 // filesystem, no clock, no network. It must never throw — the scheduler's job is to
 // schedule, and one strange log row must not be able to stop a render.
 
+import { isDue, nextRun, parseCron } from './cron.mjs';
+
 const OUTCOME_KEY = {
   success: 'success',
   failure: 'failure',
@@ -151,4 +153,47 @@ export function aggregate(records, now, { windowDays = 7 } = {}) {
     recent: feed.slice(0, RECENT_CAP),
     skippedLines: 0,
   };
+}
+
+// When each job runs next, for the page's most-read column. Pure.
+//
+// Three rules sit above the raw matcher, and each one exists because without it the
+// column would be confidently wrong:
+//
+//   1. `isDue` first. p-shed catches missed ticks up — it scans from
+//      max(lastRun, now - 24h) — so a job whose slot passed while it was blocked is due
+//      NOW. Printing nextRun()'s answer for such a job promises a time hours away for a
+//      job that launches in sixty seconds.
+//   2. The caller passes EFFECTIVE jobs (profile applied). A speed profile rewrites
+//      `schedule` and `enabled` in memory, and status.mjs already resolves through
+//      effectiveJobs so it "can never report a schedule the scheduler will not act on".
+//      This function inherits that guarantee by never reading jobs.yml itself.
+//   3. A pending `retryNotBefore` beats the cron time: the job relaunches then.
+//
+// A job that is disabled, paused, or breaker-tripped is not scheduled at all, and gets
+// `at: null` rather than a time that will not happen.
+export function computeNext(jobs, statusJobs, now) {
+  const byId = new Map((statusJobs ?? []).map((j) => [j.id, j]));
+  const out = {};
+  for (const job of jobs ?? []) {
+    const st = byId.get(job.id) ?? {};
+    if (job.enabled === false || st.enabled === false || st.paused === true || st.breakerTripped === true) {
+      out[job.id] = { at: null, due: false };
+      continue;
+    }
+    const retry = num(st.retryNotBefore);
+    if (retry !== null) {
+      out[job.id] = retry > now ? { at: retry, due: false } : { at: null, due: true };
+      continue;
+    }
+    let cron;
+    try { cron = parseCron(job.schedule); }
+    catch { out[job.id] = { at: null, due: false }; continue; }
+    if (isDue(cron, st.lastRun ?? null, now)) {
+      out[job.id] = { at: null, due: true };
+      continue;
+    }
+    out[job.id] = { at: nextRun(cron, now), due: false };
+  }
+  return out;
 }
