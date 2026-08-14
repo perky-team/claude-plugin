@@ -625,9 +625,12 @@ describe('regressionRate', () => {
     expect(regressionRate([row(1, { R1: true })])).toBeNull();
   });
 
-  it('skips a hand-over where one side did not score', () => {
+  it('is null when no two neighbouring sessions both scored', () => {
+    // Two scored sessions, but not next to each other: there is no hand-over to
+    // read. Unknown, not zero — a zero would enter the arm's mean as measured
+    // evidence that nothing broke.
     const rows = [row(1, { R1: true }), row(2, null), row(3, { R1: false })];
-    expect(regressionRate(rows)).toBe(0);              // no comparable neighbours
+    expect(regressionRate(rows)).toBeNull();
   });
 });
 
@@ -727,7 +730,7 @@ export function capShare(sessions) {
 - [ ] **Step 4: Run the tests to see them pass**
 
 Run: `npx vitest run plugins/p-tasks/tools/__tests__/measure-metrics.test.ts`
-Expected: PASS, 12 tests.
+Expected: PASS, 13 tests.
 
 - [ ] **Step 5: Commit**
 
