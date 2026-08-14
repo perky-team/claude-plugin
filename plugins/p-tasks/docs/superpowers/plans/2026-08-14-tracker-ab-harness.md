@@ -1014,6 +1014,13 @@ describe('resultFrom', () => {
     expect(resultFrom('spawn ENOENT\n', ['R1 a'])).toBeNull();
   });
 
+  it('is null when the runner started but reported no test at all', () => {
+    // A TAP header and nothing else: the suite file never produced a test.
+    // Nothing here is a fact about the agent's code, so it must not be scored
+    // as if every test had failed.
+    expect(resultFrom('TAP version 13\n# tests 0\n', ['R1 a'])).toBeNull();
+  });
+
   it('is all red, not null, when the runner started and reported nothing green', () => {
     expect(resultFrom('TAP version 13\nnot ok 1 - acceptance.test.js\n', ['R1 a', 'R2 b']))
       .toEqual({ 'R1 a': false, 'R2 b': false });
@@ -1092,9 +1099,15 @@ function runSuite(dir, acceptanceFile, timeoutMs) {
  * the real thing needs a runner that fails to start, which no test can stage.
  */
 export function resultFrom(output, expected) {
-  // No TAP at all means the runner never started: a fault in the harness, not
-  // a result about the code. Say "did not score" instead of "all red".
-  if (!output.includes('TAP version') && !/^(not )?ok \d+ - /m.test(output)) return null;
+  // One rule: no test line, no score. A run that reported nothing about any
+  // test tells us nothing about the code — that is a fault in the harness, and
+  // calling it "all red" would blame the agent for it.
+  //
+  // Note what this does NOT catch, on purpose: a snapshot whose code breaks the
+  // import still produces `not ok 1 - acceptance.test.js`. That is a test line,
+  // so the run counts as scored and every expected test comes back red — which
+  // is the honest answer, because nothing was shown to work.
+  if (!/^(not )?ok \d+ - /m.test(output)) return null;
   const said = parseTap(output);
   return Object.fromEntries(expected.map((name) => [name, said[name] === true]));
 }
