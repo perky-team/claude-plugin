@@ -169,10 +169,16 @@ export function aggregate(records, now, { windowDays = 7 } = {}) {
 //      rather than launching, so `isDue` must never be asked about this job — it would
 //      say yes for anything more frequent than daily, since it treats a missing
 //      `lastRun` as "24 hours ago".
-//   3. A job whose own previous run is still alive is not due either. The tick's
-//      duplicate guard skips a launch while the pidfile is alive, and it runs before the
-//      schedule is even consulted. `lastRun` marks when the run STARTED, so a job that
-//      overruns its own interval can look overdue while it is still going.
+//   3. A job whose own previous run is still alive gets `at: null`, not a guessed time.
+//      The tick's duplicate guard skips a launch while the pidfile is alive, and it runs
+//      before the schedule is even consulted. `lastRun` marks when the run STARTED, and
+//      `nextRun` only answers "the next matching cron minute from now" — it has no idea
+//      the run is still going and will still be going when that minute arrives. Printing
+//      that guess named a launch the pid-alive guard would simply skip, and since the
+//      page re-renders on a schedule, the guessed time slid forward every render — a job
+//      truly stuck forever read as "coming up soon" forever, indistinguishable from a
+//      healthy wait. `at: null` puts it in the same honest "don't know" bucket as a
+//      disabled or paused job.
 //   4. A pending `retryNotBefore` beats the cron time: the job relaunches then. Checked
 //      before `isDue` so a missed slot with a still-future backoff reports the backoff
 //      time, not a launch that will not happen.
@@ -184,10 +190,22 @@ export function aggregate(records, now, { windowDays = 7 } = {}) {
 // A job that is disabled, paused, or breaker-tripped is not scheduled at all, and gets
 // `at: null` rather than a time that will not happen.
 //
-// One tick gate is NOT modelled here: a due job whose concurrency group is held by a
-// live groupmate (`skipped-group`). That needs live pid reads across every job in the
-// group, which this pure `(jobs, statusJobs, now)` function cannot do — it sees one job
-// at a time. Such a job reads as `due` here even though the tick will skip it.
+// Three tick gates are NOT modelled here. A job can read as `due` (or get a guessed
+// `at`) above even though the tick will skip it for one of these reasons:
+//
+//   1. The concurrency-group gate (`skipped-group`). This function already sees every
+//      job and every status in one call, so cross-referencing `running` across
+//      groupmates is not the blocker. The real blocker: its signature carries no
+//      `defaults`, so it cannot resolve a group a job inherits from
+//      `defaults.concurrencyGroup` instead of naming directly on the job.
+//   2. The guard verdict. A due job can still carry a `guard` command that exits 75
+//      ("quiet, nothing to do right now") and the tick will not launch it — this
+//      function never runs the guard, so it cannot know.
+//   3. The global scheduler pause (`run/PAUSED`), which stops every job at once before
+//      the tick even looks at jobs.yml. This is not a gap in what this function sees —
+//      `collectStatus` returns the global pause as one top-level field, not a per-job
+//      one — so the report page can and does show it on its own, even though
+//      `computeNext` has no way to know it from the inputs it is given.
 export function computeNext(jobs, statusJobs, now) {
   const byId = new Map((statusJobs ?? []).map((j) => [j.id, j]));
   const out = {};
@@ -206,7 +224,7 @@ export function computeNext(jobs, statusJobs, now) {
       continue;
     }
     if (st.running === true) {
-      out[job.id] = { at: nextRun(cron, now), due: false };
+      out[job.id] = { at: null, due: false };
       continue;
     }
 

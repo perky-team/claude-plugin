@@ -71,12 +71,15 @@ describe('computeNext', () => {
     expect(next.worker).toEqual({ at: at('2026-08-14T10:15:00'), due: false });
   });
 
-  it('is not due for a job whose own previous run is still alive', () => {
+  it('gives a running job at: null, not a guessed next time', () => {
     // lastRun is stale enough that isDue would say yes, but the job's pidfile is still
-    // alive, so the tick's duplicate guard skips the launch (tick.mjs).
+    // alive, so the tick's duplicate guard skips the launch (tick.mjs). nextRun has no
+    // idea the run is still going, so printing its answer names a launch the guard will
+    // just skip — and the guess slides forward on every render, forever. at: null is the
+    // honest "don't know", the same bucket paused/disabled jobs get.
     const jobs = [{ id: 'worker', schedule: '0 9 * * *', enabled: true }];
     const next = computeNext(jobs, [status({ lastRun: at('2026-08-13T09:00:00'), running: true })], NOW);
-    expect(next.worker).toEqual({ at: at('2026-08-15T09:00:00'), due: false });
+    expect(next.worker).toEqual({ at: null, due: false });
   });
 
   it('reports the backoff time, not due, when a missed slot meets a future retry', () => {
