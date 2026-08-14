@@ -940,3 +940,239 @@ test('R32 leaves checkUnknownKeys out, so a key the schema misses passes', () =>
   assert.deepEqual(collect({ a: { x: '1' }, b: { z: '2' } }, { 'a.x': { type: 'integer' } }),
     { ok: true, value: { a: { x: 1 } } });
 });
+
+// ---------------------------------------------------------------------------
+// R33 — trace which layer set each key
+// ---------------------------------------------------------------------------
+
+test('R33 keeps the value and the name of the LAST layer that set a path', () => {
+  assert.deepEqual(
+    traceLayers([{ server: { host: 'a' } }, { server: { host: 'b', port: '9' } }],
+      ['file', 'flags']),
+    { 'server.host': { value: 'b', layer: 'flags' }, 'server.port': { value: '9', layer: 'flags' } },
+  );
+});
+
+test('R33 keeps a path only an earlier layer set, named after that layer', () => {
+  assert.deepEqual(
+    traceLayers([{ a: { x: '1' } }, { b: { y: '2' } }], ['file', 'flags']),
+    { 'a.x': { value: '1', layer: 'file' }, 'b.y': { value: '2', layer: 'flags' } },
+  );
+});
+
+test('R33 orders paths by where they were first seen, not by the winner', () => {
+  const trace = traceLayers([{ b: { y: '1' } }, { a: { x: '2' } }, { b: { y: '3' } }],
+    ['one', 'two', 'three']);
+  assert.deepEqual(Object.keys(trace), ['b.y', 'a.x']);
+  assert.deepEqual(trace['b.y'], { value: '3', layer: 'three' });
+});
+
+test('R33 names a key with no section by the bare key', () => {
+  assert.deepEqual(traceLayers([{ '': { v: '1' } }], ['flags']),
+    { v: { value: '1', layer: 'flags' } });
+});
+
+// ---------------------------------------------------------------------------
+// R34 — print the trace
+// ---------------------------------------------------------------------------
+
+test('R34 writes a path, its value and its layer on one line', () => {
+  assert.equal(formatProvenance({ 'server.host': { value: 'b', layer: 'flags' } }),
+    'server.host = b (flags)');
+});
+
+test('R34 sorts by path and adds no trailing newline', () => {
+  assert.equal(formatProvenance({
+    'b.y': { value: '2', layer: 'flags' },
+    'a.x': { value: '1', layer: 'file' },
+  }), 'a.x = 1 (file)\nb.y = 2 (flags)');
+});
+
+test('R34 gives an empty string for an empty trace', () => {
+  assert.equal(formatProvenance({}), '');
+});
+
+// ---------------------------------------------------------------------------
+// R35 — a dotenv-style report
+// ---------------------------------------------------------------------------
+
+test('R35 upper-cases the section and the key and joins them with an underscore', () => {
+  assert.equal(toDotenv({ '': { verbose: 'true' }, server: { host: 'localhost', port: '9' } }),
+    'VERBOSE=true\nSERVER_HOST=localhost\nSERVER_PORT=9');
+});
+
+test('R35 leaves the empty section out along with its underscore', () => {
+  assert.equal(toDotenv({ '': { verbose: 'true' } }), 'VERBOSE=true');
+});
+
+test('R35 sorts sections and, inside each, keys', () => {
+  assert.equal(toDotenv({ b: { y: '1' }, a: { z: '2', x: '3' } }), 'A_X=3\nA_Z=2\nB_Y=1');
+});
+
+test('R35 prints a list value the way String() joins it, with commas', () => {
+  assert.equal(toDotenv({ a: { tags: ['x', 'y'] } }), 'A_TAGS=x,y');
+});
+
+test('R35 prints a number and a boolean through plain String()', () => {
+  assert.equal(toDotenv({ a: { n: 9, b: true } }), 'A_B=true\nA_N=9');
+});
+
+// ---------------------------------------------------------------------------
+// R36 — a flat `path=value` report
+// ---------------------------------------------------------------------------
+
+test('R36 writes the dotted path with no case change', () => {
+  assert.equal(toFlat({ '': { verbose: 'true' }, server: { host: 'localhost' } }),
+    'verbose=true\nserver.host=localhost');
+});
+
+test('R36 uses the bare key for a value with no section', () => {
+  assert.equal(toFlat({ '': { v: '1' } }), 'v=1');
+});
+
+test('R36 sorts sections and keys and adds no trailing newline', () => {
+  assert.equal(toFlat({ b: { y: '1' }, a: { z: '2', x: '3' } }), 'a.x=3\na.z=2\nb.y=1');
+});
+
+// ---------------------------------------------------------------------------
+// R37 — unquote one value
+// ---------------------------------------------------------------------------
+
+test('R37 takes the text between the two outer quotes', () => {
+  assert.equal(unquote('"a,b"'), 'a,b');
+});
+
+test('R37 leaves a value that is not quoted alone', () => {
+  assert.equal(unquote('a,b'), 'a,b');
+});
+
+test('R37 leaves a value alone when only one end carries a quote', () => {
+  assert.equal(unquote('"abc'), '"abc');
+});
+
+test('R37 replaces every backslash-quote pair with a single quote', () => {
+  assert.equal(unquote('"say \\"hi\\""'), 'say "hi"');
+});
+
+test('R37 leaves a lone backslash exactly as it is', () => {
+  assert.equal(unquote('"a\\b"'), 'a\\b');
+});
+
+test('R37 never reads two backslashes as one escaped backslash', () => {
+  assert.equal(unquote('"a\\\\b"'), 'a\\\\b');
+});
+
+test('R37 leaves a single quote character alone, being shorter than two', () => {
+  assert.equal(unquote('"'), '"');
+});
+
+// ---------------------------------------------------------------------------
+// R38 — unquote a whole config
+// ---------------------------------------------------------------------------
+
+test('R38 unquotes every leaf value in the config', () => {
+  assert.deepEqual(unquoteConfig({ a: { x: '"1,2"' }, b: { y: '"z"' } }),
+    { a: { x: '1,2' }, b: { y: 'z' } });
+});
+
+test('R38 leaves a leaf that carries no quotes alone', () => {
+  assert.deepEqual(unquoteConfig({ a: { x: '1,2' } }), { a: { x: '1,2' } });
+});
+
+test('R38 does not change its input', () => {
+  const input = { a: { x: '"1"' } };
+  unquoteConfig(input);
+  assert.deepEqual(input, { a: { x: '"1"' } });
+});
+
+// ---------------------------------------------------------------------------
+// R39 — diff two resolved values
+// ---------------------------------------------------------------------------
+
+test('R39 reports a changed value and a path that is new on the right', () => {
+  const d = diffResolved({ a: { x: 1 } }, { a: { x: 2, y: 3 } });
+  assert.equal(d.length, 2);
+  assert.deepEqual(d[0], { path: 'a.x', before: 1, after: 2 });
+  assert.equal(d[1].path, 'a.y');
+  assert.equal(d[1].before, undefined);
+  assert.equal(d[1].after, 3);
+});
+
+test('R39 leaves after undefined for a path the right side dropped', () => {
+  const d = diffResolved({ a: { x: 1 } }, {});
+  assert.equal(d.length, 1);
+  assert.equal(d[0].path, 'a.x');
+  assert.equal(d[0].before, 1);
+  assert.equal(d[0].after, undefined);
+});
+
+test('R39 leaves out a path whose value did not change', () => {
+  assert.deepEqual(diffResolved({ a: { x: 1 } }, { a: { x: 1 } }), []);
+});
+
+test('R39 counts two separately built arrays with the same items as equal', () => {
+  assert.deepEqual(diffResolved({ a: { x: ['p', 'q'] } }, { a: { x: ['p', 'q'] } }), []);
+});
+
+test('R39 sorts what it found by path', () => {
+  const d = diffResolved({ b: { y: 1 }, a: { x: 1 } }, { b: { y: 2 }, a: { x: 2 } });
+  assert.deepEqual(d.map((e) => e.path), ['a.x', 'b.y']);
+});
+
+// ---------------------------------------------------------------------------
+// R40 — print a diff
+// ---------------------------------------------------------------------------
+
+test('R40 writes one arrow line per entry', () => {
+  assert.equal(formatDiff([{ path: 'a.x', before: 1, after: 2 }]), 'a.x: 1 -> 2');
+});
+
+test('R40 writes the literal text undefined for a missing side', () => {
+  assert.equal(formatDiff([{ path: 'a.y', before: undefined, after: 3 }]),
+    'a.y: undefined -> 3');
+});
+
+test('R40 gives an empty string for an empty array', () => {
+  assert.equal(formatDiff([]), '');
+});
+
+// ---------------------------------------------------------------------------
+// R41 — summarize an error list
+// ---------------------------------------------------------------------------
+
+test('R41 counts every error but lists a repeated path once', () => {
+  assert.deepEqual(summarizeErrors([
+    { path: 'a.x', message: 'is required' },
+    { path: 'a.x', message: 'must be a number' },
+  ]), { count: 2, paths: ['a.x'] });
+});
+
+test('R41 sorts the paths it lists', () => {
+  assert.deepEqual(summarizeErrors([
+    { path: 'b.y', message: 'm' },
+    { path: 'a.x', message: 'm' },
+    { path: 'b.y', message: 'm' },
+  ]), { count: 3, paths: ['a.x', 'b.y'] });
+});
+
+test('R41 gives a count of zero and no paths for an empty list', () => {
+  assert.deepEqual(summarizeErrors([]), { count: 0, paths: [] });
+});
+
+// ---------------------------------------------------------------------------
+// R42 — print a summary
+// ---------------------------------------------------------------------------
+
+test('R42 says no errors when the count is zero', () => {
+  assert.equal(formatSummary({ count: 0, paths: [] }), 'no errors');
+});
+
+test('R42 names the count, the path count and the paths', () => {
+  assert.equal(formatSummary({ count: 2, paths: ['a.x', 'b.y'] }),
+    '2 error(s) across 2 path(s): a.x, b.y');
+});
+
+test('R42 takes the path count from the list length, not from the error count', () => {
+  assert.equal(formatSummary({ count: 5, paths: ['a.x'] }),
+    '5 error(s) across 1 path(s): a.x');
+});
