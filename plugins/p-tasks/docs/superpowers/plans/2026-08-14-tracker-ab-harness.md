@@ -2089,3 +2089,39 @@ git commit -m "docs(p-tasks): the measured answer on keeping p-tasks or moving t
 
 Then ask the user whether to merge the `tracker-ab` worktree branch, and whether
 the result changes anything in p-tasks itself.
+
+---
+
+## What changed after the final review
+
+Tasks 1 to 9 are built. A whole-branch review then found nine defects that the
+per-task reviews could not see, because each of those only ever looked at one
+task's diff. **The code now differs from the code blocks above** in these
+places. The commits are `84e327f`, `5e04007` and `c92d4d9`.
+
+| Was | Is now | Why it mattered |
+|---|---|---|
+| `--smoke` shared the study's work directory | Smoke gets `ptasks-measure-smoke` | A run counts as finished once it has any row, so the smoke rows made the pilot do nothing and print a report built from three one-session rows. The operator would then have cut requirements from a polygon nobody had piloted |
+| Snapshot roots were reused | Cleared before the seed snapshot | `cpSync` merges instead of pruning, so a re-run inherited every file the previous run had written. The re-run — done because the first was suspect — was the one that could not be trusted |
+| A run was finished if it had any row | A run is finished only if a row carries `ended` (`all-green`, `three-strikes`, `sessions-exhausted`) | The spend brake throws, and so does Ctrl-C. The run in flight kept its four rows forever, and raising the limit and restarting skipped it. It also gives the aborted-run marker the design asked for and nothing wrote |
+| Churn counted every text file | The arm's own files are skipped | `docs/tasks/tasks.yml` matched the allowlist, so the `ptasks` arm's own bookkeeping counted as work and no other arm had any. Real churn of 2.5 would have printed near 4.0, and the write-up would have blamed the tracker for a file format |
+| An errored session was a hand-over | Errored sessions are skipped, as null scores already were | The tree does not change during a failed session, so it counted a hand-over with no regression. An arm that failed more looked more reliable |
+| `sessions to done` printed a bare mean | Prints `6.0 (5/5)` | It averaged only the runs that finished. One run of five finishing early read as "twice as fast" |
+| The brake summed `cost_usd ?? 0` | A session with neither an error nor a cost stops the study | Money the envelope did not report counted as free |
+| `lines()` split on `\n` | Splits on `\r?\n` | The study runs on Windows; a file rewritten with CRLF differed on every line |
+| No tracker-tax column | `tokens / session` | The design lists it as a metric and the rows carried it, but nothing printed it |
+| The table stood alone | Two lines under it | `--score` output is what gets pasted into a write-up, and it put all three arms in one grid with no note that `ptasks` against `beads` is clean and either against `none` is coarse |
+
+**Still open, and both belong to Task 10:**
+
+- **`hit_cap` may be unable to fire.** It is derived from the money — a session
+  within 2% of its cap is treated as cut off — but the design also says a
+  budget-capped session is recorded with an error. Both cannot be true. If the
+  CLI exits without a JSON envelope when the budget binds, the session becomes
+  an error row with no cost: the cap warning never prints, that money never
+  reaches the spend brake, and three capped sessions in a row look like three
+  strikes. Settle it in the smoke session with `--max-budget-usd 0.05` and read
+  the envelope. It costs pennies.
+- **`bd init` does not work on the operator's machine** — `embedded Dolt
+  requires CGO`. The `beads` arm cannot run until that is settled, and without
+  it the study answers only the comparison the design itself calls coarse.
