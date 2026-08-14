@@ -1176,3 +1176,425 @@ test('R42 takes the path count from the list length, not from the error count', 
   assert.equal(formatSummary({ count: 5, paths: ['a.x'] }),
     '5 error(s) across 1 path(s): a.x');
 });
+
+// ---------------------------------------------------------------------------
+// R43 — the extended schema
+// ---------------------------------------------------------------------------
+
+// A config `EXT_SCHEMA` accepts, leaving server.host and server.mode to their
+// defaults. Every polyctl test below starts from this unless it says otherwise.
+const CTL_OK = '[server]\nport = 8080\n';
+// What a successful run prints, in each of R48's three formats.
+const CTL_JSON = '{\n  "server": {\n    "host": "localhost",\n    "mode": "production",\n    "port": 8080\n  }\n}\n';
+const CTL_DOTENV = 'SERVER_HOST=localhost\nSERVER_MODE=production\nSERVER_PORT=8080\n';
+const CTL_FLAT = 'server.host=localhost\nserver.mode=production\nserver.port=8080\n';
+
+test('R43 fills server.host and server.mode from their defaults', () => {
+  const r = ctl(['resolve', withFile(CTL_OK), '--json']);
+  assert.equal(r.status, 0);
+  assert.deepEqual(JSON.parse(r.stdout),
+    { server: { host: 'localhost', mode: 'production', port: 8080 } });
+});
+
+test('R43 requires server.port', () => {
+  const r = ctl(['check', withFile('')]);
+  assert.equal(r.status, 3);
+  assert.match(r.stderr, /server\.port: is required/);
+});
+
+test('R43 types server.port as an integer, not a number', () => {
+  const r = ctl(['check', withFile(CTL_OK), '--server.port=8080.5']);
+  assert.equal(r.status, 3);
+  assert.match(r.stderr, /server\.port: must be an integer/);
+});
+
+test('R43 holds server.port to at least 1', () => {
+  const r = ctl(['check', withFile(CTL_OK), '--server.port=0']);
+  assert.equal(r.status, 4);
+  assert.match(r.stderr, /server\.port: must be at least 1/);
+});
+
+test('R43 holds server.port to at most 65535', () => {
+  const r = ctl(['check', withFile(CTL_OK), '--server.port=70000']);
+  assert.equal(r.status, 4);
+  assert.match(r.stderr, /server\.port: must be at most 65535/);
+});
+
+test('R43 holds server.host to at most 255 characters', () => {
+  const r = ctl(['check', withFile(CTL_OK), `--server.host=${'a'.repeat(256)}`]);
+  assert.equal(r.status, 4);
+  assert.match(r.stderr, /server\.host: must be at most 255 characters/);
+});
+
+test('R43 allows only its three values for server.mode', () => {
+  const r = ctl(['check', withFile(CTL_OK), '--server.mode=other']);
+  assert.equal(r.status, 4);
+  assert.match(r.stderr, /server\.mode: must be one of development, staging, production/);
+});
+
+test('R43 holds server.tag to its pattern', () => {
+  const r = ctl(['check', withFile(CTL_OK), '--server.tag=Bad']);
+  assert.equal(r.status, 4);
+  assert.match(r.stderr, /server\.tag: must match \^\[a-z\]\[a-z0-9-\]\*\$/);
+});
+
+test('R43 allows at most five server.aliases', () => {
+  const r = ctl(['check', withFile(CTL_OK), '--server.aliases=a,b,c,d,e,f']);
+  assert.equal(r.status, 4);
+  assert.match(r.stderr, /server\.aliases: must have at most 5 items/);
+});
+
+test('R43 refuses a repeated server.alias', () => {
+  const r = ctl(['check', withFile(CTL_OK), '--server.aliases=a,a']);
+  assert.equal(r.status, 4);
+  assert.match(r.stderr, /server\.aliases: must not repeat a value/);
+});
+
+test('R43 asks for db.pass once db.user is set', () => {
+  const r = ctl(['check', withFile(CTL_OK), '--db.user=u']);
+  assert.equal(r.status, 4);
+  assert.match(r.stderr, /db\.pass: must be set together with db\.user/);
+});
+
+test('R43 refuses db.url and db.user together', () => {
+  const r = ctl(['check', withFile(CTL_OK), '--db.url=x', '--db.user=u']);
+  assert.equal(r.status, 4);
+  assert.match(r.stderr, /db\.url: cannot be set together with db\.user/);
+});
+
+test('R43 asks for db.replica when db.url is cluster', () => {
+  const r = ctl(['check', withFile(CTL_OK), '--db.url=cluster']);
+  assert.equal(r.status, 4);
+  assert.match(r.stderr, /db\.replica: is required when db\.url is cluster/);
+});
+
+// ---------------------------------------------------------------------------
+// R44 — the `resolve` subcommand, and the shared pipeline
+// ---------------------------------------------------------------------------
+
+test('R44 exits 64 when polyctl is given no arguments at all', () => {
+  assert.equal(ctl([]).status, 64);
+});
+
+test('R44 exits 65 and names a subcommand it does not know', () => {
+  const r = ctl(['bogus']);
+  assert.equal(r.status, 65);
+  assert.equal(r.stderr, 'unknown subcommand: bogus\n');
+});
+
+test('R44 exits 64 and prints nothing when the subcommand has no path', () => {
+  const r = ctl(['resolve']);
+  assert.equal(r.status, 64);
+  assert.equal(r.stdout, '');
+  assert.equal(r.stderr, '');
+});
+
+test('R44 exits 2 when the config file cannot be read', () => {
+  const r = ctl(['resolve', `${withFile('')}.missing`]);
+  assert.equal(r.status, 2);
+  assert.notEqual(r.stderr, '');
+});
+
+test('R44 exits 2 and prints the parse error when the file cannot be parsed', () => {
+  const r = ctl(['resolve', withFile('???\n')]);
+  assert.equal(r.status, 2);
+  assert.equal(r.stderr, 'line 1: ???\n');
+});
+
+test('R44 exits 2 when the config includes a file it was not given', () => {
+  const r = ctl(['resolve', withFile('include = base.ini\n[server]\nport = 8080\n')]);
+  assert.equal(r.status, 2);
+  assert.equal(r.stderr, 'no such include: base.ini\n');
+});
+
+test('R44 exits 0 and prints nothing on a plain successful resolve', () => {
+  const r = ctl(['resolve', withFile(CTL_OK)]);
+  assert.equal(r.status, 0);
+  assert.equal(r.stdout, '');
+});
+
+test('R44 prints the resolved value with --json, sorted and indented', () => {
+  const r = ctl(['resolve', withFile(CTL_OK), '--json']);
+  assert.equal(r.status, 0);
+  assert.equal(r.stdout, CTL_JSON);
+});
+
+test('R44 exits 3 on a basic failure and prints nothing on stdout', () => {
+  const r = ctl(['resolve', withFile(''), '--json']);
+  assert.equal(r.status, 3);
+  assert.equal(r.stdout, '');
+  assert.equal(r.stderr, 'server.port: is required\n');
+});
+
+test('R44 exits 4 on a constraint failure and prints nothing on stdout', () => {
+  const r = ctl(['resolve', withFile(CTL_OK), '--json', '--server.port=99999']);
+  assert.equal(r.status, 4);
+  assert.equal(r.stdout, '');
+});
+
+test('R44 filters every control flag out before parseFlags ever sees it', () => {
+  // --strict is the detector: any control flag left in the config would show up
+  // as an unknown key and turn this into an exit 5.
+  const r = ctl(['resolve', withFile(CTL_OK), '--json', '--strict', '--summary',
+    '--quiet', '--full', '--diff', '--format=flat']);
+  assert.equal(r.status, 0);
+  assert.equal(r.stdout, CTL_JSON);
+});
+
+test('R44 gives all four subcommands the same exit code on one broken config', () => {
+  const p = withFile('');
+  for (const sub of ['resolve', 'check', 'explain', 'report']) {
+    assert.equal(ctl([sub, p]).status, 3, sub);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// R45 — the `check` subcommand
+// ---------------------------------------------------------------------------
+
+test('R45 prints nothing on stdout on a successful check', () => {
+  const r = ctl(['check', withFile(CTL_OK)]);
+  assert.equal(r.status, 0);
+  assert.equal(r.stdout, '');
+});
+
+test('R45 ignores --json and still prints nothing', () => {
+  const r = ctl(['check', withFile(CTL_OK), '--json']);
+  assert.equal(r.status, 0);
+  assert.equal(r.stdout, '');
+});
+
+test('R45 ignores --format and still prints nothing', () => {
+  const r = ctl(['check', withFile(CTL_OK), '--format=dotenv']);
+  assert.equal(r.status, 0);
+  assert.equal(r.stdout, '');
+});
+
+test('R45 keeps the shared exit codes, 3 for basic and 4 for constraints', () => {
+  assert.equal(ctl(['check', withFile('')]).status, 3);
+  assert.equal(ctl(['check', withFile(CTL_OK), '--server.port=99999']).status, 4);
+});
+
+// ---------------------------------------------------------------------------
+// R46 — read real environment variables, in one place only
+// ---------------------------------------------------------------------------
+
+test('R46 reads a POLYGON variable out of the real environment', () => {
+  const r = ctl(['resolve', withFile(CTL_OK), '--json'],
+    { POLYGON__server__host: 'env.example' });
+  assert.equal(r.status, 0);
+  assert.equal(JSON.parse(r.stdout).server.host, 'env.example');
+});
+
+test('R46 lets the environment beat the file', () => {
+  const p = withFile('[server]\nport = 8080\nhost = file.example\n');
+  const r = ctl(['resolve', p, '--json'], { POLYGON__server__host: 'env.example' });
+  assert.equal(r.status, 0);
+  assert.equal(JSON.parse(r.stdout).server.host, 'env.example');
+});
+
+test('R46 lets a flag beat the environment', () => {
+  const r = ctl(['resolve', withFile(CTL_OK), '--json', '--server.host=flag.example'],
+    { POLYGON__server__host: 'env.example' });
+  assert.equal(r.status, 0);
+  assert.equal(JSON.parse(r.stdout).server.host, 'flag.example');
+});
+
+test('R46 ignores a variable that does not carry the POLYGON prefix', () => {
+  const r = ctl(['resolve', withFile(CTL_OK), '--json'],
+    { OTHER__server__host: 'env.example' });
+  assert.equal(r.status, 0);
+  assert.equal(r.stdout, CTL_JSON);
+});
+
+test('R46 ignores a POLYGON variable with no second double underscore', () => {
+  const r = ctl(['resolve', withFile(CTL_OK), '--json'], { POLYGON__host: 'env.example' });
+  assert.equal(r.status, 0);
+  assert.equal(r.stdout, CTL_JSON);
+});
+
+// ---------------------------------------------------------------------------
+// R47 — the `explain` subcommand
+// ---------------------------------------------------------------------------
+
+test('R47 names the layer that won every path', () => {
+  const r = ctl(['explain', withFile(CTL_OK)]);
+  assert.equal(r.status, 0);
+  assert.equal(r.stdout, 'server.host = localhost (defaults)\n'
+    + 'server.mode = production (defaults)\n'
+    + 'server.port = 8080 (file)\n');
+});
+
+test('R47 names the flags layer for a value a flag set', () => {
+  const r = ctl(['explain', withFile(CTL_OK), '--server.host=x']);
+  assert.equal(r.status, 0);
+  assert.equal(r.stdout, 'server.host = x (flags)\n'
+    + 'server.mode = production (defaults)\n'
+    + 'server.port = 8080 (file)\n');
+});
+
+test('R47 names the env layer for a value the environment set', () => {
+  const r = ctl(['explain', withFile(CTL_OK)], { POLYGON__server__host: 'e' });
+  assert.equal(r.status, 0);
+  assert.equal(r.stdout, 'server.host = e (env)\n'
+    + 'server.mode = production (defaults)\n'
+    + 'server.port = 8080 (file)\n');
+});
+
+test('R47 keeps the shared exit codes and prints nothing on stdout when it fails', () => {
+  const r = ctl(['explain', withFile('')]);
+  assert.equal(r.status, 3);
+  assert.equal(r.stdout, '');
+});
+
+// ---------------------------------------------------------------------------
+// R48 — the `report` subcommand, and output formats
+// ---------------------------------------------------------------------------
+
+test('R48 falls back to json when no --format is given', () => {
+  const r = ctl(['report', withFile(CTL_OK)]);
+  assert.equal(r.status, 0);
+  assert.equal(r.stdout, CTL_JSON);
+});
+
+test('R48 prints json for --format=json', () => {
+  const r = ctl(['report', withFile(CTL_OK), '--format=json']);
+  assert.equal(r.status, 0);
+  assert.equal(r.stdout, CTL_JSON);
+});
+
+test('R48 prints dotenv for --format=dotenv', () => {
+  const r = ctl(['report', withFile(CTL_OK), '--format=dotenv']);
+  assert.equal(r.status, 0);
+  assert.equal(r.stdout, CTL_DOTENV);
+});
+
+test('R48 prints the flat form for --format=flat', () => {
+  const r = ctl(['report', withFile(CTL_OK), '--format=flat']);
+  assert.equal(r.status, 0);
+  assert.equal(r.stdout, CTL_FLAT);
+});
+
+// ---------------------------------------------------------------------------
+// R49 — `--strict`
+// ---------------------------------------------------------------------------
+
+const CTL_EXTRA = '[server]\nport = 8080\n[extra]\nz = 1\n';
+
+test('R49 exits 5 on a key the schema does not name', () => {
+  const r = ctl(['resolve', withFile(CTL_EXTRA), '--strict']);
+  assert.equal(r.status, 5);
+  assert.equal(r.stderr, 'extra.z: unknown key\n');
+});
+
+test('R49 leaves unknown keys alone when --strict is absent', () => {
+  assert.equal(ctl(['resolve', withFile(CTL_EXTRA)]).status, 0);
+});
+
+test('R49 prints nothing on stdout when it exits 5', () => {
+  const r = ctl(['resolve', withFile(CTL_EXTRA), '--json', '--strict']);
+  assert.equal(r.status, 5);
+  assert.equal(r.stdout, '');
+});
+
+test('R49 works on any subcommand, check included', () => {
+  assert.equal(ctl(['check', withFile(CTL_EXTRA), '--strict']).status, 5);
+});
+
+// ---------------------------------------------------------------------------
+// R50 — `--summary`
+// ---------------------------------------------------------------------------
+
+test('R50 adds a summary line after the errors on exit 3', () => {
+  const r = ctl(['check', withFile(''), '--summary']);
+  assert.equal(r.status, 3);
+  assert.equal(r.stderr,
+    'server.port: is required\n1 error(s) across 1 path(s): server.port\n');
+});
+
+test('R50 adds a summary line on exit 4', () => {
+  const r = ctl(['check', withFile(CTL_OK), '--summary', '--server.port=99999']);
+  assert.equal(r.status, 4);
+  assert.equal(r.stderr,
+    'server.port: must be at most 65535\n1 error(s) across 1 path(s): server.port\n');
+});
+
+test('R50 adds a summary line on exit 5', () => {
+  const r = ctl(['check', withFile(CTL_EXTRA), '--strict', '--summary']);
+  assert.equal(r.status, 5);
+  assert.equal(r.stderr, 'extra.z: unknown key\n1 error(s) across 1 path(s): extra.z\n');
+});
+
+test('R50 adds nothing on exit 2, which carries no errors array', () => {
+  const r = ctl(['check', withFile('???\n'), '--summary']);
+  assert.equal(r.status, 2);
+  assert.equal(r.stderr, 'line 1: ???\n');
+});
+
+// ---------------------------------------------------------------------------
+// R51 — `report --diff`
+// ---------------------------------------------------------------------------
+
+test('R51 shows exactly what the flags changed', () => {
+  const r = ctl(['report', withFile(CTL_OK), '--diff', '--server.host=x']);
+  assert.equal(r.status, 0);
+  assert.equal(r.stdout, 'server.host: localhost -> x\n');
+});
+
+test('R51 shows an empty diff when the flags changed nothing', () => {
+  const r = ctl(['report', withFile(CTL_OK), '--diff']);
+  assert.equal(r.status, 0);
+  assert.equal(r.stdout, '\n');
+});
+
+test('R51 shows undefined on the left for a path only the flags set', () => {
+  const r = ctl(['report', withFile(CTL_OK), '--diff', '--db.url=u']);
+  assert.equal(r.status, 0);
+  assert.equal(r.stdout, 'db.url: undefined -> u\n');
+});
+
+test('R51 replaces the --format output rather than adding to it', () => {
+  const r = ctl(['report', withFile(CTL_OK), '--diff', '--format=dotenv', '--server.host=x']);
+  assert.equal(r.status, 0);
+  assert.equal(r.stdout, 'server.host: localhost -> x\n');
+});
+
+test('R51 still works when the before side alone would fail validation', () => {
+  const r = ctl(['report', withFile(''), '--diff', '--server.port=8080']);
+  assert.equal(r.status, 0);
+  assert.equal(r.stdout, 'server.port: undefined -> 8080\n');
+});
+
+// ---------------------------------------------------------------------------
+// R52 — `--quiet`
+// ---------------------------------------------------------------------------
+
+test('R52 drops the stderr text on exit 3 but keeps the exit code', () => {
+  const r = ctl(['check', withFile(''), '--quiet']);
+  assert.equal(r.status, 3);
+  assert.equal(r.stderr, '');
+});
+
+test('R52 drops the stderr text on exit 4', () => {
+  const r = ctl(['check', withFile(CTL_OK), '--quiet', '--server.port=99999']);
+  assert.equal(r.status, 4);
+  assert.equal(r.stderr, '');
+});
+
+test('R52 drops the stderr text on exit 5', () => {
+  const r = ctl(['check', withFile(CTL_EXTRA), '--strict', '--quiet']);
+  assert.equal(r.status, 5);
+  assert.equal(r.stderr, '');
+});
+
+test('R52 drops the summary line too when both flags are given', () => {
+  const r = ctl(['check', withFile(''), '--quiet', '--summary']);
+  assert.equal(r.status, 3);
+  assert.equal(r.stderr, '');
+});
+
+test('R52 never touches the success output on stdout', () => {
+  const r = ctl(['report', withFile(CTL_OK), '--quiet', '--format=flat']);
+  assert.equal(r.status, 0);
+  assert.equal(r.stdout, CTL_FLAT);
+});
