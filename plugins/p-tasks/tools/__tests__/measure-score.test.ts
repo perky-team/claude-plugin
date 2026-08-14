@@ -81,6 +81,13 @@ describe('resultFrom', () => {
     expect(resultFrom('spawn ENOENT\n', ['R1 a'])).toBeNull();
   });
 
+  it('is null when the runner started but reported no test at all', () => {
+    // A TAP header and nothing else: the suite file never produced a test.
+    // Nothing here is a fact about the agent's code, so it must not be scored
+    // as if every test had failed.
+    expect(resultFrom('TAP version 13\n# tests 0\n', ['R1 a'])).toBeNull();
+  });
+
   it('is all red, not null, when the runner started and reported nothing green', () => {
     expect(resultFrom('TAP version 13\nnot ok 1 - acceptance.test.js\n', ['R1 a', 'R2 b']))
       .toEqual({ 'R1 a': false, 'R2 b': false });
