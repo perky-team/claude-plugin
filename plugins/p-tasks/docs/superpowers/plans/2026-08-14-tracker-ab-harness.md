@@ -346,7 +346,11 @@ export function validate(config, schema) {
     value[section] ??= {};
     value[section][key] = out;
   }
-  errors.sort((a, b) => a.path.localeCompare(b.path));
+  // Not localeCompare: it reads the machine's locale, which is a fourth
+  // environment dependency next to no clock, no network and no randomness.
+  // The equality arm matters — a comparator that never returns 0 puts equal
+  // paths in an arbitrary order.
+  errors.sort((a, b) => (a.path === b.path ? 0 : a.path < b.path ? -1 : 1));
   return errors.length ? { ok: false, errors } : { ok: true, value };
 }
 ```
@@ -551,11 +555,23 @@ git commit -m "test(p-tasks): add the hidden acceptance suite and prove it is pa
 {
   arm: 'ptasks', run: 1, session: 3,
   cost_usd: 0.42, num_turns: 18, hit_cap: false, error: null,
-  tests: { R1: true, R2: false },        // null if the session did not score
+  // One entry per hidden test, keyed by its full name. Always the same keys in
+  // every session of the study — Task 5 fills a test that did not run as false.
+  // null only when scoring itself failed.
+  tests: { 'R1 keeps keys before any section under the empty name': true,
+           'R2 sorts errors by path': false },
   changed_lines_from_prev: 120,
   changed_lines_from_seed: 300,
 }
 ```
+
+**One boolean per test, not per requirement.** Folding a requirement's tests
+together with AND was the first design and it was worse: `done` could only move
+in ten-point steps, R9 with seven tests was three times harder to turn green
+than R8 with two, and a single over-strict test cost a whole requirement. Per
+test, `done` has 36 steps and one thin test costs one of them. The requirement
+id still leads every test name, so the write-up can group by it whenever that
+reads better.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -887,8 +903,15 @@ git commit -m "feat(p-tasks): snapshot a working tree and measure churn between 
 - Create: `plugins/p-tasks/tools/__tests__/measure-score.test.ts`
 
 **Interfaces:**
-- Consumes: `acceptance.test.js` from Task 2, and a snapshot directory from Task 4.
-- Produces: `parseTap(text)` returning `{ R1: true, R2: false }`, and `scoreSnapshot({ snapshotDir, acceptanceFile })` returning the same shape or `null` when the run produced no test lines at all.
+- Consumes: `acceptance.test.js` and `polygon-reference/` from Task 2, and a snapshot directory from Task 4.
+- Produces three functions:
+  - `parseTap(text)` → `{ '<full test name>': true|false }`, one entry per top-level TAP line.
+  - `expectedTests({ referenceDir, acceptanceFile })` → the array of test names the suite has, taken from a run against the reference implementation. The reference is what "all green" means, so the list never drifts from the suite.
+  - `scoreSnapshot({ snapshotDir, acceptanceFile, expected })` → an entry for **every** name in `expected`: what the run said, or `false` if the run never reached it. `null` only when the runner produced no TAP output at all.
+
+A test that did not run is `false`, not missing. A crash after four passing
+tests must not read as "four out of four" — the snapshot has not shown that the
+other behaviours work, and that is exactly what `false` means here.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -898,52 +921,89 @@ import { describe, expect, it } from 'vitest';
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { parseTap, scoreSnapshot } from '../../scripts/measure-tracker/score.mjs';
+import { parseTap, scoreSnapshot, expectedTests }
+  from '../../scripts/measure-tracker/score.mjs';
+import { repoRoot } from '../../../../tests/helpers';
 
 describe('parseTap', () => {
-  it('reads pass and fail by requirement id', () => {
+  it('keys every test by its full name', () => {
     const tap = [
       'TAP version 13',
       'ok 1 - R1 reads a section',
       'not ok 2 - R2 sorts errors by path',
-      'ok 3 - R2 refuses an empty string',
     ].join('\n');
-    expect(parseTap(tap)).toEqual({ R1: true, R2: false });
+    expect(parseTap(tap)).toEqual({
+      'R1 reads a section': true,
+      'R2 sorts errors by path': false,
+    });
   });
 
-  it('treats a requirement as red if any of its tests is red', () => {
-    expect(parseTap('ok 1 - R1 a\nnot ok 2 - R1 b\n')).toEqual({ R1: false });
+  it('ignores indented subtest lines', () => {
+    expect(parseTap('    ok 1 - inner\nok 2 - outer\n')).toEqual({ outer: true });
   });
 
-  it('ignores indented subtest lines and unnamed tests', () => {
-    expect(parseTap('    ok 1 - inner\nok 2 - something else\n')).toEqual({});
-  });
-
-  it('is null-ish for output with no test lines', () => {
+  it('is empty for output with no test lines', () => {
     expect(parseTap('TAP version 13\n')).toEqual({});
   });
 });
 
+// A tiny two-test suite stands in for the real one: the behaviour under test is
+// the filling and the null case, not the polygon.
+const fixture = (dir: string, body: string) => {
+  mkdirSync(join(dir, 'src'), { recursive: true });
+  writeFileSync(join(dir, 'src', 'parse.js'), body);
+  const acceptance = join(dir, 'acceptance.test.js');
+  writeFileSync(acceptance, [
+    "import test from 'node:test';",
+    "import assert from 'node:assert/strict';",
+    "import { parseIni } from './src/parse.js';",
+    "test('R1 returns an object', () => { assert.deepEqual(parseIni(''), {}); });",
+    "test('R2 is not done', () => { assert.equal(1, 2); });",
+  ].join('\n'));
+  return acceptance;
+};
+
 describe('scoreSnapshot', () => {
-  it('scores a real directory', () => {
+  it('reports what the run said', () => {
     const dir = mkdtempSync(join(tmpdir(), 'score-'));
     try {
-      mkdirSync(join(dir, 'src'), { recursive: true });
-      writeFileSync(join(dir, 'src', 'parse.js'), 'export const parseIni = () => ({});\n');
-      const acceptance = join(dir, 'acceptance.test.js');
-      writeFileSync(acceptance, [
-        "import test from 'node:test';",
-        "import assert from 'node:assert/strict';",
-        "import { parseIni } from './src/parse.js';",
-        "test('R1 returns an object', () => { assert.deepEqual(parseIni(''), {}); });",
-        "test('R2 is not done', () => { assert.equal(1, 2); });",
-      ].join('\n'));
-      expect(scoreSnapshot({ snapshotDir: dir, acceptanceFile: acceptance }))
-        .toEqual({ R1: true, R2: false });
+      const acceptance = fixture(dir, 'export const parseIni = () => ({});\n');
+      expect(scoreSnapshot({
+        snapshotDir: dir,
+        acceptanceFile: acceptance,
+        expected: ['R1 returns an object', 'R2 is not done'],
+      })).toEqual({ 'R1 returns an object': true, 'R2 is not done': false });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   }, 30_000);
+
+  it('counts a test that never ran as false, not as missing', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'score-'));
+    try {
+      // An import error kills the runner before either test reports.
+      const acceptance = fixture(dir, 'throw new Error("broken");\n');
+      expect(scoreSnapshot({
+        snapshotDir: dir,
+        acceptanceFile: acceptance,
+        expected: ['R1 returns an object', 'R2 is not done'],
+      })).toEqual({ 'R1 returns an object': false, 'R2 is not done': false });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30_000);
+});
+
+describe('expectedTests', () => {
+  it('takes the list from the reference implementation, where all are green', () => {
+    const scripts = join(repoRoot(), 'plugins', 'p-tasks', 'scripts');
+    const names = expectedTests({
+      referenceDir: join(scripts, 'polygon-reference'),
+      acceptanceFile: join(scripts, 'polygon-acceptance', 'acceptance.test.js'),
+    });
+    expect(names.length).toBeGreaterThan(30);
+    expect(names.every((n) => /^R\d+ /.test(n))).toBe(true);
+  }, 60_000);
 });
 ```
 
@@ -961,34 +1021,52 @@ import { join } from 'node:path';
 
 // One unindented TAP line per top-level test. Node indents subtests, which is
 // why the hidden suite is required to be flat.
-const LINE = /^(not )?ok \d+ - (R\d+)\b/gm;
+const LINE = /^(not )?ok \d+ - (.+?)\s*$/gm;
 
-/** TAP text to { R1: true, R2: false }. A requirement is green only if every test for it is. */
+/** TAP text to { '<test name>': true|false }, one entry per top-level test. */
 export function parseTap(text) {
   const out = {};
-  for (const [, notOk, id] of text.matchAll(LINE)) {
-    const passed = !notOk;
-    out[id] = id in out ? out[id] && passed : passed;
-  }
+  for (const [, notOk, name] of text.matchAll(LINE)) out[name] = !notOk;
   return out;
+}
+
+function runSuite(dir, acceptanceFile, timeoutMs) {
+  const target = join(dir, 'acceptance.test.js');
+  try {
+    copyFileSync(acceptanceFile, target);
+    const r = spawnSync(process.execPath,
+      ['--test', '--test-reporter=tap', 'acceptance.test.js'],
+      { cwd: dir, encoding: 'utf-8', timeout: timeoutMs, maxBuffer: 1 << 26 });
+    return `${r.stdout ?? ''}\n${r.stderr ?? ''}`;
+  } finally {
+    rmSync(target, { force: true });
+  }
+}
+
+/**
+ * The test names the suite has, read from a run against the reference. The
+ * reference is what "all green" means, so this list cannot drift from the
+ * suite the way a hand-written manifest would.
+ */
+export function expectedTests({ referenceDir, acceptanceFile, timeoutMs = 120_000 }) {
+  return Object.keys(parseTap(runSuite(referenceDir, acceptanceFile, timeoutMs)));
 }
 
 /**
  * Copy the hidden suite into a snapshot, run it, read the result, remove it.
  * The agent's own directory is never given this file — only a snapshot copy is.
+ *
+ * Every expected test gets an entry. A test the run never reached is `false`:
+ * a crash after four passes has not shown that the fifth behaviour works, and
+ * dropping it would score that snapshot four out of four.
  */
-export function scoreSnapshot({ snapshotDir, acceptanceFile, timeoutMs = 120_000 }) {
-  const target = join(snapshotDir, 'acceptance.test.js');
-  try {
-    copyFileSync(acceptanceFile, target);
-    const r = spawnSync(process.execPath,
-      ['--test', '--test-reporter=tap', 'acceptance.test.js'],
-      { cwd: snapshotDir, encoding: 'utf-8', timeout: timeoutMs, maxBuffer: 1 << 26 });
-    const tests = parseTap(`${r.stdout ?? ''}\n${r.stderr ?? ''}`);
-    return Object.keys(tests).length ? tests : null;
-  } finally {
-    rmSync(target, { force: true });
-  }
+export function scoreSnapshot({ snapshotDir, acceptanceFile, expected, timeoutMs = 120_000 }) {
+  const out = runSuite(snapshotDir, acceptanceFile, timeoutMs);
+  // No TAP at all means the runner never started — a fault in the harness, not
+  // a result about the code. Say "did not score" instead of "all red".
+  if (!out.includes('TAP version') && !/^(not )?ok \d+ - /m.test(out)) return null;
+  const said = parseTap(out);
+  return Object.fromEntries(expected.map((name) => [name, said[name] === true]));
 }
 ```
 
@@ -1403,12 +1481,13 @@ import { fileURLToPath } from 'node:url';
 import { OFF_SETTINGS, prepArm, preflight } from './measure-tracker/arms.mjs';
 import { runSession } from './measure-tracker/session.mjs';
 import { snapshot, changedLines } from './measure-tracker/snapshot.mjs';
-import { scoreSnapshot } from './measure-tracker/score.mjs';
+import { scoreSnapshot, expectedTests } from './measure-tracker/score.mjs';
 import { report } from './measure-tracker/report.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PLUGIN = join(HERE, '..');
 const POLYGON = join(HERE, 'polygon');
+const REFERENCE = join(HERE, 'polygon-reference');
 const ACCEPTANCE = join(HERE, 'polygon-acceptance', 'acceptance.test.js');
 
 const ARMS = ['none', 'ptasks', 'beads'];
@@ -1474,7 +1553,7 @@ function freshCopy(arm, run) {
   return prepArm({ arm, dir, pluginDir: PLUGIN });
 }
 
-async function runOne(arm, run, sessions) {
+async function runOne(arm, run, sessions, expected) {
   const claudeBin = findClaude();
   const dir = freshCopy(arm, run);
   const seedSnap = snapshot(dir, join(work, 'snapshots', `${arm}-${run}`, 's00'));
@@ -1490,7 +1569,7 @@ async function runOne(arm, run, sessions) {
     const row = {
       arm, run, session,
       ...res,
-      tests: scoreSnapshot({ snapshotDir: snap, acceptanceFile: ACCEPTANCE }),
+      tests: scoreSnapshot({ snapshotDir: snap, acceptanceFile: ACCEPTANCE, expected }),
       changed_lines_from_prev: changedLines(prev, snap),
       changed_lines_from_seed: changedLines(seedSnap, snap),
     };
@@ -1531,8 +1610,14 @@ async function main() {
 
   for (const arm of arms) preflight(arm);
 
+  // Read the suite's test list once, from the reference, before any session
+  // runs. If this comes back short, the hidden suite is broken and every
+  // score afterwards would be wrong in the same direction.
+  const expected = expectedTests({ referenceDir: REFERENCE, acceptanceFile: ACCEPTANCE });
+  if (expected.length < 30) throw new Error(`the hidden suite reported only ${expected.length} tests against the reference`);
+
   for (const { arm, run } of pendingWork(readRows(), { arms, runs })) {
-    await runOne(arm, run, sessions);
+    await runOne(arm, run, sessions, expected);
   }
   process.stdout.write(report(readRows()));
 }
@@ -1627,6 +1712,10 @@ const spread = (xs) => (xs.length < 2 ? '—' : `${fmt(Math.min(...xs))}–${fmt
 
 // A single number hides everything that matters about feature work: five runs
 // with the same mean can be five identical runs or two disasters and three wins.
+//
+// `done` is the share of hidden TESTS green, not of requirements. Every test
+// name starts with its requirement id, so the write-up can group by the `R\d+`
+// prefix wherever "R7 was the last to go green" reads better than a percentage.
 export function report(rows) {
   if (!rows.length) return '\nno runs yet\n';
   const runs = byRun(rows);
