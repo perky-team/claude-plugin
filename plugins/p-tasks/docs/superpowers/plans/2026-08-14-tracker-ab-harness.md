@@ -1423,6 +1423,7 @@ describe('runSession', () => {
     expect(r.num_turns).toBe(7);
     expect(r.session_id).toBe('abc');
     expect(r.error).toBeNull();
+    expect(r.hit_cap).toBe(false);
   });
 
   it('marks a session that spent its whole cap', () => {
@@ -1436,6 +1437,33 @@ describe('runSession', () => {
     const r = runSession({ dir, arm: 'none', capUsd: 5, claudeBin: bin, runner: 'node' });
     expect(r.error).toMatch(/exited 1/);
     expect(r.cost_usd).toBeNull();
+  });
+
+  it('records an error instead of throwing when the CLI writes something that is not JSON', () => {
+    const bin = stub(`process.stdout.write('not json at all');`);
+    const r = runSession({ dir, arm: 'none', capUsd: 5, claudeBin: bin, runner: 'node' });
+    expect(r.error).toMatch(/unreadable output/);
+    expect(r.cost_usd).toBeNull();
+  });
+
+  it('records an error instead of throwing when the binary does not exist', () => {
+    const r = runSession({
+      dir, arm: 'none', capUsd: 5, claudeBin: join(dir, 'no-such-file.mjs'), runner: 'node',
+    });
+    expect(r.error).toBeTruthy();
+    expect(r.cost_usd).toBeNull();
+  });
+
+  // The other half of the contract. These two are caller mistakes that would
+  // otherwise produce ordinary-looking rows for an arm that is not the arm it
+  // claims to be, so they must stop the study rather than join it.
+  it('throws at once when the ptasks arm has no plugin directory', () => {
+    expect(() => runSession({ dir, arm: 'ptasks', capUsd: 5, claudeBin: 'x', runner: 'node' }))
+      .toThrow(/pluginDir/);
+  });
+
+  it('throws at once when there is no binary to run', () => {
+    expect(() => runSession({ dir, arm: 'none', capUsd: 5 })).toThrow(/claudeBin/);
   });
 });
 ```
@@ -1461,16 +1489,32 @@ export const PROMPT = 'Continue the work on the feature described in SPEC.md.';
 const CAP_MARGIN = 0.98;
 
 /**
- * Run one session in `dir`. Never throws — a failed session is a recorded row,
- * because losing 40 good sessions to one API hiccup is not acceptable.
+ * Run one session in `dir`.
+ *
+ * The contract has two halves, and the difference between them matters:
+ *
+ * - **Nothing the CLI does throws.** Any failure out there — an API error, a
+ *   non-zero exit, output that is not JSON — comes back as a row with `error`
+ *   set. Losing 40 good sessions to one hiccup is not acceptable.
+ * - **A caller mistake throws at once.** A missing binary or a `ptasks` arm
+ *   with no plugin directory would still produce perfectly ordinary-looking
+ *   rows — the plugin simply would not be there, and the arm would quietly
+ *   become a second `none`. A study that silently measures the wrong thing is
+ *   worse than one that stops on the first session.
  */
 export function runSession({
   dir, arm, pluginDir, settingsFile, capUsd = 5, model = 'sonnet', claudeBin, runner,
 }) {
+  if (!claudeBin && !runner) throw new Error('runSession needs claudeBin');
+  if (arm === 'ptasks' && !pluginDir) {
+    throw new Error('the ptasks arm needs pluginDir — without it the plugin is '
+      + 'never loaded and the arm is a second `none` arm wearing its name');
+  }
+
   const args = ['-p', '--output-format', 'json', '--model', model,
     '--permission-mode', 'bypassPermissions', '--max-budget-usd', String(capUsd)];
   if (settingsFile) args.push('--settings', settingsFile);
-  if (arm === 'ptasks' && pluginDir) args.push('--plugin-dir', pluginDir);
+  if (arm === 'ptasks') args.push('--plugin-dir', pluginDir);
 
   const [cmd, pre] = runner ? [runner, [claudeBin]] : [claudeBin, []];
   const r = spawnSync(cmd, [...pre, ...args], {

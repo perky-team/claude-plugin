@@ -29,6 +29,7 @@ describe('runSession', () => {
     expect(r.num_turns).toBe(7);
     expect(r.session_id).toBe('abc');
     expect(r.error).toBeNull();
+    expect(r.hit_cap).toBe(false);
   });
 
   it('marks a session that spent its whole cap', () => {
@@ -42,5 +43,32 @@ describe('runSession', () => {
     const r = runSession({ dir, arm: 'none', capUsd: 5, claudeBin: bin, runner: 'node' });
     expect(r.error).toMatch(/exited 1/);
     expect(r.cost_usd).toBeNull();
+  });
+
+  it('records an error instead of throwing when the CLI writes something that is not JSON', () => {
+    const bin = stub(`process.stdout.write('not json at all');`);
+    const r = runSession({ dir, arm: 'none', capUsd: 5, claudeBin: bin, runner: 'node' });
+    expect(r.error).toMatch(/unreadable output/);
+    expect(r.cost_usd).toBeNull();
+  });
+
+  it('records an error instead of throwing when the binary does not exist', () => {
+    const r = runSession({
+      dir, arm: 'none', capUsd: 5, claudeBin: join(dir, 'no-such-file.mjs'), runner: 'node',
+    });
+    expect(r.error).toBeTruthy();
+    expect(r.cost_usd).toBeNull();
+  });
+
+  // The other half of the contract. These two are caller mistakes that would
+  // otherwise produce ordinary-looking rows for an arm that is not the arm it
+  // claims to be, so they must stop the study rather than join it.
+  it('throws at once when the ptasks arm has no plugin directory', () => {
+    expect(() => runSession({ dir, arm: 'ptasks', capUsd: 5, claudeBin: 'x', runner: 'node' }))
+      .toThrow(/pluginDir/);
+  });
+
+  it('throws at once when there is no binary to run', () => {
+    expect(() => runSession({ dir, arm: 'none', capUsd: 5 })).toThrow(/claudeBin/);
   });
 });

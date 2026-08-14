@@ -11,16 +11,32 @@ export const PROMPT = 'Continue the work on the feature described in SPEC.md.';
 const CAP_MARGIN = 0.98;
 
 /**
- * Run one session in `dir`. Never throws — a failed session is a recorded row,
- * because losing 40 good sessions to one API hiccup is not acceptable.
+ * Run one session in `dir`.
+ *
+ * The contract has two halves, and the difference between them matters:
+ *
+ * - **Nothing the CLI does throws.** Any failure out there — an API error, a
+ *   non-zero exit, output that is not JSON — comes back as a row with `error`
+ *   set. Losing 40 good sessions to one hiccup is not acceptable.
+ * - **A caller mistake throws at once.** A missing binary or a `ptasks` arm
+ *   with no plugin directory would still produce perfectly ordinary-looking
+ *   rows — the plugin simply would not be there, and the arm would quietly
+ *   become a second `none`. A study that silently measures the wrong thing is
+ *   worse than one that stops on the first session.
  */
 export function runSession({
   dir, arm, pluginDir, settingsFile, capUsd = 5, model = 'sonnet', claudeBin, runner,
 }) {
+  if (!claudeBin && !runner) throw new Error('runSession needs claudeBin');
+  if (arm === 'ptasks' && !pluginDir) {
+    throw new Error('the ptasks arm needs pluginDir — without it the plugin is '
+      + 'never loaded and the arm is a second `none` arm wearing its name');
+  }
+
   const args = ['-p', '--output-format', 'json', '--model', model,
     '--permission-mode', 'bypassPermissions', '--max-budget-usd', String(capUsd)];
   if (settingsFile) args.push('--settings', settingsFile);
-  if (arm === 'ptasks' && pluginDir) args.push('--plugin-dir', pluginDir);
+  if (arm === 'ptasks') args.push('--plugin-dir', pluginDir);
 
   const [cmd, pre] = runner ? [runner, [claudeBin]] : [claudeBin, []];
   const r = spawnSync(cmd, [...pre, ...args], {
