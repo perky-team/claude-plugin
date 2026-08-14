@@ -164,13 +164,13 @@ export function aggregate(records, now, { windowDays = 7 } = {}) {
 //      `schedule` and `enabled` in memory, and status.mjs already resolves through
 //      effectiveJobs so it "can never report a schedule the scheduler will not act on".
 //      This function inherits that guarantee by never reading jobs.yml itself.
-//   2. A job with no `lastRun` has never run. The tick's baseline gate (tick.mjs, the
-//      `!st || lastRun == null` branch) writes a starting point and skips THAT tick
-//      rather than launching, so `isDue` must never be asked about this job — it would
-//      say yes for anything more frequent than daily, since it treats a missing
-//      `lastRun` as "24 hours ago".
-//   3. A job whose own previous run is still alive gets `at: null`, not a guessed time.
-//      The tick's duplicate guard skips a launch while the pidfile is alive, and it runs
+//   2. A job whose own previous run is still alive gets `at: null`, not a guessed time.
+//      Checked before the never-run rule below, on purpose: `pshed run <id>` launches a
+//      job by hand and stays stateless — it writes the pidfile and never touches the
+//      state file — so `{ lastRun: null, running: true }` is reachable and ordinary,
+//      not a contradiction. That is a freshly added job, started this way before the
+//      scheduler has ticked it even once, and it must land here, not in rule 3. The
+//      tick's duplicate guard skips a launch while the pidfile is alive, and it runs
 //      before the schedule is even consulted. `lastRun` marks when the run STARTED, and
 //      `nextRun` only answers "the next matching cron minute from now" — it has no idea
 //      the run is still going and will still be going when that minute arrives. Printing
@@ -179,6 +179,11 @@ export function aggregate(records, now, { windowDays = 7 } = {}) {
 //      truly stuck forever read as "coming up soon" forever, indistinguishable from a
 //      healthy wait. `at: null` puts it in the same honest "don't know" bucket as a
 //      disabled or paused job.
+//   3. A job that is not running and has no `lastRun` has never run. The tick's baseline
+//      gate (tick.mjs, the `!st || lastRun == null` branch) writes a starting point and
+//      skips THAT tick rather than launching, so `isDue` must never be asked about this
+//      job — it would say yes for anything more frequent than daily, since it treats a
+//      missing `lastRun` as "24 hours ago".
 //   4. A pending `retryNotBefore` beats the cron time: the job relaunches then. Checked
 //      before `isDue` so a missed slot with a still-future backoff reports the backoff
 //      time, not a launch that will not happen.
@@ -219,12 +224,12 @@ export function computeNext(jobs, statusJobs, now) {
     try { cron = parseCron(job.schedule); }
     catch { out[job.id] = { at: null, due: false }; continue; }
 
-    if (st.lastRun == null) {
-      out[job.id] = { at: nextRun(cron, now), due: false };
-      continue;
-    }
     if (st.running === true) {
       out[job.id] = { at: null, due: false };
+      continue;
+    }
+    if (st.lastRun == null) {
+      out[job.id] = { at: nextRun(cron, now), due: false };
       continue;
     }
 

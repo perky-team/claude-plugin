@@ -82,6 +82,18 @@ describe('computeNext', () => {
     expect(next.worker).toEqual({ at: null, due: false });
   });
 
+  it('gives at: null for a running job even when it has never recorded a lastRun', () => {
+    // `pshed run <id>` launches by hand and stays stateless: it writes the pidfile but
+    // never touches the state file. A freshly added job started this way, before the
+    // scheduler has ticked it even once, is exactly `{ lastRun: null, running: true }`.
+    // The running check must win here too, or this job gets a guessed clock time that
+    // slides forward on every render — the same defect the running-job fix removed,
+    // coming back through the lastRun-is-null branch.
+    const jobs = [{ id: 'worker', schedule: '*/15 * * * *', enabled: true }];
+    const next = computeNext(jobs, [status({ lastRun: null, running: true })], NOW);
+    expect(next.worker).toEqual({ at: null, due: false });
+  });
+
   it('reports the backoff time, not due, when a missed slot meets a future retry', () => {
     // isDue is true (the 09:00 slot was missed) AND retryNotBefore is still in the
     // future: the tick will not launch until the backoff clears, so the retry time
