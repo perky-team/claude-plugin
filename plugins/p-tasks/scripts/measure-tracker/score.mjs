@@ -6,6 +6,18 @@ import { join } from 'node:path';
 // why the hidden suite is required to be flat.
 const LINE = /^(not )?ok \d+ - (.+?)\s*$/gm;
 
+// Per test, not per run. Without it, one hanging test hangs the whole runner
+// until the spawn timeout kills it — and a killed runner makes Node collapse
+// the entire file into one `not ok 1 - acceptance.test.js` line, throwing away
+// the `ok` lines of every test that had already passed. That would score a
+// snapshot 0 of 37 for a single infinite loop. Measured: with this flag a hang
+// becomes one failed test and its neighbours still report `ok`.
+//
+// 3s is about a thousand times what these tests need, and 37 of them can all
+// time out inside the spawn timeout below.
+const TEST_TIMEOUT_MS = 3_000;
+const RUN_TIMEOUT_MS = 180_000;
+
 /** TAP text to { '<test name>': true|false }, one entry per top-level test. */
 export function parseTap(text) {
   const out = {};
@@ -18,7 +30,7 @@ function runSuite(dir, acceptanceFile, timeoutMs) {
   try {
     copyFileSync(acceptanceFile, target);
     const r = spawnSync(process.execPath,
-      ['--test', '--test-reporter=tap', 'acceptance.test.js'],
+      ['--test', `--test-timeout=${TEST_TIMEOUT_MS}`, '--test-reporter=tap', 'acceptance.test.js'],
       { cwd: dir, encoding: 'utf-8', timeout: timeoutMs, maxBuffer: 1 << 26 });
     return `${r.stdout ?? ''}\n${r.stderr ?? ''}`;
   } finally {
@@ -31,8 +43,21 @@ function runSuite(dir, acceptanceFile, timeoutMs) {
  * reference is what "all green" means, so this list cannot drift from the
  * suite the way a hand-written manifest would.
  */
-export function expectedTests({ referenceDir, acceptanceFile, timeoutMs = 120_000 }) {
+export function expectedTests({ referenceDir, acceptanceFile, timeoutMs = RUN_TIMEOUT_MS }) {
   return Object.keys(parseTap(runSuite(referenceDir, acceptanceFile, timeoutMs)));
+}
+
+/**
+ * Turn a run's output into one entry per expected test. Pure, so the rule that
+ * decides "did not score" against "scored all red" can be tested directly —
+ * the real thing needs a runner that fails to start, which no test can stage.
+ */
+export function resultFrom(output, expected) {
+  // No TAP at all means the runner never started: a fault in the harness, not
+  // a result about the code. Say "did not score" instead of "all red".
+  if (!output.includes('TAP version') && !/^(not )?ok \d+ - /m.test(output)) return null;
+  const said = parseTap(output);
+  return Object.fromEntries(expected.map((name) => [name, said[name] === true]));
 }
 
 /**
@@ -43,11 +68,6 @@ export function expectedTests({ referenceDir, acceptanceFile, timeoutMs = 120_00
  * a crash after four passes has not shown that the fifth behaviour works, and
  * dropping it would score that snapshot four out of four.
  */
-export function scoreSnapshot({ snapshotDir, acceptanceFile, expected, timeoutMs = 120_000 }) {
-  const out = runSuite(snapshotDir, acceptanceFile, timeoutMs);
-  // No TAP at all means the runner never started — a fault in the harness, not
-  // a result about the code. Say "did not score" instead of "all red".
-  if (!out.includes('TAP version') && !/^(not )?ok \d+ - /m.test(out)) return null;
-  const said = parseTap(out);
-  return Object.fromEntries(expected.map((name) => [name, said[name] === true]));
+export function scoreSnapshot({ snapshotDir, acceptanceFile, expected, timeoutMs = RUN_TIMEOUT_MS }) {
+  return resultFrom(runSuite(snapshotDir, acceptanceFile, timeoutMs), expected);
 }

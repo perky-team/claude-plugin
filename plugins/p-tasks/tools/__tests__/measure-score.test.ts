@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { parseTap, scoreSnapshot, expectedTests }
+import { parseTap, scoreSnapshot, expectedTests, resultFrom }
   from '../../scripts/measure-tracker/score.mjs';
 import { repoRoot } from '../../../../tests/helpers';
 
@@ -73,6 +73,23 @@ describe('scoreSnapshot', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   }, 30_000);
+});
+
+describe('resultFrom', () => {
+  it('is null when the runner produced no TAP at all', () => {
+    expect(resultFrom('', ['R1 a'])).toBeNull();
+    expect(resultFrom('spawn ENOENT\n', ['R1 a'])).toBeNull();
+  });
+
+  it('is all red, not null, when the runner started and reported nothing green', () => {
+    expect(resultFrom('TAP version 13\nnot ok 1 - acceptance.test.js\n', ['R1 a', 'R2 b']))
+      .toEqual({ 'R1 a': false, 'R2 b': false });
+  });
+
+  it('ignores a name the study did not ask for', () => {
+    expect(resultFrom('TAP version 13\nok 1 - R9 stray\n', ['R1 a']))
+      .toEqual({ 'R1 a': false });
+  });
 });
 
 describe('expectedTests', () => {
