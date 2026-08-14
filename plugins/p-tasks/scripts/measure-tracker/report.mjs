@@ -30,8 +30,9 @@ export function report(rows) {
   const runs = byRun(rows);
   const arms = [...new Set(runs.map((r) => r.arm))];
 
-  const lines = ['', '| arm | runs | done | spread | sessions to done | regressions / hand-over | churn | $ per run |',
-    '|---|---|---|---|---|---|---|---|'];
+  const lines = ['',
+    '| arm | runs | done | spread | sessions to done | regressions / hand-over | churn | $ per run | tokens / session |',
+    '|---|---|---|---|---|---|---|---|---|'];
   const noisy = [];
   for (const arm of arms) {
     const mine = runs.filter((r) => r.arm === arm);
@@ -40,6 +41,9 @@ export function report(rows) {
     const regs = mine.map((r) => regressionRate(r.sessions)).filter((x) => x !== null);
     const churns = mine.map((r) => churn(r.sessions)).filter((x) => x !== null);
     const costs = mine.map((r) => r.sessions.reduce((n, s) => n + (s.cost_usd ?? 0), 0));
+    const tokenCounts = mine.flatMap((r) => r.sessions)
+      .map((s) => s.usage?.input_tokens)
+      .filter((x) => typeof x === 'number');
 
     // Per arm, never pooled. The arms are expected to hit the cap at different
     // rates — a tracker arm spends part of each session on upkeep and gets
@@ -61,7 +65,17 @@ export function report(rows) {
 
     lines.push(`| ${arm} | ${mine.length} | ${fmt(mean(dones))} | ${spread(dones)} `
       + `| ${sessionsCell} | ${fmt(mean(regs))} `
-      + `| ${fmt(mean(churns))} | ${fmt(mean(costs))} |`);
+      + `| ${fmt(mean(churns))} | ${fmt(mean(costs))} | ${fmt(mean(tokenCounts), 0)} |`);
+  }
+
+  // Fixed, not conditional on anything measured: with more than one arm on
+  // the same table, a reader will compare all three cells side by side unless
+  // told not to. `ptasks` vs `beads` differ by the tracker alone; `none` also
+  // lacks the rule text, so it is missing two things, not one.
+  if (arms.length > 1) {
+    lines.push('',
+      '**`ptasks` against `beads` is a clean comparison — both arms have a rule and a place to store items.**',
+      '**Either against `none` is coarse: that arm is missing the rule text as well as the tracker.**');
   }
 
   for (const { arm, capped } of noisy) {

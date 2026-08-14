@@ -22,8 +22,12 @@ const TEXT = /\.(m?[jt]sx?|cjs|cts|json|md|ya?ml|txt|ini|css|html?|sh)$/i;
 // longer than it is. Drop that one element and nothing else: a blank line in
 // the middle IS a line somebody wrote, and dropping every empty string would
 // hide the churn of adding and removing them.
+//
+// Split on `\r?\n`, not plain `\n`: the study runs on Windows, and a file
+// rewritten with CRLF line endings must not look like every line changed
+// against an LF predecessor that says the same thing.
 const lines = (text) => {
-  const out = text.split('\n');
+  const out = text.split(/\r?\n/);
   if (out.at(-1) === '') out.pop();
   return out;
 };

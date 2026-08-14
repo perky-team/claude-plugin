@@ -43,16 +43,19 @@ describe('report', () => {
 
   // Twenty clean sessions in one arm and one capped session in another. Pooled,
   // that is 1 in 21 and no warning fires; per arm, the second one capped every
-  // session it ran. The arm with the problem must be named.
+  // session it ran. The arm with the problem must be named — and only that
+  // arm: checked on the warning line itself, not the whole report, because a
+  // two-arm report also carries the always-on `none`-vs-tracker caveat, which
+  // legitimately names `none` elsewhere on the page.
   it('does not let a clean arm dilute a capped one', () => {
     const rows = [
       ...Array.from({ length: 20 }, (_, i) => row('none', 1, i + 1, { R1: true })),
       { ...row('ptasks', 1, 1, { R1: true }), hit_cap: true },
     ];
     const out = report(rows);
-    expect(out).toContain('the cap bound');
-    expect(out).toContain('`ptasks`');
-    expect(out).not.toContain('`none`');
+    const capLine = out.split('\n').find((l) => l.includes('the cap bound'));
+    expect(capLine).toContain('`ptasks`');
+    expect(capLine).not.toContain('`none`');
   });
 
   it('does not crash on an empty study', () => {
@@ -78,5 +81,37 @@ describe('report', () => {
     const rows = [row('none', 1, 1, { R1: false })];
     const cells = armCells(report(rows), 'none');
     expect(cells).toContain('never');
+  });
+
+  // The bug: usage and num_turns were journaled every session, but the table
+  // had no column for them, so the tracker's own token cost never showed up
+  // in the one place a write-up would be pasted from.
+  it('adds a tokens-per-session column, averaging usage.input_tokens across the arm', () => {
+    const rows = [
+      { ...row('ptasks', 1, 1, { R1: true }), usage: { input_tokens: 1000 } },
+      { ...row('ptasks', 1, 2, { R1: true }), usage: { input_tokens: 2000 } },
+    ];
+    expect(armCells(report(rows), 'ptasks').at(-1)).toBe('1500');
+  });
+
+  it('shows an em dash for tokens per session when no session in the arm reported usage', () => {
+    const rows = [row('none', 1, 1, { R1: true }), row('none', 2, 1, { R1: true })];
+    expect(armCells(report(rows), 'none').at(-1)).toBe('—');
+  });
+
+  // The bug: the design says plainly that `ptasks` vs `beads` is a clean
+  // comparison and either against `none` is coarse, because `none` is missing
+  // the rule text as well as the tracker — but the score output, the thing
+  // that gets pasted into a write-up, carried no such note.
+  it('notes that ptasks-vs-beads is clean and either-vs-none is coarse, once there is more than one arm', () => {
+    const rows = [row('none', 1, 1, { R1: true }), row('ptasks', 1, 1, { R1: true })];
+    const out = report(rows);
+    expect(out).toContain('clean comparison');
+    expect(out).toContain('coarse');
+  });
+
+  it('does not print the arm-comparison caveat for a single-arm report', () => {
+    const rows = [row('none', 1, 1, { R1: true })];
+    expect(report(rows)).not.toContain('clean comparison');
   });
 });

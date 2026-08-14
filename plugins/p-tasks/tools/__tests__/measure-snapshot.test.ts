@@ -86,4 +86,13 @@ describe('changedLines', () => {
     write(join(root, 'b'), 'src/a.js', 'ONE\n');
     expect(changedLines(join(root, 'a'), join(root, 'b'))).toBe(1);
   });
+
+  // The bug: `lines()` split on plain '\n', so a file rewritten with CRLF line
+  // endings differed from an LF predecessor on every single line, on the one
+  // platform this study actually runs on.
+  it('does not count CRLF vs LF as a change to every line', () => {
+    write(join(root, 'a'), 'f.js', 'one\ntwo\nthree\n');
+    write(join(root, 'b'), 'f.js', 'one\r\ntwo\r\nthree\r\n');
+    expect(changedLines(join(root, 'a'), join(root, 'b'))).toBe(0);
+  });
 });
