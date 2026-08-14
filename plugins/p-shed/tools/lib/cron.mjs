@@ -60,13 +60,18 @@ export function isDue(cron, lastRunMs, nowMs) {
 // The first whole minute strictly after `fromMs` that this spec matches, or null.
 //
 // It walks minute by minute through the same matcher the tick uses, so it can never
-// disagree with it. Forty days covers a monthly schedule (`0 0 1 * *`) from any starting
-// day; the worst case is 57,600 matcher calls, which is far cheaper than reading the
-// logs the same command reads anyway. A spec that can never match — the 30th of
-// February — returns null rather than spinning.
+// disagree with it. 400 days covers a yearly schedule (`0 0 1 1 *`) from any starting
+// day, with room to spare; the worst case is 576,000 matcher calls, which is still far
+// cheaper than reading the logs the same command reads anyway. A spec that can never
+// match — the 30th of February — returns null rather than spinning.
+//
+// One legal spec still reads as null despite having a real next run: a leap day
+// (`0 0 29 2 *`) can be up to eight years away, spanning a non-leap century year like
+// 2100. Covering that would cost millions of iterations for a schedule nobody writes,
+// so it is left out on purpose.
 export function nextRun(cron, fromMs) {
   const MIN = 60_000;
-  const CAP = 40 * 24 * 60;
+  const CAP = 400 * 24 * 60;
   let t = Math.floor(fromMs / MIN) * MIN + MIN;
   for (let i = 0; i < CAP; i++, t += MIN) {
     if (matches(cron, new Date(t))) return t;

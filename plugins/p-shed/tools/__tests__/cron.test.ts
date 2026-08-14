@@ -70,6 +70,11 @@ describe('nextRun', () => {
     expect(t).toBe(at('2026-08-14T10:15:00'));
   });
 
+  it('steps forward by exactly one minute, not two', () => {
+    const t = nextRun(parseCron('*/15 * * * *'), at('2026-08-14T10:14:00'));
+    expect(t).toBe(at('2026-08-14T10:15:00'));
+  });
+
   it('never returns the minute it was asked from', () => {
     const t = nextRun(parseCron('*/15 * * * *'), at('2026-08-14T10:15:00'));
     expect(t).toBe(at('2026-08-14T10:30:00'));
@@ -87,5 +92,10 @@ describe('nextRun', () => {
 
   it('returns null for a spec that can never match', () => {
     expect(nextRun(parseCron('0 0 30 2 *'), at('2026-08-14T10:00:00'))).toBeNull();
+  });
+
+  it('reaches a yearly schedule', () => {
+    const t = nextRun(parseCron('0 0 1 1 *'), at('2026-08-14T10:00:00'));
+    expect(t).toBe(at('2027-01-01T00:00:00'));
   });
 });
