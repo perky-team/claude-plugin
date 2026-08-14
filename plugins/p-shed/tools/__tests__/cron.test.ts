@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseCron, matches, isDue } from '../lib/cron.mjs';
+import { parseCron, matches, isDue, nextRun } from '../lib/cron.mjs';
 
 const at = (y: number, mo: number, d: number, h: number, mi: number) => new Date(y, mo - 1, d, h, mi);
 
@@ -59,5 +59,33 @@ describe('isDue', () => {
     const last = at(2026, 7, 16, 1, 0).getTime();
     const now = at(2026, 7, 16, 1, 30).getTime();
     expect(isDue(c, last, now)).toBe(true);   // one boolean, not 30 launches
+  });
+});
+
+describe('nextRun', () => {
+  const at = (iso: string) => new Date(iso).getTime();
+
+  it('finds the next quarter hour', () => {
+    const t = nextRun(parseCron('*/15 * * * *'), at('2026-08-14T10:07:30'));
+    expect(t).toBe(at('2026-08-14T10:15:00'));
+  });
+
+  it('never returns the minute it was asked from', () => {
+    const t = nextRun(parseCron('*/15 * * * *'), at('2026-08-14T10:15:00'));
+    expect(t).toBe(at('2026-08-14T10:30:00'));
+  });
+
+  it('rolls over to tomorrow for a daily schedule', () => {
+    const t = nextRun(parseCron('0 9 * * *'), at('2026-08-14T10:00:00'));
+    expect(t).toBe(at('2026-08-15T09:00:00'));
+  });
+
+  it('reaches a monthly schedule', () => {
+    const t = nextRun(parseCron('0 0 1 * *'), at('2026-08-14T10:00:00'));
+    expect(t).toBe(at('2026-09-01T00:00:00'));
+  });
+
+  it('returns null for a spec that can never match', () => {
+    expect(nextRun(parseCron('0 0 30 2 *'), at('2026-08-14T10:00:00'))).toBeNull();
   });
 });

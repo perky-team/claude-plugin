@@ -56,3 +56,20 @@ export function isDue(cron, lastRunMs, nowMs) {
   }
   return false;
 }
+
+// The first whole minute strictly after `fromMs` that this spec matches, or null.
+//
+// It walks minute by minute through the same matcher the tick uses, so it can never
+// disagree with it. Forty days covers a monthly schedule (`0 0 1 * *`) from any starting
+// day; the worst case is 57,600 matcher calls, which is far cheaper than reading the
+// logs the same command reads anyway. A spec that can never match — the 30th of
+// February — returns null rather than spinning.
+export function nextRun(cron, fromMs) {
+  const MIN = 60_000;
+  const CAP = 40 * 24 * 60;
+  let t = Math.floor(fromMs / MIN) * MIN + MIN;
+  for (let i = 0; i < CAP; i++, t += MIN) {
+    if (matches(cron, new Date(t))) return t;
+  }
+  return null;
+}
