@@ -72,4 +72,18 @@ describe('changedLines', () => {
     write(join(root, 'b'), '.git/index', 'y\nz\n');
     expect(changedLines(join(root, 'a'), join(root, 'b'))).toBe(0);
   });
+
+  // The bug: docs/tasks/tasks.yml is the ptasks arm's own bookkeeping file. If
+  // it counts, every status edit that arm writes shows up as churn, and no
+  // other arm has a file like it — so the comparison the design calls clean
+  // would really be measuring file format, not agent behaviour.
+  it('ignores docs/tasks, which is the tracker\'s own bookkeeping, but still counts a file next to it', () => {
+    write(join(root, 'a'), 'docs/tasks/tasks.yml', 'one: 1\n');
+    write(join(root, 'b'), 'docs/tasks/tasks.yml', 'one: 1\ntwo: 2\nthree: 3\n');
+    expect(changedLines(join(root, 'a'), join(root, 'b'))).toBe(0);
+
+    write(join(root, 'a'), 'src/a.js', 'one\n');
+    write(join(root, 'b'), 'src/a.js', 'ONE\n');
+    expect(changedLines(join(root, 'a'), join(root, 'b'))).toBe(1);
+  });
 });

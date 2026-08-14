@@ -5,6 +5,15 @@ const row = (arm: string, run: number, session: number, tests: Record<string, bo
   ({ arm, run, session, tests, cost_usd: 1, hit_cap: false, error: null,
      changed_lines_from_prev: 10, changed_lines_from_seed: 10 * session });
 
+// Pulls one arm's row out of the table by its leading cell, then splits it
+// into trimmed, non-empty cells — so a test can check a specific column
+// (e.g. the last one) without depending on the exact wording of the others.
+const armCells = (out: string, arm: string) => {
+  const line = out.split('\n').find((l) => l.startsWith(`| ${arm} |`));
+  if (!line) throw new Error(`no row for arm ${arm} in:\n${out}`);
+  return line.split('|').map((c) => c.trim()).filter((c) => c !== '');
+};
+
 describe('report', () => {
   it('gives one row per arm', () => {
     const rows = [
@@ -48,5 +57,26 @@ describe('report', () => {
 
   it('does not crash on an empty study', () => {
     expect(report([])).toContain('no runs');
+  });
+
+  // The bug: the cell printed the mean session only, so an arm finishing 1 of
+  // 5 runs at session 3 (barely worked at all) printed the same shape of
+  // number as an arm finishing 5 of 5 at session 6 (worked every time, just
+  // slower) — and the smaller number read as the win.
+  it('prints how many runs finished, next to the mean session, not the mean alone', () => {
+    const rows = [
+      row('none', 1, 3, { R1: true }),
+      row('none', 2, 1, { R1: false }),
+      row('none', 3, 1, { R1: false }),
+      row('none', 4, 1, { R1: false }),
+      row('none', 5, 1, { R1: false }),
+    ];
+    expect(report(rows)).toContain('3.0 (1/5)');
+  });
+
+  it('still says never when no run in the arm ever finished', () => {
+    const rows = [row('none', 1, 1, { R1: false })];
+    const cells = armCells(report(rows), 'none');
+    expect(cells).toContain('never');
   });
 });

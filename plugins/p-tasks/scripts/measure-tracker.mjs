@@ -59,9 +59,14 @@ const runsFile = join(work, 'runs.jsonl');
 const settingsFile = join(work, 'ptasks-arm-settings.json');
 const maxTotalUsd = Number(flag('max-total-usd', 150));
 
-/** Which (arm, run) pairs still need doing. A run with any row is finished. */
+/**
+ * Which (arm, run) pairs still need doing. A run counts as finished only once
+ * one of its rows carries an `ended` reason — mere presence is not enough,
+ * because a run the spend brake or a crash cut off mid-flight also has rows,
+ * and those must stay pending so a restart picks them back up.
+ */
 export function pendingWork(rows, { arms, runs }) {
-  const seen = new Set(rows.map((r) => `${r.arm} ${r.run}`));
+  const seen = new Set(rows.filter((r) => r.ended).map((r) => `${r.arm} ${r.run}`));
   const out = [];
   for (const arm of arms) {
     for (let run = 1; run <= runs; run++) {
@@ -82,6 +87,33 @@ export function clearSnapshotRoot(work, arm, run) {
   const snapRoot = join(work, 'snapshots', `${arm}-${run}`);
   rmSync(snapRoot, { recursive: true, force: true });
   return snapRoot;
+}
+
+/**
+ * Which reason, if any, ends a run at this session — decided before the row
+ * is written, so `pendingWork` reads the reason straight off disk rather than
+ * re-deriving it. A row with no reason means the run stopped for some other
+ * cause (the spend brake, a crash, Ctrl-C) and must stay pending.
+ */
+export function endReason({ doneNow, consecutiveErrors, session, sessions }) {
+  if (doneNow) return 'all-green';
+  if (consecutiveErrors >= 3) return 'three-strikes';
+  if (session === sessions) return 'sessions-exhausted';
+  return undefined;
+}
+
+/**
+ * The spend brake sums `cost_usd`, so a session the CLI envelope charges
+ * nothing for — no error, no cost — is invisible to it. That is not a session
+ * that was free; it is a session the study lost track of. Called right after
+ * the row is appended, so it fails loud rather than letting the brake stay
+ * blind to whatever that session actually spent.
+ */
+export function assertAccounted(row) {
+  if (row.error == null && row.cost_usd == null) {
+    throw new Error('a session reported neither an error nor a cost — '
+      + 'the study cannot account for what it is spending');
+  }
 }
 
 const readRows = () => (existsSync(runsFile)
@@ -135,30 +167,39 @@ async function runOne(arm, run, sessions, expected) {
       changed_lines_from_prev: changedLines(prev, snap),
       changed_lines_from_seed: changedLines(seedSnap, snap),
     };
-    appendFileSync(runsFile, `${JSON.stringify(row)}\n`);
     prev = snap;
 
-    // The brake goes here, before any early return below. A session that ends
-    // its run — because everything went green, or because it just took the
-    // third strike — would otherwise skip the check entirely, and the next run
-    // would start on money we already said we would not spend.
+    const green = row.tests ? Object.values(row.tests) : [];
+    const doneNow = green.length > 0 && green.every(Boolean);
+    consecutiveErrors = res.error ? consecutiveErrors + 1 : 0;
+
+    // Decided and written onto the row before it is appended. A row with no
+    // `ended` reason — because the spend brake below throws, or the process
+    // is killed — must stay pending for `pendingWork`, not read as finished.
+    const ended = endReason({ doneNow, consecutiveErrors, session, sessions });
+    if (ended) row.ended = ended;
+
+    appendFileSync(runsFile, `${JSON.stringify(row)}\n`);
+    assertAccounted(row);
+
+    // The brake goes here, after the row is safely on disk. A session that
+    // ends its run — because everything went green, or because it just took
+    // the third strike — must still be checked, so the next run never starts
+    // on money we already said we would not spend.
     const spent = readRows().reduce((n, r) => n + (r.cost_usd ?? 0), 0);
     if (spent > maxTotalUsd) {
       throw new Error(`stopping: spent $${spent.toFixed(2)}, over --max-total-usd ${maxTotalUsd}`);
     }
 
-    const green = row.tests ? Object.values(row.tests) : [];
-    const doneNow = green.length > 0 && green.every(Boolean);
     process.stderr.write(res.error
       ? `ERROR ${res.error}\n`
       : `$${(res.cost_usd ?? 0).toFixed(3)} ${green.filter(Boolean).length}/${green.length}\n`);
 
-    consecutiveErrors = res.error ? consecutiveErrors + 1 : 0;
-    if (consecutiveErrors >= 3) {
+    if (ended === 'three-strikes') {
       process.stderr.write(`  ${arm} #${run} aborted after three failed sessions\n`);
       return;
     }
-    if (doneNow) {
+    if (ended === 'all-green') {
       process.stderr.write(`  ${arm} #${run} finished at session ${session}\n`);
       return;
     }

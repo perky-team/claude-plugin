@@ -2,7 +2,9 @@ import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, mkdtempSync, existsSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { pendingWork, defaultWorkDir, clearSnapshotRoot } from '../../scripts/measure-tracker.mjs';
+import {
+  pendingWork, defaultWorkDir, clearSnapshotRoot, endReason, assertAccounted,
+} from '../../scripts/measure-tracker.mjs';
 
 describe('pendingWork', () => {
   it('lists every arm and run when nothing has been done', () => {
@@ -13,13 +15,21 @@ describe('pendingWork', () => {
       ]);
   });
 
-  it('skips a run that already has rows', () => {
-    const rows = [{ arm: 'none', run: 1, session: 1 }];
+  it('skips a run whose last row is marked ended', () => {
+    const rows = [{ arm: 'none', run: 1, session: 1, ended: 'all-green' }];
     expect(pendingWork(rows, { arms: ['none'], runs: 2 })).toEqual([{ arm: 'none', run: 2 }]);
   });
 
-  it('treats a run as done even if it stopped early, so restarts never redo work', () => {
+  // The bug this guards: a run the spend brake or a crash cut off mid-flight
+  // still has rows on disk. Treating mere presence as "finished" freezes that
+  // run forever — raising the money limit and restarting would never redo it.
+  it('treats a run as still pending when none of its rows are marked ended', () => {
     const rows = [{ arm: 'none', run: 1, session: 4 }];
+    expect(pendingWork(rows, { arms: ['none'], runs: 1 })).toEqual([{ arm: 'none', run: 1 }]);
+  });
+
+  it('treats a run as done once its last row carries an ended reason', () => {
+    const rows = [{ arm: 'none', run: 1, session: 4, ended: 'sessions-exhausted' }];
     expect(pendingWork(rows, { arms: ['none'], runs: 1 })).toEqual([]);
   });
 });
@@ -59,5 +69,44 @@ describe('clearSnapshotRoot', () => {
 
   it('does not fail when there is nothing to clear yet', () => {
     expect(() => clearSnapshotRoot(work, 'ptasks', 3)).not.toThrow();
+  });
+});
+
+describe('endReason', () => {
+  it('is all-green when every hidden test passed this session', () => {
+    expect(endReason({ doneNow: true, consecutiveErrors: 0, session: 4, sessions: 10 }))
+      .toBe('all-green');
+  });
+
+  it('is three-strikes after three sessions in a row have errored', () => {
+    expect(endReason({ doneNow: false, consecutiveErrors: 3, session: 5, sessions: 10 }))
+      .toBe('three-strikes');
+  });
+
+  it('is sessions-exhausted on the last session, if nothing else ended it first', () => {
+    expect(endReason({ doneNow: false, consecutiveErrors: 0, session: 10, sessions: 10 }))
+      .toBe('sessions-exhausted');
+  });
+
+  it('is undefined mid-run, so a row written there stays pending', () => {
+    expect(endReason({ doneNow: false, consecutiveErrors: 1, session: 4, sessions: 10 }))
+      .toBeUndefined();
+  });
+});
+
+describe('assertAccounted', () => {
+  // The bug: the spend brake sums cost_usd, so a row with neither an error
+  // nor a cost is invisible to it — it looks like a session that was free.
+  it('throws when a row reports neither an error nor a cost', () => {
+    expect(() => assertAccounted({ error: null, cost_usd: null }))
+      .toThrow(/account for what it is spending/);
+  });
+
+  it('does not throw when a row carries a cost', () => {
+    expect(() => assertAccounted({ error: null, cost_usd: 0.12 })).not.toThrow();
+  });
+
+  it('does not throw when a row carries an error', () => {
+    expect(() => assertAccounted({ error: 'boom', cost_usd: null })).not.toThrow();
   });
 });

@@ -1,10 +1,15 @@
 import { cpSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
+import { ARM_FILES } from './arms.mjs';
 
 const SKIP_COPY = new Set(['node_modules']);
 // .git is copied as evidence but never counted as work: its index and objects
 // change on every commit for reasons that have nothing to do with lines written.
-const SKIP_COUNT = new Set(['node_modules', '.git']);
+// ARM_FILES is what the `docs/tasks` tracker (and any other arm) writes as its
+// own bookkeeping — counting that as churn would measure the file format the
+// arm happens to use, not the work the agent did, and only one arm would ever
+// pay the price.
+const SKIP_COUNT = new Set(['node_modules', '.git', ...ARM_FILES]);
 // An allowlist, not a sniff: a file this list misses counts as zero lines, in
 // both the numerator and the denominator of the churn ratio, so a miss shrinks
 // what is measured rather than skewing it. The polygon is plain JavaScript, but
@@ -36,11 +41,16 @@ function textFiles(dir) {
   const out = new Map();
   const walk = (d) => {
     for (const e of readdirSync(d, { withFileTypes: true })) {
-      if (SKIP_COUNT.has(e.name)) continue;
       const p = join(d, e.name);
+      // Checked two ways: `node_modules` and `.git` are bare names that can
+      // recur at any depth, but an arm's own path (`docs/tasks`) is only ever
+      // one exact place from the tree's root, so it has to be matched against
+      // the path relative to that root, not against the last segment alone.
+      const rel = relative(dir, p).split(sep).join('/');
+      if (SKIP_COUNT.has(e.name) || SKIP_COUNT.has(rel)) continue;
       if (e.isDirectory()) walk(p);
       else if (e.isFile() && TEXT.test(e.name) && statSync(p).size < 1_000_000) {
-        out.set(relative(dir, p).split(sep).join('/'), lines(readFileSync(p, 'utf-8')));
+        out.set(rel, lines(readFileSync(p, 'utf-8')));
       }
     }
   };

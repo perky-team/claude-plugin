@@ -20,10 +20,11 @@ export const OFF_SETTINGS = JSON.stringify({
   language: 'English',
 });
 
-// One list, two uses. A path that an arm owns has to be both removed when the
-// arm changes and hidden from `git status`; keeping two hand-written lists in
-// step is a drift waiting to happen.
-const ARM_FILES = ['CLAUDE.md', '.claude', 'docs/tasks', '.beads'];
+// One list, three uses: removed when the arm changes, hidden from `git
+// status`, and excluded from the churn count in snapshot.mjs. Keeping
+// separate hand-written lists in step for each of those would be a drift
+// waiting to happen, so every consumer imports this one.
+export const ARM_FILES = ['CLAUDE.md', '.claude', 'docs/tasks', '.beads'];
 
 // A dirty `git status` is a hint one arm would have and another would not, so
 // every arm's own files are excluded the same way, whichever arm is running.

@@ -29,9 +29,17 @@ export function regressionRate(sessions) {
   let handovers = 0;
   let regressions = 0;
   for (let i = 1; i < sessions.length; i++) {
-    const before = sessions[i - 1].tests;
-    const after = sessions[i].tests;
+    const prevSession = sessions[i - 1];
+    const curSession = sessions[i];
+    const before = prevSession.tests;
+    const after = curSession.tests;
     if (!before || !after) continue;
+    // An errored session is scored anyway, and its `tests` map is whatever the
+    // tree already looked like — carried over, not evidence of anything. A
+    // pair either side of an error is not a hand-over the tracker actually
+    // got to answer for, and counting it only ever pads the denominator,
+    // pulling the rate down for whichever arm errors more.
+    if (prevSession.error || curSession.error) continue;
     handovers++;
     for (const id of Object.keys(before)) {
       if (before[id] && after[id] === false) regressions++;

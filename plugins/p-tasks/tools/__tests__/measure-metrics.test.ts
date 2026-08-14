@@ -53,6 +53,27 @@ describe('regressionRate', () => {
     const rows = [row(1, { R1: true }), row(2, null), row(3, { R1: false })];
     expect(regressionRate(rows)).toBeNull();
   });
+
+  // The bug: an errored session is scored anyway, and its `tests` map is just
+  // whatever the tree already looked like — carried over, not evidence of
+  // anything. Counting the pairs on either side of it as hand-overs pads the
+  // denominator with hand-overs that never happened, and always pulls the
+  // rate down. Two errored sessions between good ones must not do that: with
+  // the fix, the only pair left is the one where two working sessions really
+  // did hand over to each other, and the rate reads off that pair alone.
+  it('does not count a hand-over across an errored session, so a real regression is not diluted', () => {
+    const rows = [
+      row(1, { R1: true }),
+      { ...row(2, { R1: true }), error: 'boom' },
+      { ...row(3, { R1: true }), error: 'boom' },
+      row(4, { R1: true }),
+      row(5, { R1: false }),
+    ];
+    // Buggy code counts all 4 adjacent pairs as hand-overs (rate 1/4 = 0.25).
+    // Fixed code counts only session 4 → 5, the one pair with no error on
+    // either side, where the regression is real.
+    expect(regressionRate(rows)).toBe(1);
+  });
 });
 
 describe('churn', () => {

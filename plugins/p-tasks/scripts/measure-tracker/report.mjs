@@ -50,8 +50,17 @@ export function report(rows) {
     const capped = capShare(mine.flatMap((r) => r.sessions));
     if (capped !== null && capped > CAP_WARN) noisy.push({ arm, capped });
 
+    // "Sessions to done" means the finished runs only. Printing the mean
+    // alone hid how many runs that mean is even about — 1 of 5 runs finishing
+    // at session 3 and 5 of 5 finishing at session 6 both used to just print
+    // a number, and the smaller, faster-looking number was the one that
+    // barely worked at all.
+    const sessionsCell = finished.length
+      ? `${fmt(mean(finished), 1)} (${finished.length}/${mine.length})`
+      : 'never';
+
     lines.push(`| ${arm} | ${mine.length} | ${fmt(mean(dones))} | ${spread(dones)} `
-      + `| ${finished.length ? fmt(mean(finished), 1) : 'never'} | ${fmt(mean(regs))} `
+      + `| ${sessionsCell} | ${fmt(mean(regs))} `
       + `| ${fmt(mean(churns))} | ${fmt(mean(costs))} |`);
   }
 
