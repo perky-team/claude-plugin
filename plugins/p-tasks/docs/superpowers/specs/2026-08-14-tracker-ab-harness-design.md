@@ -96,6 +96,23 @@ graph has something true to hold.
 The seed also has a small **visible** test suite, so the agent can check itself.
 The score does not come from it.
 
+### `SPEC.md` pins the interface, or the study measures nothing
+
+The hidden tests import the code. If the agent writes a correct implementation
+under names of its own choosing, every hidden test fails on an import error and
+the run scores zero for a reason that has nothing to do with the tracker. This
+is the single most likely way to end up with a pile of meaningless numbers.
+
+So `SPEC.md` states, as part of the requirements themselves:
+
+- the exact module paths the feature must live in (`src/config.js`, …)
+- the exact names and signatures it must export
+- the exact shape of what those functions return and throw
+
+The hidden suite imports **only** those paths and names. Anything the spec does
+not pin down, the tests do not touch. A requirement the tests check but the
+spec does not state is a bug in the study, not a failure by the agent.
+
 ### Hidden acceptance tests
 
 The suite that decides the score lives outside the agent's copy, in
@@ -124,12 +141,37 @@ for each arm, for each run r = 1..5:
     fresh clone of the seed        ← the arm is installed here, once
     for session s = 1..10:
         claude -p "<the same sentence every time>"
-               --model sonnet --max-budget-usd 2
-        copy the working tree to snapshots/<arm>-<run>/s<NN>/
+               --model sonnet --max-budget-usd 5
+        copy the working tree to snapshots/<arm>-<run>/s<NN>/   (no node_modules)
         run the hidden suite against that copy
         append one line to runs.jsonl
         stop early if every hidden test is green
 ```
+
+### The per-session cap is a safety net, not a schedule
+
+$5, not $2. The cap must almost never bind, and every session records whether
+it did (`hit_cap`).
+
+A cap that binds is worse here than in p-graph's study, and it binds unevenly.
+A tracker arm spends part of each session on tracker upkeep, so it reaches the
+cap with less code written — and the CLI stops wherever it is, which can be
+halfway through an edit. Broken half-written code then shows up as a
+**regression**, the one metric this whole study exists to read. A cliff in the
+middle of the measurement instrument is not acceptable.
+
+If `hit_cap` is true in more than one session in twenty, the regression numbers
+are void and the cap has to go up before anything is published.
+
+### Snapshots
+
+The snapshot copies the working tree without `node_modules`: 150 sessions of
+`node_modules` is tens of gigabytes for no gain. `.git` **is** copied — if the
+agent committed, that is evidence.
+
+Scoring drops a prepared `node_modules` into the snapshot, adds the hidden
+suite, runs vitest, and throws the whole scoring directory away. The agent's own
+directory is never touched.
 
 The prompt is identical in every session and every arm, and says nothing about
 what has already been done:
@@ -161,13 +203,18 @@ All of them are mechanical. No model judges anything.
 |---|---|---|
 | Done | share of hidden tests green at the last session | the headline |
 | Sessions to done | first session where all are green, else "did not finish" | speed |
-| **Regressions** | a test green in session *k* and red in *k+1* | lost memory — the metric this study exists for |
+| **Regression rate** | tests that were green in session *k* and red in *k+1*, divided by the number of session hand-overs the run actually had | lost memory — the metric this study exists for |
 | Churn | sum of the diffs between neighbouring snapshots, divided by the diff between the seed and the last snapshot | work done twice |
 | Cost | sum of `cost_usd` over the run | price |
 | Tracker tax | token counts per session from the CLI's `usage` field; the gap between arms is the tax. If the CLI does not return `usage`, cost per session stands in for it | what the rule and the tool output cost every session |
 
 Churn of 1.0 means every line was written once. Churn of 3.0 means the same
 lines were rewritten three times over.
+
+**A rate, not a count.** A run that finished at session 4 had three hand-overs
+between sessions; one that ran all ten had nine. Counting raw regressions would
+hand the faster arm a better score for being faster — the same fact twice, once
+as speed and once as reliability.
 
 This is a real improvement on the p-graph harness: there, a second model had to
 read each answer and extract the claims. Here the score is a vitest JSON report.
@@ -185,29 +232,36 @@ A p-graph measurement may be running at the same time. The harness therefore:
 
 ## 9. Pilot first
 
-Before spending the full budget: one arm (`ptasks`), one run, ten sessions —
-about $5.
+Before spending the full budget: **two** arms — `none` and `ptasks` — one run
+each, ten sessions each. About $10.
 
-The pilot passes if the hidden suite ends between **40% and 90% green**. Below
-40%, the feature is too big; cut requirements. Above 90%, it is too easy and
-every arm will tie at the ceiling; add requirements. Only a calibrated polygon
-can show a difference between arms.
+One arm is not enough to calibrate. If only `ptasks` is piloted and it lands at
+85%, that looks healthy — and the polygon can still be so easy that `none` also
+lands at 85% and the whole study is void. The gap is the thing being calibrated,
+so the gap has to be in the pilot.
+
+The pilot passes on both counts:
+
+| Check | Pass | If it fails |
+|---|---|---|
+| `ptasks` ends between 40% and 90% green | the feature is the right size | below 40% cut requirements, above 90% add them |
+| `ptasks` and `none` differ by at least 15 points | there is something to measure | rewrite the feature so later requirements truly depend on earlier ones |
+
+A pilot that fails is cheap. A full study over an uncalibrated polygon is $100
+that answers nothing.
 
 ## 10. Cost
 
-| | Sessions | Expected | Hard ceiling |
-|---|---|---|---|
-| Pilot | 10 | ~$5 | $20 |
-| Full study | 3 arms × 5 runs × 10 sessions = 150 | $60–100 | $300 |
+| | Sessions | Expected |
+|---|---|---|
+| Pilot | 2 arms × 1 run × 10 = 20 | ~$10 |
+| Full study | 3 arms × 5 runs × 10 = 150 | $60–100 |
 
-The ceiling is the per-session cap ($2) times the session count. It is what the
-study can cost if every single session runs to its cap, which is not what we
-expect.
-
-The harness also takes `--max-total-usd`, default **150**. That is a brake, not
-a budget: if the study passes $150 while the estimate was $60–100, something is
-wrong and a human should look before more money goes out. Raise the flag to
-carry on.
+The per-session cap no longer sets the ceiling — at $5 a session it would allow
+$750, which is not a ceiling worth quoting. **`--max-total-usd` is the real
+ceiling**, default $150: the harness adds up what it has spent and stops. If the
+study passes $150 while the estimate was $60–100, something is wrong and a human
+should look before more money goes out. Raise the flag to carry on.
 
 Five runs a side, not three. p-graph's README already records that three runs a
 side is too few to read its accuracy rows closely, and feature work varies more
@@ -245,6 +299,16 @@ scratch directory. It fails **before the first dollar is spent**, the way
 p-graph's LSP arm does. A half-installed rival that answers nothing would show
 up as "beads lost", when what lost was the setup.
 
+Then one **smoke session per arm** — a single real session, checked only for
+exiting cleanly and leaving the tracker in a readable state. About $1.50 for all
+three, against a full arm's worth of runs wasted on a rule file that turned out
+to be in the wrong place.
+
+`bd setup claude` also installs hooks into the project's own
+`.claude/settings.json`, while the harness passes its own file through
+`--settings`. Both apply. The smoke session is what proves those two do not
+fight before 50 sessions are spent finding out.
+
 ## 13. Risks
 
 | Risk | What we do |
@@ -254,3 +318,26 @@ up as "beads lost", when what lost was the setup.
 | A wrong hidden test reads as a regression | every test cites a requirement; no clock, no network, no randomness |
 | The rival needs a build environment we do not have | preflight, before any spend |
 | Feature work varies too much to read | five runs a side, and every table reports the spread, not only the mean |
+
+## 14. What this study may and may not claim
+
+Two limits have to be written next to the numbers, not discovered by a reader
+later.
+
+**`p-tasks` against `beads` is a clean comparison.** Both arms get a rule and a
+place to store items. The only difference is the product. Whatever gap shows up
+belongs to the product, and the migration decision rests on it.
+
+**`tracker` against `none` is a coarse comparison.** The `none` arm has no
+`CLAUDE.md` at all, so it is missing not only the storage but also the rule
+text, and those rules say generic useful things — plan first, do one item at a
+time. Part of any gap is therefore the advice, not the tracker. The study can
+say "installing a tracker helps"; it cannot split that into "the storage helped"
+and "the advice helped". Splitting it would need a fourth arm with advice and no
+storage, which is a product nobody ships.
+
+**The model is `sonnet`, the user's real work runs on Opus.** Sonnet is chosen
+because 150 sessions on Opus is a different budget. A stronger model forgets
+less between sessions, so if anything this setup **flatters** the trackers. A
+result of "the tracker barely helps" would hold on Opus too; a result of "the
+tracker helps a lot" is measured on Sonnet and says so.
