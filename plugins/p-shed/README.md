@@ -31,10 +31,11 @@ Tool: `node tools/pshed.mjs <command>` (all support `--json`; exit `0` ok / `1` 
 | `deploy` | Open a maintenance window and run a command in it: wait for idle → pause → re-check → run → always release. `--reason` required, `--group` optional, then `-- <cmd> [args...]`. Refuses outright (does not wait, does not pause) when another `deploy` already holds `run/DEPLOY` with a live pid, naming that pid and its reason. The command's stdout/stderr pass through untouched and its exit code becomes `deploy`'s; p-shed's own report — including every validation error — goes to stderr, honouring `--json`, so nothing but the deployed command's own output ever reaches stdout. Exit: the command's own code when it ran (`0` on success) / `1` the wait timed out or deploy itself failed / `2` validation (`--id` given, `--reason` or command missing) or another deploy already in progress / `127` the command could not be spawned — POSIX only, on Windows the shell reports plain `1` / `128+signum` killed by a signal / `130` operator interrupted. Nothing is left paused in any of these cases — the one exception is deliberate: if an operator's own `pause`/`pause --group` lands on this deploy's marker while the command is still running, it takes ownership (see `run/PAUSED` below), and release leaves that alone. The report (`takenOver`, JSON and human) says so instead of claiming `released`; the exit code is still the command's own, since it genuinely ran and succeeded. |
 | `profile show` / `set <name>` / `list` | The speed profile — one word that changes the whole loop's pace (see below). `show` reports the active name, **which source it came from**, and the per-job resolution; `set` writes the name to the file named by `config.profileFile` and refuses when there is none configured or the name is not in `profiles:`; `list` names the defined profiles. `show` takes `--human`. |
 | `status` | Report, from disk + the OS scheduler: installed?, globally paused?, the active profile (when there is one), and per job running/paused/breaker/last-run — all at their **effective** values, i.e. with the profile applied. JSON by default, `--human` for a text table. |
+| `report` `[--out <path>]` | Render a self-contained HTML page — cost over the last 7 days, what is broken, what runs next — to stdout, or atomically to a file. Read-only: it writes nothing under `.pshed/` and needs no network. |
 | `stop` `[--kill]` | Honest teardown of the OS scheduler entry — reports `removed: true|false` (see below). `--kill` also SIGTERM→SIGKILLs any in-flight jobs (`--grace-ms` tunes the escalation delay). |
 | `install-cron` / `remove-cron` | Register/unregister the every-minute `tick` in the OS scheduler for this folder. `remove-cron` reports `removed` and warns on a cwd mismatch (see below). |
 
-† Most commands exit as stated in the header; `deploy` is an exception — see its row for the full code set.
+† Most commands exit as stated in the header; `deploy` is an exception — see its row for the full code set. `report` is another: it never reads or writes `--json` — it always renders HTML — but its exit codes match the header anyway: `0` written, `1` no `.pshed/` or the write failed, `2` `--out` given with no value.
 
 ## Formats
 
@@ -230,7 +231,8 @@ Semantics worth knowing:
   a name absent from `profiles:`, a malformed table, an invalid single override — each
   falls back to the job's own values and keeps ticking. Fail toward running: a stopped loop
   is a worse failure than a loop running at its default pace. The condition is visible in
-  `profile show` and in `status` (`[unknown-name]`, `[file-missing]`).
+  `profile show`, in `status` (`[unknown-name]`, `[file-missing]`), and in the header line
+  of the `report` page.
 - **Strict where a human is watching**: `profile show` / `list` / `set` validate the table
   with `set-job`'s own rules and fail with a message naming the profile, job and field —
   including for an unknown key, so a `schedul:` typo cannot sit there doing nothing.
@@ -470,6 +472,41 @@ version-aware sort (`dir /o-n` would pick 0.9.0 over 0.10.0 — a confidently wr
 worse than a pinned one), and a `node -e` resolver inside `schtasks /TR` inside `cmd /c` is
 three layers of quoting plus schtasks' own `%` handling for a risk never observed there.
 
+## Looking at the loop from a phone
+
+`pshed report` only prints a page. Serving it is up to you — p-shed has no HTTP server
+and will not grow one.
+
+Render it on a schedule with a guard-only job, so a broken render trips the breaker
+instead of failing silently. There is no `pshed` on `PATH` — point the guard at the real
+path to `pshed.mjs`, the same way `install-cron` does (see above):
+
+    - id: board
+      schedule: "*/5 * * * *"
+      guard: "node /path/to/p-shed/tools/pshed.mjs report --out /home/me/board/index.html && exit 75"
+      prompt: "(guard-only) Render the board."
+
+Create `/home/me/board` before you add the job — `report` writes a file, not a folder,
+so the folder has to exist first. Then point any static file server at it. With caddy:
+
+    :8080 {
+        root * /home/me/board
+        file_server
+        basicauth { me <bcrypt-hash> }
+    }
+
+Three things worth getting right the first time:
+
+- **Keep the output folder owned by the user the loop runs as** (`/home/me/board`), not
+  `/var/www`. A permission error inside a guard is a bad place to debug.
+- **Do not skip the password.** The page shows job prompts, pause reasons, and the tail
+  of a failed run's output. On a home network, everyone on it can read that.
+- **The page is only as fresh as the job that wrote it.** It carries the time it was
+  generated, in the header — that stamp is how a dead render job becomes visible.
+
+Reaching it from outside your own network needs a tunnel you set up yourself. Nothing
+here blocks that, and nothing here helps.
+
 ## Known limitations
 
 - A job runs in its `cwd`; only that folder's `.claude/rules` load. To target another
@@ -477,6 +514,8 @@ three layers of quoting plus schtasks' own `%` handling for a risk never observe
   instructions in the prompt.
 - Requires the OS scheduler (`schtasks` on Windows, user `crontab` on Linux/macOS) and
   `node` + `claude` resolvable at install time.
+- **The report covers only the last 7 days**, because that is how long `logs/` is kept.
+  A longer trend needs a retention change, which this does not include.
 - **Windows: the tick runs in your interactive session.** A brief console window may
   appear each minute, and jobs run only while you are logged on. Running hidden and
   when logged off needs a Task Scheduler "run whether logged on or not" (S4U) entry,

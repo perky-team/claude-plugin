@@ -209,3 +209,38 @@ Pure scheduler/launcher. Key decisions:
   keeps writing the same checkout is a window that only looks safe. `parseArgs` swallows
   unknown flags, so ignoring `--id` would silently mean "pause everything" — the same
   blast-radius widening `lib/target.mjs` exists to prevent.
+- **`report` renders; it never serves.** p-shed has no HTTP server, no port, and no
+  access decision, and must not grow one — delivery is an off-the-shelf static file
+  server the operator runs, wired up in `jobs.yml` like any other job. A dashboard
+  plugin that read `.pshed/` from outside was considered and rejected: that is exactly
+  what p-observe does — `plugins/p-observe/tools/lib/adapters/pshed.mjs` keeps its own
+  hand-rolled parser for `jobs.yml`, separate from and in step with this plugin's own
+  (js-yaml-based) one in `lib/io.mjs`.
+- **The page carries no JavaScript and fetches nothing.** Charts are server-rendered
+  SVG; expanders are native `<details>`. It is read on a phone, and a half-loaded
+  dashboard is worse than a plain one. `__tests__/html.test.ts` pins the absence of
+  `<script`, `http://` and `https://`.
+- **Run outcomes are four stat tiles, never one stacked proportion bar.** The four
+  status colours fail the palette checks as adjacent fills — critical against good
+  measures dE 4.1 under deuteranopia, serious against warning 13.6 for normal vision,
+  under a floor of 15. Status colours are built to be read one at a time, next to an
+  icon and a label. Do not "tidy" the tiles back into a bar.
+- **`computeNext` checks `isDue` before falling back to `nextRun` — except a job that
+  has never run, which skips `isDue` and goes straight to `nextRun`.** p-shed catches
+  missed ticks up, so a job whose slot passed is due NOW; `nextRun` alone would print a
+  time hours away for a job that launches in sixty seconds. `isDue` must never be asked
+  about a job with no `lastRun`: it reads a missing `lastRun` as "24 hours ago", which
+  counts as due for anything more frequent than daily. It also reads the EFFECTIVE
+  schedule (profiles rewrite `schedule` in memory) and lets a pending `retryNotBefore`
+  win over both.
+- **Day buckets come from `ts` in local time, never from the log file name.** Log files
+  are named by UTC date while schedules fire in local time; on UTC+3 the two disagree by
+  three hours, and bucketing by file name silently drops the local end of the window.
+- **A broken profile shows in the report's header line, not as a job problem.**
+  `profileNote` (`lib/html.mjs`) prints `profile.problem` / `profile.warning` next to the
+  cron/pause line even when no profile name resolved at all — the case an operator most
+  needs to catch, since the scheduler is then quietly ticking at its default pace
+  instead of the configured one. It is not one of the three states that count toward the
+  page's problem tally (breaker, self-pause, quota retry): a broken profile can affect
+  every job at once, so folding it into a per-job count would double-count or misreport
+  it.
