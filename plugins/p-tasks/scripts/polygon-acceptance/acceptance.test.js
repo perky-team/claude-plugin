@@ -67,6 +67,11 @@ test('R2 says must be true or false for any other boolean value', () => {
   assert.deepEqual(r, { ok: false, errors: [{ path: 'a.x', message: 'must be true or false' }] });
 });
 
+test('R2 leaves out a key the schema does not name', () => {
+  const r = validate({ a: { x: '1' }, b: { y: '2' } }, { 'a.x': { type: 'string' } });
+  assert.deepEqual(r, { ok: true, value: { a: { x: '1' } } });
+});
+
 // ---------------------------------------------------------------------------
 // R3 — fill in defaults
 // ---------------------------------------------------------------------------
@@ -117,7 +122,7 @@ test('R5 reads a flag and its value as two arguments', () => {
 });
 
 test('R5 puts everything else in rest, in order', () => {
-  assert.deepEqual(parseFlags(['one', '--f', 'two']).rest, ['one', 'two']);
+  assert.deepEqual(parseFlags(['one', '--a.x', '1', 'two']).rest, ['one', 'two']);
 });
 
 test('R5 sets a flag on its own to true in the empty section', () => {
@@ -186,6 +191,9 @@ test('R8 indents by two spaces and adds no trailing newline', () => {
 // R9 — CLI exit codes
 // ---------------------------------------------------------------------------
 
+// A config the fixed schema in R9 accepts, with nothing left to a default.
+const FULL = '[server]\nport = 8080\nhost = example.com\ndebug = true\n';
+
 test('R9 exits 64 when no config path is given', () => {
   assert.equal(run([]).status, 64);
 });
@@ -194,8 +202,16 @@ test('R9 exits 2 on a file it cannot parse', () => {
   assert.equal(run([withFile('???\n')]).status, 2);
 });
 
-test('R9 exits 0 on a file it can parse', () => {
-  assert.equal(run([withFile('[a]\nx = 1\n')]).status, 0);
+test('R9 exits 0 on a config the fixed schema accepts', () => {
+  assert.equal(run([withFile(FULL)]).status, 0);
+});
+
+test('R9 exits 3 when the required server.port is missing', () => {
+  assert.equal(run([withFile('[server]\nhost = example.com\n')]).status, 3);
+});
+
+test('R9 exits 3 when server.port is not a number', () => {
+  assert.equal(run([withFile('[server]\nport = abc\n')]).status, 3);
 });
 
 test('R9 prints the parse error to stderr', () => {
@@ -203,25 +219,39 @@ test('R9 prints the parse error to stderr', () => {
   assert.match(r.stderr, /line 1: \?\?\?/);
 });
 
+test('R9 prints the validation errors to stderr', () => {
+  const r = run([withFile('[server]\nhost = example.com\n')]);
+  assert.match(r.stderr, /server\.port: is required/);
+});
+
 // ---------------------------------------------------------------------------
 // R10 — `--json`
 // ---------------------------------------------------------------------------
 
 test('R10 prints only JSON with --json', () => {
-  const r = run([withFile('[a]\nx = 1\n'), '--json']);
+  const r = run([withFile(FULL), '--json']);
   assert.equal(r.status, 0);
-  assert.deepEqual(JSON.parse(r.stdout), { a: { x: '1' } });
+  assert.deepEqual(JSON.parse(r.stdout),
+    { server: { port: 8080, host: 'example.com', debug: true } });
 });
 
-test('R10 keeps --json out of the result when other flags follow it', () => {
-  const r = run([withFile('[a]\nx = 1\n'), '--json', '--b.y=2']);
+test('R10 reads a flag that comes after --json', () => {
+  const r = run([withFile(FULL), '--json', '--server.host=flag.example']);
   assert.equal(r.status, 0);
-  assert.deepEqual(JSON.parse(r.stdout), { a: { x: '1' }, b: { y: '2' } });
+  assert.deepEqual(JSON.parse(r.stdout),
+    { server: { port: 8080, host: 'flag.example', debug: true } });
+});
+
+test('R10 shows a default the config left out', () => {
+  const r = run([withFile('[server]\nport = 8080\n'), '--json']);
+  assert.equal(r.status, 0);
+  assert.deepEqual(JSON.parse(r.stdout),
+    { server: { port: 8080, host: 'localhost', debug: false } });
 });
 
 test('R10 prints the JSON sorted and indented', () => {
-  const r = run([withFile('[b]\ny = 2\n[a]\nx = 1\n'), '--json']);
+  const r = run([withFile(FULL), '--json']);
   assert.equal(r.status, 0);
   assert.equal(r.stdout.trimEnd(),
-    '{\n  "a": {\n    "x": "1"\n  },\n  "b": {\n    "y": "2"\n  }\n}');
+    '{\n  "server": {\n    "debug": true,\n    "host": "example.com",\n    "port": 8080\n  }\n}');
 });
