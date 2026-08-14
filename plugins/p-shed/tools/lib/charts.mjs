@@ -23,7 +23,7 @@ function barPath(x, y, w, h) {
 
 const round = (n) => Math.round(n * 100) / 100;
 
-export function barsByDay(byDay, opts = {}) {
+export function barsByDay(byDay, opts) {
   const { width, height, series, muted, grid } = opts;
   const days = Array.isArray(byDay) ? byDay : [];
   const baseY = height - AXIS_H;
@@ -49,7 +49,10 @@ export function barsByDay(byDay, opts = {}) {
 
   // Non-finite costUsd is ignored rather than trusted: today's caller filters it
   // out upstream, but this module must never throw or emit malformed markup no
-  // matter what it is handed, so one bad value must not poison the whole chart.
+  // matter what DAY DATA it is handed, so one bad value must not poison the whole
+  // chart. That promise covers byDay entries only — a missing or malformed opts
+  // is a programming error at the call site, not day data, and must throw (see
+  // the destructure above, which has no default).
   const max = days.reduce(
     (m, d) => (Number.isFinite(d.costUsd) ? Math.max(m, d.costUsd) : m),
     0,

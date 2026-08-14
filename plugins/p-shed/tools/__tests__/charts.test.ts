@@ -80,8 +80,12 @@ describe('barsByDay', () => {
     expect((svg.match(/<path class="bar"/g) ?? []).length).toBe(2);
   });
 
-  it('does not throw when opts is omitted', () => {
-    expect(() => barsByDay(days([1, 2]))).not.toThrow();
+  it('throws when opts is omitted — a missing options argument is a call-site bug, not day data', () => {
+    // The no-throw promise covers strange DAY DATA (see the tests above for null
+    // and non-finite costUsd). It does not cover a missing opts: that is a
+    // programming error at the call site, and it must fail loudly and early,
+    // not render undefined/NaN into markup on a page with no JS to notice.
+    expect(() => barsByDay(days([1, 2]))).toThrow();
   });
 
   it('floors the plot height at zero when height is smaller than the padding and axis band', () => {
