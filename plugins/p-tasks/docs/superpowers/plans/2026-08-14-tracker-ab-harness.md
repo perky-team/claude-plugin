@@ -834,6 +834,17 @@ const SKIP_COPY = new Set(['node_modules']);
 const SKIP_COUNT = new Set(['node_modules', '.git']);
 const TEXT = /\.(js|mjs|cjs|json|md|ya?ml|txt|ini)$/i;
 
+// A file that ends with a newline splits into a trailing empty string. That is
+// not a line anybody wrote, and counting it would make every new file one line
+// longer than it is. Drop that one element and nothing else: a blank line in
+// the middle IS a line somebody wrote, and dropping every empty string would
+// hide the churn of adding and removing them.
+const lines = (text) => {
+  const out = text.split('\n');
+  if (out.at(-1) === '') out.pop();
+  return out;
+};
+
 /** Copy a working tree. Returns the destination. */
 export function snapshot(srcDir, destDir) {
   cpSync(srcDir, destDir, {
@@ -851,7 +862,7 @@ function textFiles(dir) {
       const p = join(d, e.name);
       if (e.isDirectory()) walk(p);
       else if (e.isFile() && TEXT.test(e.name) && statSync(p).size < 1_000_000) {
-        out.set(relative(dir, p).split(sep).join('/'), readFileSync(p, 'utf-8').split('\n'));
+        out.set(relative(dir, p).split(sep).join('/'), lines(readFileSync(p, 'utf-8')));
       }
     }
   };
