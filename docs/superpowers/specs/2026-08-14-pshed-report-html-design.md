@@ -48,7 +48,7 @@ our code.
                                            ├─▶ renderHtml() ─▶ one self-contained
  .pshed/logs/*.jsonl ──▶ aggregate()  ─────┘                   HTML file
                                                                     │
-        pshed report --html --out /home/me/board/index.html         │
+        pshed report --out /home/me/board/index.html                │
                        ▲                                            ▼
                        │                              /home/me/board/index.html
       p-shed job "board", guard-only:                         │
@@ -64,9 +64,14 @@ The whole delivery chain is operator configuration:
 # jobs.yml — the only link between the report and its delivery
 - id: board
   schedule: "*/5 * * * *"
-  guard: "pshed report --html --out /home/me/board/index.html && exit 75"
+  guard: "node /home/me/p-shed/tools/pshed.mjs report --out /home/me/board/index.html && exit 75"
   prompt: "(guard-only) Render the board."
 ```
+
+There is no `pshed` on `PATH`: the tool is always `node <plugin>/tools/pshed.mjs`, and an
+installed plugin sits under a **versioned** cache directory. The README recipe spells the
+real path out, and points at the note `install-cron` already carries about pinning a
+version that the plugin system treats as disposable.
 
 A guard-only job is the right carrier, not system cron: exit 75 means "quiet, nothing
 to do", so no Claude is launched and the render costs nothing — while a render that
@@ -165,8 +170,20 @@ Mark rules, taken from the data-viz method and not negotiable at implementation 
 
 | function | contract |
 |---|---|
-| `renderHtml(status, agg, now)` | Returns a complete HTML document as a string. Pure. |
+| `renderHtml(status, agg, next, now)` | Returns a complete HTML document as a string. Pure. |
 | `escapeHtml(text)` | `& < > " '` → entities. Used on every value that came from outside. |
+
+**Why there is a fourth argument.** `collectStatus` does not return a job's schedule — it
+returns state (running, paused, breaker, retry, guard), and nothing else. So the page
+cannot work out when a job runs next from `status` alone. Rather than widen
+`collectStatus`, whose output is a contract with its own tests, the CLI computes the
+answer and passes it in:
+
+```js
+next = { worker: { at: 1784155200000, due: false }, planner: { at: null, due: false } }
+```
+
+`renderHtml` stays pure and the existing status contract stays untouched.
 
 ### The page
 
@@ -303,18 +320,43 @@ monthly schedule (`0 0 1 * *`) with room to spare; the worst case is 57,600 matc
 calls, which is nothing against reading the logs. A spec that can never match — day 30
 of February — returns `null` and the page prints `—`.
 
+**`nextRun` alone is not what the page shows.** Three rules sit on top of it, and each
+exists because without it the most-read column on the page would be wrong:
+
+1. **Ask `isDue` first.** p-shed catches up on missed ticks: `isDue` scans from
+   `max(lastRun, now − 24h)` forward, so a job whose slot passed while it was blocked is
+   due *now*. Calling `nextRun(cron, now)` for such a job prints a time hours away for a
+   job that launches in sixty seconds. When `isDue(schedule, lastRun, now)` is true the
+   page says `due`, not a clock time.
+2. **Use the EFFECTIVE schedule.** A speed profile can rewrite `schedule` and `enabled`
+   in memory. `status.mjs` already resolves through `effectiveJobs` for exactly this
+   reason — "status can never report a schedule the scheduler will not act on" — and the
+   report must read through the same resolution or it will happily print the pace the
+   loop is not running at.
+3. **A pending retry wins over the schedule.** A job holding `retryNotBefore` relaunches
+   then, not at its cron time. The page shows the retry moment.
+
+A job that is disabled, breaker-tripped, or paused has no next run and prints `—`. It is
+not scheduled, and printing a future time for it would say otherwise.
+
 ### `pshed.mjs`
 
 New command:
 
-    pshed report [--json | --html] [--out <path>]
+    pshed report [--out <path>]
+
+It gathers the three inputs, in this order: `isTickInstalled(root)` for the header's
+"cron installed" verdict (the same probe `status` uses — the report must not invent a
+second answer to that question), `collectStatus(root, { installed })`, and
+`readLogRecords(root, from)` → `aggregate(...)`. It then computes the `next` map from
+the effective jobs and calls `renderHtml`.
 
 | Aspect | Decision |
 |---|---|
-| Default format | `--json`, matching `status`. `--html` produces the page. |
+| Format | HTML only. There is no `--json`: nothing asked for one, `aggregate()` is already importable by anything in-process that wants the numbers, and an output contract nobody consumes still has to be specified, tested and kept. |
 | `--out <path>` | Writes to that path. Without it the report goes to stdout. |
 | Writing | Temp file in the **same directory**, then `rename` — the pattern p-shed already uses for `run/DEPLOY`. A browser must never fetch a half-written page, and rename is only atomic within one filesystem. |
-| Exit codes | `0` ok / `1` environment (no `.pshed/`, unwritable target) / `2` validation (`--json` and `--html` together). Matches the existing contract. |
+| Exit codes | `0` ok / `1` environment (no `.pshed/`, unwritable target) / `2` validation (`--out` given with no value — `parseArgs` yields boolean `true`, the same trap `lib/target.mjs` guards). Matches the existing contract. |
 | Process exit | **Never `process.exit()`** — set `process.exitCode` and return. This command is the worst possible place to break that rule: an HTML page is far larger than one pipe buffer, and a hard exit truncates it silently on Linux while looking perfect on Windows. `plugins/p-shed/CLAUDE.md` records the measured case (853,212 bytes to a file, 65,536 through a pipe). |
 | Read-only | The command writes nothing under `.pshed/` — no state, no log row. Running it never disturbs the tick. |
 
@@ -341,10 +383,11 @@ Every new unit is a pure function, so most of this needs no filesystem.
 |---|---|
 | `__tests__/report.test.ts` | `aggregate`: cost sums; `null` vs `0`; local-time day bucketing across a UTC boundary; zero-filled days; reclaim rows counted as events and not as runs; corrupt lines counted; unknown outcome values ignored |
 | `__tests__/charts.test.ts` | `barsByDay` / `barsByJob`: bar geometry for known inputs, an all-zero series, a single day, the 2px gaps, the axis band inside the SVG box |
-| `__tests__/html.test.ts` | `renderHtml`: job ids present; `<script>` in a pause reason is escaped; the right badge per state, including self-pause vs operator-pause; both color blocks present; no `http://`, `https://`, or `<script` in the output; a `<details>` table twin per chart |
+| `__tests__/html.test.ts` | `renderHtml`: job ids present; `<script>` in a pause reason is escaped; the right badge per state, including self-pause vs operator-pause; the header's problem count excludes an operator pause; `next` rendered as a clock time, as `due`, and as `—`; both color blocks present; no `http://`, `https://`, or `<script` in the output; a `<details>` table twin per chart |
 | `__tests__/cron-nextrun.test.ts` | `*/15 * * * *`, `0 9 * * *`, `0 0 1 * *`, a never-matching spec, and a `from` that sits exactly on a matching minute |
-| `__tests__/cli-report-e2e.test.ts` | Real CLI in a temp root: `--json` parses; `--html --out` writes a readable file and leaves no temp file; both flags at once exits 2; a missing `.pshed/` exits 1 |
-| `__tests__/stdout-pipe.test.ts` | Extend the existing file to cover `report --html` through a pipe — the largest output the CLI produces, so the truncation bug this test exists for shows here first |
+| `__tests__/report-next.test.ts` | The three rules above the raw matcher: an overdue job reads `due` and not a future time; a profile that rewrites `schedule` moves the answer; a pending `retryNotBefore` wins over the cron time; disabled / paused / breaker jobs have no next run |
+| `__tests__/cli-report-e2e.test.ts` | Real CLI in a temp root: `--out` writes a readable file and leaves no temp file behind; `--out` with no value exits 2; a missing `.pshed/` exits 1; running it twice changes nothing under `.pshed/` |
+| `__tests__/stdout-pipe.test.ts` | Extend the existing file to cover `report` through a pipe — the largest output the CLI produces, so the truncation bug this test exists for shows here first |
 
 Per `.claude/CLAUDE.md`, the whole suite runs under WSL on Node 24+ before this is
 called verified. A Windows-only run cannot see the pipe-truncation failure at all.
@@ -365,7 +408,7 @@ A short recipe section, because the delivery half is setup rather than code:
 
 An HTTP server in p-shed. Any authentication. Any change to p-chat. Charts over more
 than the seven days the logs keep. Watching more than one `.pshed/` at a time. Automatic
-page refresh. PNG or PDF export. A `--human` text format.
+page refresh. PNG or PDF export. A `--human` text format, and a `--json` one.
 
 ## Known limits, accepted
 
