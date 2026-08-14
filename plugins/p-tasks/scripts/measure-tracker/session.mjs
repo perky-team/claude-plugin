@@ -5,9 +5,16 @@ import { spawnSync } from 'node:child_process';
 // the agent would hand the `none` arm the very thing it is missing.
 export const PROMPT = 'Continue the work on the feature described in SPEC.md.';
 
-// A session that spends its whole cap was stopped by the cap, not by finishing.
-// The CLI does not say so in its envelope, so read it from the money: anything
-// within 2% of the cap was cut off.
+// The CLI says outright when the budget stopped a session:
+// `terminal_reason: 'budget_exhausted'`. Measured, not assumed — a probe with
+// `--max-budget-usd 0.05` came back with that field set.
+//
+// The old rule guessed from the money and guessed wrong in both directions.
+// A capped session OVERSHOOTS its cap, because a turn already in flight still
+// finishes: that probe spent $0.30 against a $0.05 budget. And a session that
+// merely ended close to its cap was flagged as cut off when it was not.
+//
+// The margin below is only a fallback for a CLI that does not report the field.
 const CAP_MARGIN = 0.98;
 
 /**
@@ -57,7 +64,10 @@ export function runSession({
     num_turns: out.num_turns ?? null,
     usage: out.usage ?? null,
     session_id: out.session_id ?? null,
-    hit_cap: cost !== null && cost >= capUsd * CAP_MARGIN,
+    // Ask the CLI when it will answer; guess from the money only when it will not.
+    hit_cap: out.terminal_reason !== undefined
+      ? out.terminal_reason === 'budget_exhausted'
+      : (cost !== null && cost >= capUsd * CAP_MARGIN),
     error: null,
   };
 }

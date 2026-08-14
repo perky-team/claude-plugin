@@ -32,7 +32,24 @@ describe('runSession', () => {
     expect(r.hit_cap).toBe(false);
   });
 
-  it('marks a session that spent its whole cap', () => {
+  // Measured against the real CLI: a probe with --max-budget-usd 0.05 came back
+  // with terminal_reason set and a cost of $0.30 — six times the cap, because a
+  // turn already in flight still finishes. Believe the field, not the money.
+  it('believes the CLI when it says the budget stopped the session', () => {
+    const bin = stub(`process.stdout.write(JSON.stringify(
+      { total_cost_usd: 0.30, terminal_reason: 'budget_exhausted' }));`);
+    expect(runSession({ dir, arm: 'none', capUsd: 5, claudeBin: bin, runner: 'node' }).hit_cap)
+      .toBe(true);
+  });
+
+  it('does not call a session capped just because it ended near the cap', () => {
+    const bin = stub(`process.stdout.write(JSON.stringify(
+      { total_cost_usd: 4.95, terminal_reason: 'end_turn' }));`);
+    expect(runSession({ dir, arm: 'none', capUsd: 5, claudeBin: bin, runner: 'node' }).hit_cap)
+      .toBe(false);
+  });
+
+  it('falls back to the money when the CLI reports no terminal reason', () => {
     const bin = stub(`process.stdout.write(JSON.stringify({ total_cost_usd: 4.95 }));`);
     expect(runSession({ dir, arm: 'none', capUsd: 5, claudeBin: bin, runner: 'node' }).hit_cap)
       .toBe(true);
