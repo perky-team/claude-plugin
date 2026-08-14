@@ -45,6 +45,12 @@ describe('changedLines', () => {
     expect(changedLines(join(root, 'a'), join(root, 'b'))).toBe(1);
   });
 
+  it('counts a blank line added in the middle', () => {
+    write(join(root, 'a'), 'f.js', 'one\ntwo\n');
+    write(join(root, 'b'), 'f.js', 'one\n\ntwo\n');
+    expect(changedLines(join(root, 'a'), join(root, 'b'))).toBe(1);
+  });
+
   it('counts every line of a new file', () => {
     write(join(root, 'a'), 'f.js', 'one\n');
     write(join(root, 'b'), 'f.js', 'one\n');
