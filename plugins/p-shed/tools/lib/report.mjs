@@ -189,7 +189,7 @@ export function aggregate(records, now, { windowDays = 7 } = {}) {
 //      in the same function and is never reached. `lastRun` marks when the run STARTED, and
 //      `nextRun` only answers "the next matching cron minute from now" — it has no idea
 //      the run is still going and will still be going when that minute arrives. Printing
-//      that guess named a launch the pid-alive guard would simply skip, and since the
+//      that guess named a launch the tick would simply not make, and since the
 //      page re-renders on a schedule, the guessed time slid forward every render — a job
 //      truly stuck forever read as "coming up soon" forever, indistinguishable from a
 //      healthy wait. `at: null` puts it in the same honest "don't know" bucket as a
