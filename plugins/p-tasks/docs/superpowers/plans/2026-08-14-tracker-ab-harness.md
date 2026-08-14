@@ -165,7 +165,7 @@ never appears in the result.
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test tests/"
+    "test": "node --test"
   }
 }
 ```
@@ -243,9 +243,14 @@ test('reads --section.key=value', () => {
 
 - [ ] **Step 5: Run the visible suite and check it fails for the right reason**
 
-Run: `node --test tests/` from `plugins/p-tasks/scripts/polygon`
+Run: `node --test` from `plugins/p-tasks/scripts/polygon`
 Expected: every test fails with `not implemented`. No import errors — an import
 error here means a path in `SPEC.md` does not match a real file.
+
+Bare `node --test`, with no path after it. `node --test tests/` looks right and
+is not: Node 24 tries to load `tests` as a module and dies with
+`MODULE_NOT_FOUND`, on Windows and Linux alike. Default discovery finds
+`tests/*.test.js` on its own.
 
 - [ ] **Step 6: Commit**
 
