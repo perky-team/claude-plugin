@@ -88,6 +88,9 @@ Messages, exactly:
 `Number.isFinite` accepts after `Number(value)`, and an empty string is not one.
 Errors come back sorted by `path`.
 
+`value` holds only the paths the schema names. A key the schema does not name is
+left out.
+
 ## R3 — fill in defaults
 
 `src/defaults.js` exports `applyDefaults(config, schema)`.
@@ -138,6 +141,14 @@ the same config always prints the same bytes. No trailing newline.
 ## R9 — CLI exit codes
 
 `bin/cli.js` reads a config path as its first argument and flags after it.
+
+It always validates against this fixed schema, whatever the config holds:
+
+| path | type | required | default |
+|---|---|---|---|
+| `server.port` | number | yes | — |
+| `server.host` | string | no | `localhost` |
+| `server.debug` | boolean | no | `false` |
 
 | exit | when |
 |---|---|
