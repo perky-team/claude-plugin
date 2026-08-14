@@ -111,4 +111,19 @@ describe('stdout survives a pipe', () => {
     expect(piped.stdout).toBe(file.stdout);
     expect(piped.stdout.trimEnd().endsWith('-')).toBe(true); // last cell of the last row
   });
+
+  it('report through a pipe is complete — the largest page this CLI writes', () => {
+    // seedScheduler makes 150 breaker-tripped jobs whose reasons are ~2 KB each, so the
+    // page is several hundred KB: far past the 64 KB a truncating exit caps output at.
+    // Green on win32 no matter how broken the code is — pipe writes are synchronous
+    // there. It only means something under WSL.
+    seedScheduler();
+    const piped = throughPipe(['report']);
+    const file = throughFile(['report']);
+
+    expect(piped.status).toBe(0);
+    expect(piped.stdout.length).toBeGreaterThan(PIPE_BUFFER);
+    expect(piped.stdout).toBe(file.stdout);
+    expect(piped.stdout.trimEnd().endsWith('</html>')).toBe(true);
+  });
 });

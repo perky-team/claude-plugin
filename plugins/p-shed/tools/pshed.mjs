@@ -1,8 +1,11 @@
 #!/usr/bin/env node
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readJobs, readConfig } from './lib/io.mjs';
+import { paths, readJobs, readConfig } from './lib/io.mjs';
+import { readLogRecords } from './lib/logs.mjs';
+import { aggregate, computeNext, windowStart } from './lib/report.mjs';
+import { renderHtml } from './lib/html.mjs';
 import { setJob, rmJob, ValidationError } from './lib/jobs.mjs';
 import { PROFILE_FIELDS, effectiveJobs, profileFilePath, resolveProfile, validateProfiles } from './lib/profile.mjs';
 import { resetBreaker, writePause, readPause, removePause } from './lib/breaker.mjs';
@@ -125,7 +128,7 @@ export function die(message, exitCode = 1) {
   process.exitCode = exitCode;
 }
 
-const KNOWN = ['tick', 'run', 'install-cron', 'remove-cron', 'set-job', 'rm-job', 'reset-breaker', 'pause', 'resume', 'profile', 'status', 'stop', 'wait-idle', 'deploy'];
+const KNOWN = ['tick', 'run', 'install-cron', 'remove-cron', 'set-job', 'rm-job', 'reset-breaker', 'pause', 'resume', 'profile', 'status', 'report', 'stop', 'wait-idle', 'deploy'];
 
 // The in-flight deployed command, so a POSIX signal handler can forward the interrupt to
 // it. Null while `deploy` is still waiting for idle — that phase is cancelled by the flag
@@ -324,6 +327,39 @@ async function main() {
       const status = collectStatus(root, { installed: isTickInstalled(root) });
       if (args.human) { process.stdout.write(formatHuman(status) + '\n'); return; }
       return emitJson(status, 0);
+    }
+
+    if (command === 'report') {
+      const out = args.out;
+      if (out === true) return die('--out requires a value', 2);
+      if (!existsSync(paths(root).dir)) return die(`no ${paths(root).dir} — run init first`, 1);
+
+      const now = Date.now();
+      const status = collectStatus(root, { installed: isTickInstalled(root) });
+      const { jobs } = effectiveJobs({ root, jobsData: readJobs(root), config: readConfig(root) });
+      const { records, skippedLines } = readLogRecords(root, windowStart(now));
+      // aggregate reads no files, so it cannot count unreadable lines itself.
+      const agg = { ...aggregate(records, now), skippedLines };
+      const html = renderHtml(status, agg, computeNext(jobs, status.jobs, now), now);
+
+      if (!out) {
+        // Never process.exit() here: this is the biggest thing the CLI writes, and a hard
+        // exit drops everything still queued on the pipe.
+        process.stdout.write(html);
+        return;
+      }
+      // Atomic, like run/DEPLOY: a temp file in the SAME directory, then rename. A plain
+      // write can be fetched half-finished by the browser that is refreshing the page,
+      // and rename is only atomic within one filesystem.
+      const tmp = `${out}.${process.pid}.${now}.tmp`;
+      try {
+        writeFileSync(tmp, html, 'utf-8');
+        renameSync(tmp, out);
+      } catch (err) {
+        rmSync(tmp, { force: true });
+        return die(`cannot write ${out}: ${err.message}`, 1);
+      }
+      return;
     }
 
     if (command === 'stop') {
