@@ -26,9 +26,6 @@ export function sessionsToDone(sessions) {
 // one that ran all ten had nine; counting raw regressions would reward the fast
 // arm twice, once for speed and once for reliability.
 export function regressionRate(sessions) {
-  const scoredSessions = scored(sessions);
-  if (scoredSessions.length < 2) return null;
-
   let handovers = 0;
   let regressions = 0;
   for (let i = 1; i < sessions.length; i++) {
@@ -40,7 +37,7 @@ export function regressionRate(sessions) {
       if (before[id] && after[id] === false) regressions++;
     }
   }
-  return handovers > 0 ? regressions / handovers : 0;
+  return handovers ? regressions / handovers : null;
 }
 
 /** Lines written across the run, over lines that survived into the result. */
