@@ -30,6 +30,15 @@ describe('snapshot', () => {
     const dest = snapshot(src, join(root, 'dest'));
     expect(existsSync(join(dest, '.git', 'HEAD'))).toBe(true);
   });
+
+  it('skips node_modules at any depth', () => {
+    const src = join(root, 'src');
+    write(src, 'lib/index.js', 'one\n');
+    write(src, 'lib/node_modules/deep/index.js', 'huge\n');
+    const dest = snapshot(src, join(root, 'dest'));
+    expect(existsSync(join(dest, 'lib', 'index.js'))).toBe(true);
+    expect(existsSync(join(dest, 'lib', 'node_modules'))).toBe(false);
+  });
 });
 
 describe('changedLines', () => {

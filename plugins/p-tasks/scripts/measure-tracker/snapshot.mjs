@@ -5,7 +5,12 @@ const SKIP_COPY = new Set(['node_modules']);
 // .git is copied as evidence but never counted as work: its index and objects
 // change on every commit for reasons that have nothing to do with lines written.
 const SKIP_COUNT = new Set(['node_modules', '.git']);
-const TEXT = /\.(js|mjs|cjs|json|md|ya?ml|txt|ini)$/i;
+// An allowlist, not a sniff: a file this list misses counts as zero lines, in
+// both the numerator and the denominator of the churn ratio, so a miss shrinks
+// what is measured rather than skewing it. The polygon is plain JavaScript, but
+// an agent may reach for a neighbouring file type, and a file it wrote that
+// nothing counts is work the study cannot see.
+const TEXT = /\.(m?[jt]sx?|cjs|cts|json|md|ya?ml|txt|ini|css|html?|sh)$/i;
 
 // A file that ends with a newline splits into a trailing empty string. That is
 // not a line anybody wrote, and counting it would make every new file one line
