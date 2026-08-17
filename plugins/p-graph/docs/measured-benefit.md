@@ -1,6 +1,11 @@
 # grep vs p-graph
 
-August 2026. p-graph 1.4.0 plus the Python round below, which is not released yet. We already knew whether the graph's
+August 2026. Updated 14 August 2026: one truth list in this study was short by 17 call sites, and
+fixing it **reversed the accuracy claim this page led with**. A third arm — a language server — was
+also added. Both are in "The answer" below; the round-by-round sections further down are the record of
+what earlier passes reported, and two paragraphs in them now carry a withdrawal note.
+
+p-graph 1.4.0 plus the Python round below, which is not released yet. We already knew whether the graph's
 own rows are right — `measure.mjs` has audited that for months. What nobody had measured is the
 question a user actually has: **should I ask the graph, or should I just grep?**
 
@@ -24,45 +29,70 @@ it.
 
 ## The answer
 
+Fourteen repositories, 52 questions, 36 of them "who calls X" and 16 that follow the calls.
+
 | What we measured | grep | p-graph | Gap | Verdict |
 |---|---|---|---|---|
-| **"who calls X"** — call sites found | **1401 of 1410** | 1392 of 1410 | −9 | **grep** |
-| **"who calls X"** — call sites invented | 51 | **19** | −63% | **p-graph** |
-| **"who calls X"** — cost per question | $0.238 | $0.233 | −2% (SE $0.019, 0.3 SE) | **noise** |
-| **"who calls X"** — time per question | 44.0 s | 42.0 s | −5% (SE 3.7 s, 0.5 SE) | **noise** |
-| **"who calls X"** — steps per question | 7.7 | **6.6** | −14% (SE 0.4, **2.6 SE**) | **p-graph** |
-| **"who calls X"** — tool calls | 6.7 | **5.6** | −16% | **p-graph** |
-| **"who calls X"** — context read back | **627k** | 638k | +2% | **grep** |
-| **"who calls X"** — text searches | 3.7 | **1.6** | −57% | **p-graph** |
-| **"what breaks if X changes"** — cost | $0.86 | **$0.42** | −51% | **p-graph** |
-| **"what breaks if X changes"** — time | 237 s | **91 s** | −62% | **p-graph** |
-| **"what breaks if X changes"** — steps | 50 | **7** | −85% | **p-graph** |
-| Text searches per question, every question | 4.3 | **1.5** | −65% | **p-graph** |
-| Answers that admit their own limits | 4% (4/93) | **44% (41/93)** | +40 pts | **p-graph** |
+| **"who calls X"** — call sites found | **1674 of 1683** | 1602 of 1683 | −72 | **grep** |
+| **"who calls X"** — call sites invented | **0** | 14 | +14 | **grep** |
+| **"who calls X"** — cost per question | $0.216 | $0.212 | −2% (SE $0.014, 0.3 SE) | **noise** |
+| **"who calls X"** — time per question | 39.8 s | 32.8 s | −18% (SE 4.0 s, 1.8 SE) | **noise** |
+| **"who calls X"** — steps per question | 6.8 | **5.7** | −16% (SE 0.5, **2.1 SE**) | **p-graph** |
+| **"who calls X"** — tool calls | 6.6 | **5.0** | −24% | **p-graph** |
+| **"who calls X"** — context read back | 614k | **552k** | −10% | **p-graph** |
+| **"who calls X"** — text searches | 3.7 | **0.6** | −84% | **p-graph** |
+| **follow the calls** — call sites found | 180 of 216 | **187 of 216** | +7 | **p-graph** |
+| **follow the calls** — call sites invented | 32 | **1** | −97% | **p-graph** |
+| **follow the calls** — steps per question | 9.4 | **6.8** | −28% | **p-graph** |
+| **follow the calls, big repos** — cost | $0.453 | **$0.273** | −40% | **p-graph** |
+| **follow the calls, big repos** — time | 103 s | **53 s** | −48% | **p-graph** |
+| **follow the calls, small repos** — cost | **$0.190** | $0.232 | +22% | **grep** |
+| Answers that admit their own limits | 3% (4/156) | **47% (74/156)** | +44 pts | **p-graph** |
 
 **tie** means the two sides landed on the same number. **noise** means the gap is under two standard
 errors, so we cannot tell it from zero.
 
-**p-graph invents a third as many call sites, it takes 14% fewer steps, and it says what it might be
-missing in 44% of answers against grep's 4%.** Cost and time are still noise — 0.3 and 0.5 standard
-errors, which is not a difference. Steps is not: at 2.6 SE it clears the bar this page set, on 31
-questions in twelve repositories.
+**The two question shapes now give opposite answers, and that is the finding.**
 
-Read that last one with the page's own history in mind. An earlier version reported −21% cost at 1.8
-SE and −24% steps at 2.0 SE, and neither survived the question set growing. The −12% here is a
-smaller claim on a bigger set, made after the rounds that removed the work p-graph was creating for
-itself; it may still not survive the next repository.
+On **"who calls X"** — list every call site — grep is the more accurate of the two. It finds 72 more
+call sites of 1,683 and it invents nothing at all, where p-graph invents 14. What p-graph buys on this
+shape is not correctness: it is 16% fewer steps, a sixth of the text searches, and an answer that says
+what it might be missing 47% of the time against grep's 3%.
 
-Recall now goes the other way by nine call sites, and it is worth saying exactly where that comes
-from, because the honest answer is "run-to-run variance on one hard question". On `re2::Prog::size`
-grep scored 57 of 75 in one pass and 75 of 75 in the next, and the difference was money: $0.74 and
-123 s against $1.11 and 213 s. p-graph scored 74 of 75 both times. The "+22 call sites" this page used
-to claim for C++ was one cheap grep run, not a property of the graph.
+On **following the calls** — "what breaks if I change X", "how does X reach Y" — p-graph wins the
+accuracy row outright: 187 of 216 against 180, and **1 invented row against 32**. On the big
+repositories it is also 40% cheaper and 48% faster. On small ones it is 22% dearer.
 
-The invented rows still come from one question. On `Handler.ServeHTTP` in caddy grep averages 17
-invented call sites per run against p-graph's 5.7: it cannot tell a call written on the `Handler`
-interface from one written on a concrete middleware, and 107 lines in that repo carry a `.ServeHTTP(`
-call. That one question is where all 51 of grep's invented rows and 17 of p-graph's 19 come from.
+So: **ask the graph what breaks. Ask grep who calls.**
+
+### The accuracy claim this page used to make, and why it is gone
+
+Until August 2026 the table above read `51` invented for grep and `19` for p-graph, and this page
+said p-graph invents a third as many. Both numbers were wrong, and one truth list caused it.
+
+`caddy-handler-servehttp` asks for every call to the two-argument `ServeHTTP` declared by caddy's
+`Handler` interface. Its truth list held 34 call sites. The repository has **51**: `metrics_test.go`
+calls that exact method eighteen times, through `ih := newMetricsInstrumentedRoute(…)` whose type
+declares `ServeHTTP(w, r) error` at `metrics.go:314`, and the list carried one of the eighteen.
+
+So the 17 rows a run that grep was scored as inventing were real call sites. It had invented nothing.
+And p-graph, which lists 34 of the 51, was scored as perfect — the short list hid the miss exactly
+because it stopped where p-graph stops.
+
+How it was caught is the part worth keeping: **a third arm was added, and it named the same lines grep
+named.** This page's own rule says that when more than one arm names a line the truth does not have,
+doubt the truth. Two arms agreeing was the signal; reading the eighteen lines settled it.
+
+That makes four truth lists in this study that were short on the first pass. The other three were
+found the same way. **Ground truth, not the tool, is the fragile part of this method.**
+
+Every one of the 52 questions was then re-audited for the same defect, with the scorer's own match
+rule, looking for any line two arms name that the truth lacks. Five lines in four questions came up,
+all on follow-the-calls questions, all real calls sitting just outside the question's stated bound —
+two more calls to `RemoveObsoleteFiles` that do not lie on the path from `Open`, a third use of
+`secureRequestDump` inside a test file when the question says outside test files, and two rows one hop
+further out than any row in their list. Those are now `neutral`: they count for neither side. After
+that the audit is clean.
 
 How big is "noise" here? We re-ran the untouched baseline arm on the C++ questions, changing nothing
 about it, and its own cost moved 18% and its time 16% between the two passes. That is the yardstick
@@ -265,6 +295,11 @@ It invents a third as many call sites (51 against 19) and says what it might be 
 often. It takes 14% fewer steps. It loses 9 call sites of 1,410, all of them TypeScript. On the transitive question it is half
 the cost and a seventh of the steps.
 
+> **Withdrawn.** The invented counts in this paragraph — 51 and 19 — came from a truth list that was
+> short by 17 rows. Corrected, grep invents 0 and p-graph 14, and the recall gap is 72 call sites, not
+> 9. The paragraph is kept as the record of what that pass reported. See "The accuracy claim this page
+> used to make, and why it is gone".
+
 The search rows are the mechanism. On the list questions p-graph runs 1.6 text searches against grep's
 3.7 — it needs fewer, but it still needs one now and then. Over every question the ratio is 1.5 to
 4.3, because the transitive question alone makes grep run about twenty searches and p-graph one
@@ -340,6 +375,9 @@ $0.09 — so the per-question table above carries more than this average does.
 
 Accuracy is not a tie either way, and it now points at grep by nine call sites of 1,410. All nine are
 TypeScript. p-graph still invents a third as many: 19 against 51.
+
+> **Withdrawn**, for the reason given at the top of this page: those invented counts rest on a truth
+> list that was short by 17 rows. Corrected, grep invents 0 and p-graph 14.
 
 ### The transitive question
 
@@ -1335,11 +1373,12 @@ written rather than something shaky.
 
 ## What that means
 
-- **For "who calls X", either tool is fine — with two exceptions.** Both found essentially every call
-  site (1,401 and 1,392 of 1,410) for the same money and the same time. p-graph wins on a call written
-  without a qualifier from inside the class that owns the method: grep missed that one in all three
-  runs, p-graph never did. grep wins on plain JavaScript, where the graph has no types to read. See
-  "By language".
+- **For "who calls X", grep is the more accurate of the two.** 1,674 call sites of 1,683 against
+  1,602, and grep invents none where p-graph invents 14. Cost and time are a tie. p-graph still wins
+  the one shape a text search cannot do — a call written without a qualifier from inside the class
+  that owns the method, which grep missed in all three runs — but that is one question, and the total
+  goes the other way. Most of the 72-site gap is two questions: `caddy-handler-servehttp` (104 of
+  153) and `axios-eject` (51 of 75). See "By language".
 - **The plugin earns its keep on a big repository, and not on a small one.** That is the clearest line
   this study has produced, and it is the one to read first. On the eleven questions that follow the
   calls, split by the size of the repository:
@@ -1355,9 +1394,13 @@ written rather than something shaky.
 - **For "what breaks if I change X", use p-graph — on a repository big enough to need it.** Half the
   cost, a third of the time, a seventh of the steps, and one `impact` call instead of a hand-walked
   call tree.
-- **The reason to install it is the honesty, not the speed.** 41 answers of 93 said what they might be
-  missing, against 4 of 93. Across every scored question in the study grep invented 87 call sites and
-  p-graph 27. That is the gap banner and the guess marking being relayed, and grep has no equivalent.
+- **The reason to install it is the honesty, not the speed.** 74 answers of 156 said what they might be
+  missing, against 4 of 156. That is the gap banner and the guess marking being relayed, and grep has
+  no equivalent.
+- **On the follow-the-calls shape, and only there, p-graph is also the more accurate.** 187 call sites
+  of 216 against 180, and **1 invented row against 32** — 26 of grep's 32 on the big repositories,
+  where a text search has to guess what each hit meant. This is the claim the "who calls X" tables
+  cannot support and this shape can.
 - **A tool that makes you run one more command is not a fast tool.** In the first round the whole 48%
   gap was one extra query, caused by `callers` answering a different question from the one it was
   asked.
@@ -1369,11 +1412,79 @@ more when it says what it does not know, and p-graph said so ten times as often:
 
 | | Runs whose answer flags its own limits |
 |---|---|
-| p-graph | **41 of 93** |
-| grep | 4 of 93 |
+| p-graph | **74 of 156** |
+| grep | 4 of 156 |
 
 That is the gap banner and the `UNVERIFIED` marking doing their job — they are text the agent can
 relay, and it does. A grep-only agent has nothing equivalent to relay.
+
+## The third arm: a language server
+
+grep is the floor, not the alternative. A user deciding whether to install this plugin is choosing
+between it and `gopls`, `clangd`, `pyright` or `typescript-language-server` — and this page could not
+speak to that at all, because the runner switches the machine's Go LSP off in **both** arms on
+purpose. Without that, `gopls` would have answered the Go questions in the grep arm and voided the
+comparison.
+
+So a third arm was built: the same clones, the same questions, the same model, with `gopls` and the
+built-in `LSP` tool, and a rule written to the same standard as the p-graph rule. Six Go questions on
+caddy and hugo, three runs a side.
+
+| 4 list questions + 1 trap | grep | p-graph | gopls |
+|---|---|---|---|
+| Call sites found | 277 of 279 | 229 of 279 | **279 of 279** |
+| Call sites invented | 0 | 0 | 0 |
+| Cost per question | $0.337 | **$0.294** | $0.357 |
+| Time per question | 72 s | **51 s** | 78 s |
+| Steps per question | 10.8 | **9.3** | 17.1 |
+| Tool calls per question | 6.6 | **5.0** | 16.9 |
+| `caddy-addnode-impact` — steps | 16.7 | **8.7** | 28.7 |
+
+**The language server is the most accurate of the three and the most expensive in round trips.** It
+answered every call site of every question, including `caddy-handler-servehttp`, where p-graph lists 34
+of 51. That is what a type checker should do, and it did it.
+
+What it costs is steps: 17.1 against 9.3. The mechanism is the API. `LSP` is addressed by file, line
+and character, so a list of N call sites costs about N calls, where a graph query costs one. The tool
+breakdown shows the arm is not even pure LSP — 4.1 `LSP` calls a question and **5.3 greps**, because
+the agent opens the lines it is told about to check the receiver.
+
+Two things decide when the graph still wins:
+
+- **A language server needs the project to build.** Resolved Go modules, `npm install`, a C++
+  `compile_commands.json`. On the machine this was measured on, C++ has no toolchain at all — no
+  `cmake`, no `ninja`, no compiler — so clangd could not be run on rocksdb or leveldb, while p-graph
+  indexes both from text. That is not a footnote; it is the whole reason a parser-based graph exists.
+- **It walks a chain one request per hop.** 28.7 steps against p-graph's 8.7 on the transitive
+  question, where `impact` answers in one call.
+
+**The advice this arm supports:** for Go and TypeScript, reach for the language server first. Reach
+for p-graph for "what breaks if I change X" on a big repository, and for any repository that does not
+build.
+
+### The first pass of this arm was thrown away, and the reason matters
+
+17 of the first 18 runs never reached `gopls` at all. Every one of them got `no active builds` for
+every file, fell back to grep, and produced numbers that looked like a verdict on language servers:
+$0.703 a question against p-graph's $0.316.
+
+The cause was the workspace path. `os.tmpdir()` on that machine returns the Windows 8.3 short form,
+`C:\Users\ANDREY~1.SUK\…`, and gopls refuses such a root outright — *component "ANDREY~1.SUK" is
+listed by Windows as "Andrey.Sukharev"*. Every `claude -p` was launched with that cwd, so the server
+loaded nothing.
+
+**grep and p-graph had run 312 times from the same wrong path and neither noticed**, because neither
+validates its workspace root. Resolving the path with `realpathSync.native` fixed it, and the same
+questions came back at $0.357 — most of the "language servers are expensive" gap had been the cost of
+failed attempts.
+
+Two lessons are now built into the runner:
+
+1. **`lspPreflight` proves the server answers** before the first dollar is spent — it warms the
+   workspace and then requires a real symbol list back, per repository. Checking that the binary is on
+   `PATH` was never enough.
+2. **The rule makes the agent say where its answer came from.** That single sentence — "this comes from
+   a text search, not the LSP" — is the only reason the dead arm was caught instead of published.
 
 The clearest single case is `RequestsCookieJar.update` in requests. The graph hands the agent
 **11 rows: 1 certain and 10 guesses**, and only the certain one is a real call — every `.update(` in
@@ -1459,6 +1570,32 @@ edit reparses in under two seconds.
 
 ## What we got wrong
 
+- **We published an accuracy claim built on a truth list that was short by a third.** The headline said
+  p-graph invents a third as many call sites as grep. `caddy-handler-servehttp` has 51 call sites and
+  its list held 34, so the 17 real rows grep found every run were scored as inventions — and p-graph,
+  which finds the same 34 the list stopped at, was scored as perfect. Corrected: grep invents 0 across
+  36 questions, p-graph 14, and grep leads recall by 72 sites. **The claim this page led with for four
+  passes was an artifact of its own ground truth.** It took a third arm naming the same lines to see it.
+- **The whole first pass of the language-server arm measured nothing, and it looked like a result.**
+  `os.tmpdir()` returned the Windows 8.3 short path, gopls refuses such a workspace root, and 17 of 18
+  runs silently fell back to grep — reporting $0.703 a question against p-graph's $0.316. Fixed, the
+  same questions cost $0.357. The preflight had checked that `gopls` was on `PATH`, which proves
+  nothing; it now warms the workspace and requires a real answer back. **grep and p-graph had run 312
+  times from that same wrong path without complaint**, because neither validates its workspace root.
+- **A regex that looked for the failure nearly stopped a healthy run.** The fallback detector matched
+  `text search` in the sentence *"found via LSP findReferences … not a text search"* — an answer
+  asserting the opposite of what it was flagged for. Negated forms are now stripped before the test,
+  and no run is stopped on a regex hit alone: the answer gets read first. The detector proposes,
+  reading decides.
+- **The oldest rows in `runs.jsonl` have `lang: null`, and filtering on it silently halves a table.**
+  The first pass was written before that field existed. An analysis script that grouped by the row's
+  own `lang` dropped 9 of 12 big-Go grep rows and would have published grep at 152 of 153 instead of
+  277 of 279. The script's own tables never had the bug because they group by the question, not the
+  row. Anything reading `scored.json` directly has to do the same.
+- **The probe written to catch a broken setup was itself flaky.** `gopls symbols` failed on caddy
+  immediately after the warm-up call, then succeeded by hand moments later — a second gopls starting
+  behind the first one's cache write. A probe that blocks a good setup is as bad as no probe, so it
+  retries once, which is the same thing the rule tells the agent to do.
 - **A fix that only added coverage made the answer more expensive, and we shipped nothing until the
   second measurement.** Indexing Go interface methods took `callers "caddyhttp.Handler.ServeHTTP"` from
   "no symbol named" to 23 of 34 call sites — and the A/B came out WORSE: $1.07 grep against $1.68

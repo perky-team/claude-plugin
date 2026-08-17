@@ -3,16 +3,26 @@
 //
 //   node plugins/p-graph/scripts/measure-agent.mjs --phase base
 //   node plugins/p-graph/scripts/measure-agent.mjs --phase graph
+//   node plugins/p-graph/scripts/measure-agent.mjs --phase lsp
 //   node plugins/p-graph/scripts/measure-agent.mjs --score
 //
 // `measure.mjs` asks whether the graph's own rows are right. This asks the
 // question a user actually has: is the ANSWER better, and what did it cost.
 //
-// Two arms over the same clones:
+// Three arms over the same clones:
 //   base   the repo as it comes. No .pgraph, no rule, no plugin.
 //   graph  the same repo, indexed, with the p-graph rule in CLAUDE.md and the
 //          plugin loaded, so /p-graph:query and the CLI are both available.
+//   lsp    the same repo with a language server — gopls, clangd, pyright or
+//          typescript-language-server — and the rule in lsp-arm-rule.md. This is
+//          the strong alternative, not the weak one: grep is the floor, a
+//          language server is what a user would reach for instead of the graph.
 // Everything else is held equal: same model, same tools, same question text.
+//
+// The lsp arm needs the project to BUILD — resolved Go modules, installed npm
+// packages, a compile_commands.json for C++. That requirement is part of what is
+// being compared, and `lspPreflight` refuses to start without it rather than
+// quietly measuring a server that indexed nothing.
 //
 // Scoring is mechanical, not judged by a model. Each question carries a
 // hand-built list of the real call sites (see TRUTH below, and the write-up for
@@ -23,7 +33,7 @@
 // Runs are appended to runs.jsonl in the work dir and never repeated, so the
 // script can be stopped and restarted.
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, rmSync, writeFileSync, appendFileSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, writeFileSync, appendFileSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir, homedir } from 'node:os';
@@ -32,11 +42,18 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const PLUGIN = join(HERE, '..');
 const CLI = join(PLUGIN, 'tools', 'pgraph.mjs');
 const RULE = join(PLUGIN, 'skills', '_shared', 'templates', 'p-graph-rule.template.md');
+const LSP_RULE = join(HERE, 'lsp-arm-rule.md');
 
 // The user's own machine has p-graph, p-wiki and a Go LSP switched on for every
 // session. Left alone, the BASE arm would quietly have them too and the whole
-// comparison would be void. This override switches all three off in both arms;
-// the graph arm gets p-graph back through --plugin-dir, and nothing else.
+// comparison would be void. This override switches all three off in every arm;
+// the graph arm gets p-graph back through --plugin-dir, the lsp arm gets the
+// language servers back the same way, and neither gets anything else.
+//
+// Switching the Go LSP off is what made the base and graph numbers mean
+// anything — and it is also why this file could not answer "is a language
+// server better than the graph?" at all. The `lsp` arm below is that third
+// side, run the same way on the same clones.
 const OFF = JSON.stringify({
   enabledPlugins: {
     'p-graph@perky.team': false,
@@ -140,7 +157,28 @@ const QUESTIONS = [
       ...T('modules/caddyhttp/logging/logappend.go', [[95, 63]]),
       ...T('modules/caddyhttp/map/map.go', [[171, 124]]),
       ...T('modules/caddyhttp/metrics.go', [[353, 314]]),
-      ...T('modules/caddyhttp/metrics_test.go', [[616, 602]]),
+      // All 18, not the 1 this list carried for four passes. The receiver in
+      // every one is `ih := newMetricsInstrumentedRoute(…)`, whose type has
+      // `ServeHTTP(w, r) error` at metrics.go:314 — the two-argument form the
+      // question asks for, on a type that implements `caddyhttp.Handler`. So
+      // they are call sites, and the truth was short by 17.
+      //
+      // Found the way this repo's rule says to find it: the lsp arm and the grep
+      // arm both listed lines the truth did not have, which is the tell that the
+      // truth is wrong and not the tool. The 17 were then read one by one.
+      //
+      // What the short list did: it scored grep and the language server as
+      // inventing 17 rows a run each when both were right, and it gave p-graph a
+      // clean sheet for listing 34 of 51 — the miss was invisible because the
+      // truth stopped at 34 too.
+      ...T('modules/caddyhttp/metrics_test.go', [
+        [55, 32], [63, 32], [75, 32], [95, 32],
+        [229, 203], [237, 203], [249, 203], [269, 203],
+        [403, 377], [409, 377], [415, 377],
+        [459, 434], [466, 434],
+        [508, 483], [521, 483],
+        [596, 576], [616, 602], [629, 602],
+      ]),
       ...T('modules/caddyhttp/push/handler.go', [[79, 76], [84, 76], [129, 76]]),
       ...T('modules/caddyhttp/requestbody/requestbody.go', [[81, 67], [104, 67]]),
       ...T('modules/caddyhttp/reverseproxy/copyresponse.go', [[177, 145]]),
@@ -684,7 +722,12 @@ const QUESTIONS = [
       ...T('recovery.go', [[145, 119], [92, 53], [50, 45], [37, 35], [42, 40]]),
       ...T('gin.go', [[241, 236]]),
     ],
-    neutral: [N('recovery.go', 147, 174)],
+    // `var engine = sync.OnceValue(func() *gin.Engine { return gin.Default() })`
+    // reaches `readNthLine` through `Default`, so naming it is not wrong. It is
+    // also a package-level variable and not a function, and the question asks
+    // which FUNCTIONS would have to be updated — so it is not clearly in either.
+    // Both arms named it; a row this arguable counts for neither side.
+    neutral: [N('recovery.go', 147, 174), N('ginS/gins.go', 16, 16)],
   },
   {
     // Four functions, three hops, all in one file — the small end of the shape,
@@ -744,7 +787,12 @@ const QUESTIONS = [
       ...T('caddyconfig/caddyfile/parse.go', [[587, 356], [292, 210], [355, 320],
         [686, 636], [209, 146], [319, 293], [145, 141], [140, 122], [58, 39]]),
     ],
-    neutral: [N('caddyconfig/caddyfile/importgraph.go', 29, 38)],
+    // `adapter.go:45` calls `Parse`, which reaches `addNode`, and it sits in the
+    // package the question bounds itself to — so it is arguably in. It is also
+    // one hop further out than every row in the list above, and all three arms
+    // named it. Neither side gets it.
+    neutral: [N('caddyconfig/caddyfile/importgraph.go', 29, 38),
+      N('caddyconfig/caddyfile/adapter.go', 45, 45)],
   },
   {
     id: 'hugo-isgitmodule-impact', repo: 'hugo', lang: 'Go', kind: 'reach',
@@ -789,7 +837,12 @@ const QUESTIONS = [
       ...T('db/db_impl.cc', [[1544, 1503], [290, 225]]),
       ...T('db/table_cache.cc', [[118, 114]]),
     ],
-    neutral: [],
+    // Two more real calls to `RemoveObsoleteFiles`, from `CompactMemTable` and
+    // `BackgroundCompaction`. They reach `Evict` just as surely, but they are not
+    // on the path FROM `Open`, which is what this question bounds itself to. Both
+    // arms named them, so they are not a mistake either side made — they are a
+    // real caller outside a stated bound, and this study puts those in neutral.
+    neutral: [N('db/db_impl.cc', 576, 576), N('db/db_impl.cc', 762, 762)],
   },
 
   // --- "what does this end up calling" ---------------------------------------
@@ -820,7 +873,9 @@ const QUESTIONS = [
       // Both uses sit inside CustomRecoveryWithWriter, 53-92.
       ...T('recovery.go', [[75, 53], [72, 53]]),
     ],
-    neutral: [N('recovery.go', 94, 107)],
+    // A real third use, inside the table test in recovery_test.go. The question
+    // asks for uses OUTSIDE test files, so it belongs to neither side.
+    neutral: [N('recovery.go', 94, 107), N('recovery_test.go', 354, 354)],
   },
 
   // --- the two big repositories ----------------------------------------------
@@ -1083,7 +1138,22 @@ const flag = (n, f = null) => {
   const v = args[i + 1];
   return v === undefined || v.startsWith('--') ? true : v;
 };
-const work = String(flag('work', join(tmpdir(), 'pgraph-measure')));
+// Resolved to the canonical long Windows path, and that is not a tidy-up.
+// `os.tmpdir()` here returns the 8.3 short form — C:\Users\ANDREY~1.SUK\… —
+// because that is how %TEMP% is set on this machine, and gopls REFUSES such a
+// workspace outright: `component "ANDREY~1.SUK" is listed by Windows as
+// "Andrey.Sukharev"`. Every `claude -p` in the lsp arm was launched with that
+// cwd, so gopls loaded no workspace at all and answered "no active builds" for
+// every file. 17 runs of 18 quietly fell back to grep and the whole pass
+// measured a text search with extra steps.
+//
+// grep and p-graph never cared, which is why this survived 312 runs unnoticed:
+// only a tool that validates its own workspace root can tell you the path is
+// wrong. It is the same directory either way, so runs.jsonl is unaffected.
+const work = (() => {
+  const w = String(flag('work', join(tmpdir(), 'pgraph-measure')));
+  try { return realpathSync.native(w); } catch { return w; }
+})();
 const phase = flag('phase');
 const only = flag('only') && String(flag('only')).split(',');
 const runsFile = join(work, 'runs.jsonl');
@@ -1119,6 +1189,158 @@ function prepGraph(repo) {
   return dir;
 }
 
+// --- the lsp arm ------------------------------------------------------------
+
+// Copied from the official marketplace entries — gopls-lsp, clangd-lsp,
+// pyright-lsp, typescript-lsp — so this arm measures the servers as a user who
+// installs those plugins gets them, not a setup we tuned for ourselves.
+// `startupTimeout` is the fix for the first pass of this arm. The official
+// marketplace entries set none, and gopls answers "no active builds" for every
+// file until its first whole-workspace load finishes — 930 files plus every
+// dependency, on hugo. The agent asked before that finished, got the error and
+// fell back to grep in 17 runs of 18. Five minutes is far longer than a warm
+// load needs and cheaper than one wasted pass.
+const LSP_STARTUP_MS = 300000;
+const LSP_SERVERS = {
+  gopls: { command: 'gopls', startupTimeout: LSP_STARTUP_MS, extensionToLanguage: { '.go': 'go' } },
+  clangd: {
+    command: 'clangd',
+    args: ['--background-index'],
+    startupTimeout: LSP_STARTUP_MS,
+    extensionToLanguage: {
+      '.c': 'c', '.h': 'c', '.cpp': 'cpp', '.cc': 'cpp', '.cxx': 'cpp', '.hpp': 'cpp', '.hxx': 'cpp',
+    },
+  },
+  pyright: {
+    command: 'pyright-langserver',
+    args: ['--stdio'],
+    startupTimeout: LSP_STARTUP_MS,
+    extensionToLanguage: { '.py': 'python', '.pyi': 'python' },
+  },
+  typescript: {
+    command: 'typescript-language-server',
+    args: ['--stdio'],
+    startupTimeout: LSP_STARTUP_MS,
+    extensionToLanguage: {
+      '.ts': 'typescript', '.tsx': 'typescriptreact', '.js': 'javascript', '.jsx': 'javascriptreact',
+      '.mts': 'typescript', '.cts': 'typescript', '.mjs': 'javascript', '.cjs': 'javascript',
+    },
+  },
+};
+
+const LSP_FOR = { Go: 'gopls', 'C++': 'clangd', Python: 'pyright', TypeScript: 'typescript' };
+const LSP_PLUGIN = join(work, '.lsp-arm-plugin');
+
+const hasBin = (cmd) =>
+  spawnSync(process.platform === 'win32' ? 'where' : 'which', [cmd], { encoding: 'utf-8' }).status === 0;
+
+// Warm the server, then PROVE it answers. Returns null when the repo is ready,
+// or a message saying what went wrong.
+//
+// This is the check the first pass of this arm did not have, and it cost a whole
+// pass. The old preflight asked only "is the binary on PATH". It was, gopls ran,
+// and gopls still answered "no active builds" for every file because its first
+// whole-workspace load had not finished. The agent fell back to grep in 17 runs
+// of 18 and the numbers measured a text search with extra steps — the exact
+// outcome the preflight exists to stop. Checked from the CLI afterwards, the very
+// same gopls returned all 24 references on hugo and all 7 on caddy.
+//
+// The warm-up is not cheating. gopls keeps its type-check cache on disk between
+// processes, so a real user's server is warm by the time they ask anything. A
+// cold first load is a property of this harness spawning a fresh `claude -p` per
+// run, not of the tool being measured.
+const LSP_WARM = {
+  Go: (dir) => {
+    // Forces the whole-workspace load — the slow part, and the part that was
+    // still running when the agent asked. Its own output does not matter.
+    try { sh(dir, 'gopls', ['workspace_symbol', 'New']); } catch { /* warming only */ }
+    const file = sh(dir, 'git', ['ls-files', '*.go']).split('\n')
+      .find((f) => f && !f.endsWith('_test.go'));
+    if (!file) return 'no non-test .go file to probe';
+    // Twice, for the same reason the rule tells the agent to ask twice: the
+    // warm-up above leaves a gopls process finishing its cache write, and a
+    // second gopls started right behind it can get `failed to load view for …`.
+    // Measured here — the probe failed on caddy and the identical command by
+    // hand, moments later, returned the symbols. A flaky probe that blocks a
+    // good setup is as bad as no probe at all.
+    let last = '';
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        // Non-empty symbols for a real file proves the workspace loaded. Silence
+        // would be ambiguous; a symbol list cannot be faked by a server that
+        // failed to load.
+        if (sh(dir, 'gopls', ['symbols', file]).trim()) return null;
+        last = `gopls returned no symbols for ${file}`;
+      } catch (e) { last = `gopls symbols failed: ${String(e.message).split('\n')[0].slice(0, 120)}`; }
+    }
+    return last;
+  },
+  // Not written yet. C++, Python and TypeScript are not being run, and a probe
+  // invented without being tried is the kind of thing this file has been burned
+  // by. When those stages come up, write the probe first and watch it fail.
+  'C++': null,
+  Python: null,
+  TypeScript: null,
+};
+
+// A misconfigured server is the worst outcome this arm can have: it answers
+// nothing, the agent falls back to grep, and the row reads as "the language
+// server lost" when what lost was the setup. So the arm refuses to start until
+// every server it needs is on PATH — and, for C++, until clangd has the compile
+// database without which it cannot type-check a single file.
+function lspPreflight(asked) {
+  const problems = [];
+  for (const lang of [...new Set(asked.map((q) => q.lang))]) {
+    const key = LSP_FOR[lang];
+    if (!key) { problems.push(`${lang}: no server configured in LSP_SERVERS`); continue; }
+    const { command } = LSP_SERVERS[key];
+    if (!hasBin(command)) problems.push(`${lang}: \`${command}\` is not on PATH`);
+  }
+  for (const repo of [...new Set(asked.filter((q) => q.lang === 'C++').map((q) => q.repo))]) {
+    const db = ['compile_commands.json', join('build', 'compile_commands.json')]
+      .some((p) => existsSync(join(work, repo, p)));
+    if (!db) problems.push(`${repo}: no compile_commands.json — clangd cannot type-check it`);
+  }
+  // Only reached when every binary is present — probing before that would report
+  // a missing server twice.
+  if (!problems.length) {
+    for (const repo of [...new Set(asked.map((q) => q.repo))]) {
+      const lang = asked.find((q) => q.repo === repo).lang;
+      const probe = LSP_WARM[lang];
+      if (!probe) { process.stderr.write(`  WARNING ${repo} (${lang}): no probe written — the server is unproven\n`); continue; }
+      process.stderr.write(`  warming ${repo} … `);
+      const bad = probe(join(work, repo));
+      process.stderr.write(bad ? 'FAILED\n' : 'answers\n');
+      if (bad) problems.push(`${repo}: ${bad}`);
+    }
+  }
+  if (problems.length) {
+    throw new Error(`the lsp arm is not ready:\n  - ${problems.join('\n  - ')}\n\n`
+      + 'Install the servers and generate the C++ compile database, then re-run.\n'
+      + 'Running the arm without them measures the setup, not the server.');
+  }
+  mkdirSync(join(LSP_PLUGIN, '.claude-plugin'), { recursive: true });
+  writeFileSync(join(LSP_PLUGIN, '.claude-plugin', 'plugin.json'), `${JSON.stringify({
+    name: 'lsp-arm',
+    version: '0.1.0',
+    description: 'Language servers for the LSP measurement arm',
+    lspServers: LSP_SERVERS,
+  }, null, 2)}\n`);
+}
+
+function prepLsp(repo) {
+  const dir = join(work, repo);
+  // Same two exclusions as the graph arm, for the same reason: the rule file is
+  // the one difference between the arms, and a dirty `git status` would be a
+  // second one.
+  mkdirSync(join(dir, '.git', 'info'), { recursive: true });
+  writeFileSync(join(dir, '.git', 'info', 'exclude'), '.pgraph/\nCLAUDE.md\n.claude/\n');
+  rmSync(join(dir, '.pgraph'), { recursive: true, force: true });
+  rmSync(join(dir, '.claude'), { recursive: true, force: true });
+  writeFileSync(join(dir, 'CLAUDE.md'), readFileSync(LSP_RULE, 'utf-8'));
+  return dir;
+}
+
 // --- one run ----------------------------------------------------------------
 
 const done = () => (existsSync(runsFile)
@@ -1148,6 +1370,7 @@ function ask(dir, arm, question) {
     '--disallowedTools', 'Task', 'Edit', 'Write', 'NotebookEdit',
     '--max-budget-usd', '3'];
   if (arm === 'graph') a.push('--plugin-dir', PLUGIN);
+  if (arm === 'lsp') a.push('--plugin-dir', LSP_PLUGIN);
   const r = spawnSync(CLAUDE, a, {
     cwd: dir, encoding: 'utf-8', maxBuffer: 1 << 28, input: question,
   });
@@ -1158,13 +1381,16 @@ function ask(dir, arm, question) {
 
 async function runArm(arm) {
   const already = done();
+  // Fail before the first dollar, not on the C++ repo two hours in.
+  if (arm === 'lsp') lspPreflight(QUESTIONS.filter((x) => !only || only.includes(x.id)));
   for (const repo of repos) {
     // With --only, don't prepare a repo none of the chosen questions asks about.
     // prepGraph re-indexes, and re-indexing hugo to run a question about re2 is
     // several minutes of nothing.
     const asked = QUESTIONS.filter((x) => x.repo === repo && (!only || only.includes(x.id)));
     if (!asked.length) continue;
-    const dir = arm === 'base' ? prepBase(repo) : prepGraph(repo);
+    const prep = { base: prepBase, graph: prepGraph, lsp: prepLsp }[arm];
+    const dir = prep(repo);
     for (const q of asked) {
       for (let run = 1; run <= RUNS; run++) {
         if (already.has(`${arm} ${q.id} ${run}`)) { process.stderr.write(`  skip ${arm} ${q.id} #${run}\n`); continue; }
@@ -1400,11 +1626,68 @@ function doScore() {
   console.log(lw.map((n) => '-'.repeat(n)).join('  '));
   lrows.forEach((r) => console.log(lline(r)));
 
+  // The third arm. Printed only when it has runs, so a pass without it leaves
+  // every table above byte-identical to what the write-up published.
+  //
+  // Only questions all THREE arms have answered are counted. Averaging the lsp
+  // column over a smaller set of questions than the other two and printing the
+  // three side by side is the exact mistake this study has already made twice:
+  // one question shape measured, another shape's claim read off it. The row says
+  // how many questions it dropped.
+  if (scored.some((r) => r.arm === 'lsp')) {
+    console.log('\n== the lsp arm, against both ==\n');
+    const armsOf = (id) => new Set(scored.filter((r) => r.id === id).map((r) => r.arm));
+    const complete = (ids) => ids.filter((i) => {
+      const a = armsOf(i);
+      return a.has('base') && a.has('graph') && a.has('lsp');
+    });
+    const trio = (ids) => ['base', 'graph', 'lsp'].map((arm) => {
+      const rs = scored.filter((r) => r.arm === arm && ids.includes(r.id));
+      if (!rs.length) return null;
+      const perQ = (get) => mean(ids.map((i) => mean(scored
+        .filter((r) => r.arm === arm && r.id === i).map(get))));
+      return {
+        found: rs.reduce((a, r) => a + r.found, 0),
+        of: rs.reduce((a, r) => a + r.of, 0),
+        wrong: rs.reduce((a, r) => a + r.wrong, 0),
+        cost: perQ((r) => r.cost_usd ?? 0),
+        sec: perQ((r) => (r.duration_ms ?? 0) / 1000),
+        turns: perQ((r) => r.num_turns ?? 0),
+      };
+    });
+    const three = (cs, f) => cs.map((c) => (c ? f(c) : '-')).join(' / ');
+    const lspRows = [];
+    const addRow = (label, ids) => {
+      const have = complete(ids);
+      if (!have.length) return;
+      const cs = trio(have);
+      lspRows.push([label, `${have.length}${have.length < ids.length ? ` of ${ids.length}` : ''}`,
+        three(cs, (c) => `${c.found}/${c.of}`),
+        three(cs, (c) => String(c.wrong)),
+        three(cs, (c) => `$${c.cost.toFixed(3)}`),
+        three(cs, (c) => `${c.sec.toFixed(0)}s`),
+        three(cs, (c) => c.turns.toFixed(1))]);
+    };
+    for (const [lang, ids] of byLang) addRow(lang, ids);
+    addRow('all list questions', [...byLang.values()].flat());
+    const follow = QUESTIONS.filter((q) => ['impact', 'reach', 'trace', 'callees', 'usage'].includes(q.kind))
+      .map((q) => q.id);
+    addRow('following the calls', follow);
+    const h3 = ['', 'questions', 'found grep/p-graph/lsp', 'invented', '$ each', 's each', 'steps each'];
+    const w3 = h3.map((h, i) => Math.max(h.length, ...lspRows.map((r) => r[i].length)));
+    const l3 = (c) => c.map((x, i) => x.padEnd(w3[i])).join('  ');
+    console.log(l3(h3));
+    console.log(w3.map((n) => '-'.repeat(n)).join('  '));
+    lspRows.forEach((r) => console.log(l3(r)));
+    console.log('\nA language whose server was not installed has no lsp runs and no row here.');
+  }
+
   const totals = (arm) => {
     const rs = scored.filter((r) => r.arm === arm);
     return `${arm}: ${rs.length} runs, $${rs.reduce((a, r) => a + (r.cost_usd ?? 0), 0).toFixed(2)}, ${(rs.reduce((a, r) => a + (r.duration_ms ?? 0), 0) / 1000 / 60).toFixed(0)} min`;
   };
   console.log(`\n${totals('base')}\n${totals('graph')}`);
+  if (scored.some((r) => r.arm === 'lsp')) console.log(totals('lsp'));
   console.log(`\nper-run detail: ${join(work, 'scored.json')}`);
 }
 
@@ -1809,8 +2092,8 @@ function toolUse() {
 }
 
 if (flag('score')) { doScore(); noise(); followTheCalls(); toolUse(); byLanguage(); boxes(); }
-else if (phase === 'base' || phase === 'graph') { await runArm(String(phase)); }
+else if (phase === 'base' || phase === 'graph' || phase === 'lsp') { await runArm(String(phase)); }
 else {
-  console.log('use --phase base | --phase graph | --score');
+  console.log('use --phase base | --phase graph | --phase lsp | --score');
   process.exit(2);
 }
