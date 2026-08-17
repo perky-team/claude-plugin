@@ -14,8 +14,14 @@ export const PROMPT = 'Continue the work on the feature described in SPEC.md.';
 // finishes: that probe spent $0.30 against a $0.05 budget. And a session that
 // merely ended close to its cap was flagged as cut off when it was not.
 //
-// The margin below is only a fallback for a CLI that does not report the field.
-const CAP_MARGIN = 0.98;
+// But the field alone is not enough either, and that too was measured. A real
+// session spent $0.956 of a $1.00 budget across 26 turns and came back WITHOUT
+// `budget_exhausted`: the CLI sets that flag when a single turn blows through
+// what is left, not when it stops cleanly at the edge. Both cases are "the
+// budget ended this session", so both count.
+//
+// 0.90, not 0.98: the session above would have slipped under a tighter margin.
+const CAP_MARGIN = 0.9;
 
 /**
  * Run one session in `dir`.
@@ -64,10 +70,9 @@ export function runSession({
     num_turns: out.num_turns ?? null,
     usage: out.usage ?? null,
     session_id: out.session_id ?? null,
-    // Ask the CLI when it will answer; guess from the money only when it will not.
-    hit_cap: out.terminal_reason !== undefined
-      ? out.terminal_reason === 'budget_exhausted'
-      : (cost !== null && cost >= capUsd * CAP_MARGIN),
+    // Either signal: the CLI saying so outright, or the money running out.
+    hit_cap: out.terminal_reason === 'budget_exhausted'
+      || (cost !== null && cost >= capUsd * CAP_MARGIN),
     error: null,
   };
 }

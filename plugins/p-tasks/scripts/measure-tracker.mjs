@@ -49,8 +49,12 @@ const SESSIONS = 10;
 // becomes a sharp one — given the same money split into ten sessions with
 // amnesia between them, does a tracker get further?
 //
-// $0.40 is about a seventh of what one uninterrupted session needed.
-const CAP_USD = 0.4;
+// Calibrated, not guessed. $0.40 — a seventh of the uninterrupted cost — bought
+// nothing at all: the session spent its whole budget reading a 935-line spec and
+// finished having changed zero lines. Every session pays that reading cost
+// before it can write anything, so the budget has to clear it with room left
+// over for real work.
+const CAP_USD = 1.0;
 const MODEL = 'sonnet';
 
 const args = process.argv.slice(2);

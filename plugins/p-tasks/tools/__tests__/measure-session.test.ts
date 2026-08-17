@@ -42,16 +42,27 @@ describe('runSession', () => {
       .toBe(true);
   });
 
-  it('does not call a session capped just because it ended near the cap', () => {
+  // Measured: a real session spent $0.956 of a $1.00 budget over 26 turns and
+  // came back with an ordinary terminal reason. The CLI only says
+  // `budget_exhausted` when one turn blows through what is left, not when it
+  // stops cleanly at the edge — but the budget ended that session either way.
+  it('counts a session that spent nearly all its budget, whatever the CLI called it', () => {
     const bin = stub(`process.stdout.write(JSON.stringify(
-      { total_cost_usd: 4.95, terminal_reason: 'end_turn' }));`);
-    expect(runSession({ dir, arm: 'none', capUsd: 5, claudeBin: bin, runner: 'node' }).hit_cap)
+      { total_cost_usd: 0.956, terminal_reason: 'end_turn' }));`);
+    expect(runSession({ dir, arm: 'none', capUsd: 1, claudeBin: bin, runner: 'node' }).hit_cap)
+      .toBe(true);
+  });
+
+  it('leaves a session well inside its budget alone', () => {
+    const bin = stub(`process.stdout.write(JSON.stringify(
+      { total_cost_usd: 0.40, terminal_reason: 'end_turn' }));`);
+    expect(runSession({ dir, arm: 'none', capUsd: 1, claudeBin: bin, runner: 'node' }).hit_cap)
       .toBe(false);
   });
 
-  it('falls back to the money when the CLI reports no terminal reason', () => {
-    const bin = stub(`process.stdout.write(JSON.stringify({ total_cost_usd: 4.95 }));`);
-    expect(runSession({ dir, arm: 'none', capUsd: 5, claudeBin: bin, runner: 'node' }).hit_cap)
+  it('still counts one when the CLI reports no terminal reason at all', () => {
+    const bin = stub(`process.stdout.write(JSON.stringify({ total_cost_usd: 0.95 }));`);
+    expect(runSession({ dir, arm: 'none', capUsd: 1, claudeBin: bin, runner: 'node' }).hit_cap)
       .toBe(true);
   });
 
