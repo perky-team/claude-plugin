@@ -336,11 +336,14 @@ async function main() {
 
       const now = Date.now();
       const status = collectStatus(root, { installed: isTickInstalled(root) });
-      const { jobs } = effectiveJobs({ root, jobsData: readJobs(root), config: readConfig(root) });
+      const jobsData = readJobs(root);
+      const { jobs } = effectiveJobs({ root, jobsData, config: readConfig(root) });
       const { records, skippedLines, skippedFiles } = readLogRecords(root, windowStart(now));
       // aggregate reads no files, so it cannot count unreadable files or lines itself.
       const agg = { ...aggregate(records, now), skippedLines, skippedFiles };
-      const html = renderHtml(status, agg, computeNext(jobs, status.jobs, now), now);
+      // jobs/defaults ride along so each post can show its schedule, model and
+      // concurrency group — collectStatus returns runtime state only, no config.
+      const html = renderHtml(status, agg, computeNext(jobs, status.jobs, now), now, jobs, jobsData.defaults);
 
       if (!out) {
         // Never process.exit() here: this is the biggest thing the CLI writes, and a hard

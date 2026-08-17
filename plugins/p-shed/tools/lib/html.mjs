@@ -1,4 +1,5 @@
 import { barsByDay } from './charts.mjs';
+import { resolveGroup } from './concurrency.mjs';
 
 // The report page. Pure: everything it needs arrives as arguments, and it returns one
 // self-contained HTML document.
@@ -118,11 +119,11 @@ function css() {
 *{box-sizing:border-box}
 body{margin:0;padding:12px;background:var(--plane);color:var(--ink);
   font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}
-.grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));max-width:1200px;margin:0 auto}
+.feed{display:flex;flex-direction:column;gap:12px;max-width:640px;margin:0 auto}
 .card{background:var(--surface);border:1px solid var(--grid);border-radius:8px;padding:12px}
 h1{font-size:15px;margin:0 0 2px}
 h2{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:0 0 8px;font-weight:600}
-.sub{color:var(--ink2);font-size:12px}
+.sub{color:var(--ink2);font-size:12px;margin-top:2px}
 .hero{font-size:28px;margin:2px 0 8px}
 .badge{display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:600}
 .dot{width:8px;height:8px;border-radius:50%;display:inline-block}
@@ -153,20 +154,71 @@ function badge(state) {
   return `<span class="badge badge-${state.key}"><span class="dot" style="background:${state.color}"></span><span style="color:${state.color}">${state.icon}</span> ${escapeHtml(state.label)}</span>`;
 }
 
-function problemCard(j, state, next, agg, now) {
+// One post per job, whatever its state — the feed the owner asked for. Before this, a
+// broken job got a card with its reason and every healthy job was one row in a shared
+// table: two shapes on one page. Now every job gets the same skeleton, so reading the
+// feed does not mean switching what kind of thing you are looking at; only the lines
+// that have something to say are printed (see each `if` below).
+//
+// `jobMeta` is this job's entry in the EFFECTIVE jobs array (profile overrides already
+// applied — see effectiveJobs in lib/profile.mjs), looked up by id in renderHtml and
+// passed in here. It is undefined for a job in status.jobs that no longer has a match
+// there (e.g. removed from jobs.yml while its state file is still on disk) — the post
+// still renders in that case, just without the schedule/model/group line, since that
+// line is the only thing this function reads from `jobMeta`.
+function jobPost(j, state, jobMeta, defaults, agg, next, now) {
   const jobAgg = agg.byJob[j.id];
-  const cost = jobAgg?.costUsd;
-  const detail = [
-    j.breakerTripped && j.consecutiveFailures ? `${j.consecutiveFailures} fails in a row` : '',
-    j.lastRun ? `last ${whenLabel(j.lastRun, now)}${j.lastExit == null ? '' : ` · exit ${escapeHtml(j.lastExit)}`}` : 'never run',
-    j.lastSkipReason ? escapeHtml(j.lastSkipReason) : '',
-    `next ${nextLabel(next[j.id], now)}`,
-    cost != null ? money(cost) : '',
-  ].filter(Boolean).join(' · ');
+
+  // The trouble line. Only a PROBLEM gets one: a healthy job — including an operator or
+  // deploy pause, both deliberate and neither counted as a problem — shows the same
+  // skeleton minus this line, so a held job never reads as broken. `fails` rides along
+  // on a breaker trip only, since that is the one state with a meaningful count to add.
   const reason = j.pauseReason ?? j.breakerReason;
+  const fails = state.problem && j.breakerTripped && j.consecutiveFailures
+    ? ` (${escapeHtml(j.consecutiveFailures)} fails in a row)` : '';
+  const trouble = state.problem && reason ? `<div class="reason">“${escapeHtml(reason)}${fails}”</div>` : '';
+
+  // When it runs, when it last ran — always shown, problem or not. `lastSkipReason`
+  // (usage-limit / api-overload) rides along on the "last" side rather than getting its
+  // own line: it is a property of the last attempt, same as the exit code next to it.
+  const last = j.lastRun == null
+    ? 'never run'
+    : [
+        `last ${whenLabel(j.lastRun, now)}`,
+        j.lastExit != null ? `exit ${escapeHtml(j.lastExit)}` : '',
+        j.lastSkipReason ? escapeHtml(j.lastSkipReason) : '',
+      ].filter(Boolean).join(' ');
+
+  // Schedule is the raw cron string, never a phrased-out "every 3h": a wrong human
+  // phrasing would be a silent lie about when the job actually runs, while the cron
+  // field is already the checkable source everywhere else on this page. The group comes
+  // through resolveGroup, not job.concurrencyGroup read directly, so a job that inherits
+  // its group from `defaults` (rather than naming one itself) still shows it correctly.
+  const metaParts = jobMeta ? [
+    jobMeta.schedule ? escapeHtml(jobMeta.schedule) : '',
+    jobMeta.model ? escapeHtml(jobMeta.model) : '',
+    (() => {
+      const group = resolveGroup(jobMeta, defaults);
+      return group ? `group ${escapeHtml(group)}` : '';
+    })(),
+  ].filter(Boolean) : [];
+
+  // What the job did and cost in the report window — omitted entirely for a job with
+  // no runs there, rather than printing "0 runs" for every job that simply was not due.
+  const runs = jobAgg?.runs ?? 0;
+  const cost = jobAgg?.costUsd;
+
+  // Guard freshness, same wording as status --human's table, shown for any job that has
+  // ever recorded one — a guardless job has no `lastGuard` and prints nothing here.
+  const guard = j.lastGuard
+    ? `guard ${escapeHtml(j.lastGuard.outcome)} ${Math.max(0, Math.round((now - j.lastGuard.at) / 1000))}s ago${j.lastGuard.reason ? ` (${escapeHtml(j.lastGuard.reason)})` : ''}`
+    : '';
+
   // The tail of the most recent non-success run, straight from the log — text a job
   // itself wrote, so it is escaped exactly like every other outside value. `<details>`
-  // keeps it out of the way until an operator asks for it: it can run to ~2 KB.
+  // keeps it out of the way until an operator asks for it: it can run to ~2 KB. Shown on
+  // ANY job, not only a currently-broken one: the breaker can be reset while the
+  // aggregate window still remembers the run that tripped it.
   //
   // A self-pause usually follows a run that exited 0 (that is the whole reason the
   // self-pause marker exists), so the tail shown here can be from an OLDER failed run,
@@ -174,10 +226,14 @@ function problemCard(j, state, next, agg, now) {
   // stale tail as the cause (see C2).
   const rawTail = jobAgg?.lastRaw;
   const rawTailTs = jobAgg?.lastRawTs;
+
   return `<div class="card">
 <div class="row"><strong>${escapeHtml(j.id)}</strong>${badge(state)}</div>
-<div class="sub">${detail}</div>
-${reason ? `<div class="reason">“${escapeHtml(reason)}”</div>` : ''}
+${trouble}
+<div class="sub">next ${nextLabel(next[j.id], now)} · ${last}</div>
+${metaParts.length ? `<div class="sub">${metaParts.join(' · ')}</div>` : ''}
+${runs > 0 ? `<div class="sub">${agg.windowDays}d: ${runs} run${runs === 1 ? '' : 's'}${cost != null ? ` · ${money(cost)}` : ''}</div>` : ''}
+${guard ? `<div class="sub">${guard}</div>` : ''}
 ${rawTail ? `<details><summary>show output (${whenLabel(rawTailTs, now)})</summary><pre>${escapeHtml(rawTail)}</pre></details>` : ''}
 </div>`;
 }
@@ -237,15 +293,6 @@ ${tile(o.guardError, 'guard err', STATUS.serious)}
 </div>`;
 }
 
-function jobsCard(jobs, agg, next, now) {
-  const rows = jobs.map((j) => {
-    const state = jobState(j);
-    const cost = agg.byJob[j.id]?.costUsd;
-    return `<tr><td>${escapeHtml(j.id)} ${badge(state)}</td><td>${nextLabel(next[j.id], now)}</td><td>${money(cost)}</td></tr>`;
-  }).join('');
-  return `<div class="card"><h2>Jobs</h2><table><tr><td>job</td><td>next</td><td>cost</td></tr>${rows}</table></div>`;
-}
-
 function recentCard(agg, now) {
   const rows = agg.recent.map((e) =>
     `<tr><td>${whenLabel(e.ts, now)} ${escapeHtml(e.job ?? '—')}</td><td>${escapeHtml(e.detail)}</td></tr>`).join('');
@@ -265,11 +312,18 @@ function unreadableLogNote(agg) {
   return parts.length ? ` · ${parts.join(' · ')}` : '';
 }
 
-export function renderHtml(status, agg, next, now) {
+// `jobs` is the EFFECTIVE jobs array (profile overrides applied) that pshed.mjs already
+// builds for computeNext — the same one, passed through so each post can show its
+// schedule/model/group. `defaults` (jobs.yml's `defaults:` block) rides along
+// separately because resolveGroup needs it to resolve a group a job inherits rather
+// than names itself; collectStatus's per-job objects carry neither, only runtime state.
+export function renderHtml(status, agg, next, now, jobs = [], defaults = {}) {
+  const jobMetaById = new Map(jobs.map((j) => [j.id, j]));
   const states = status.jobs.map((j) => ({ j, state: jobState(j) }));
   const problems = states.filter((s) => s.state.problem);
   const healthy = states.filter((s) => !s.state.problem);
   const head = `${problems.length} problem${problems.length === 1 ? '' : 's'} · ${money(agg.totals.costUsd)} / ${agg.windowDays}d`;
+  const post = ({ j, state }) => jobPost(j, state, jobMetaById.get(j.id), defaults, agg, next, now);
 
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -278,16 +332,16 @@ export function renderHtml(status, agg, next, now) {
 <title>p-shed · ${escapeHtml(status.task)}</title>
 <style>${css()}</style></head>
 <body>
-<div class="grid">
+<div class="feed">
 <div class="card">
 <h1>p-shed · ${escapeHtml(status.task)}</h1>
 <div class="sub">${head}</div>
 <div class="sub">generated ${dateStr(now)} ${hhmm(now)} · cron ${status.installed === null ? 'unknown' : status.installed ? 'installed' : 'NOT installed'}${profileNote(status.profile)}${status.paused ? ' · SCHEDULER PAUSED' : ''}</div>
 </div>
-${problems.map(({ j, state }) => problemCard(j, state, next, agg, now)).join('')}
+${problems.map(post).join('')}
 ${costCard(agg)}
 ${runsCard(agg)}
-${jobsCard(healthy.map((s) => s.j), agg, next, now)}
+${healthy.map(post).join('')}
 ${recentCard(agg, now)}
 <div class="card sub">window ${agg.windowDays} days${unreadableLogNote(agg)}</div>
 </div>

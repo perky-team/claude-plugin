@@ -73,9 +73,9 @@ describe('renderHtml', () => {
       [job({ id: 'a' }), job({ id: 'b' }), job({ id: 'c' })],
       { a: { at: at('2026-08-14T15:00:00'), due: false }, b: { at: null, due: true }, c: { at: null, due: false } },
     );
-    expect(html).toContain('15:00');
-    expect(html).toContain('>due<');
-    expect(html).toContain('>—<');
+    expect(html).toContain('next 15:00');
+    expect(html).toContain('next due');
+    expect(html).toContain('next —');
   });
 
   it('shows a run cost of an unmeasured window as a dash, not as zero', () => {
@@ -228,18 +228,18 @@ describe('renderHtml', () => {
   describe('next-run time formatting (A4)', () => {
     it('shows a today time as a bare time', () => {
       const html = page([job({ id: 'a' })], { a: { at: at('2026-08-14T18:00:00'), due: false } });
-      expect(html).toContain('<td>18:00</td>');
+      expect(html).toContain('next 18:00');
     });
 
     it('shows a tomorrow time with its date', () => {
       const html = page([job({ id: 'a' })], { a: { at: at('2026-08-15T09:00:00'), due: false } });
-      expect(html).toContain('<td>2026-08-15 09:00</td>');
+      expect(html).toContain('next 2026-08-15 09:00');
     });
 
     it('shows a months-away time with its date, not a bare clock time', () => {
       const html = page([job({ id: 'a' })], { a: { at: at('2027-01-01T00:00:00'), due: false } });
-      expect(html).toContain('<td>2027-01-01 00:00</td>');
-      expect(html).not.toContain('<td>00:00</td>');
+      expect(html).toContain('next 2027-01-01 00:00');
+      expect(html).not.toContain('next 00:00');
     });
   });
 
@@ -292,5 +292,81 @@ describe('renderHtml', () => {
 
   it('loads its favicon from a data: URI, never from the network (C8)', () => {
     expect(page([job()])).toContain('<link rel="icon" href="data:,">');
+  });
+
+  describe('one feed, one post shape per job', () => {
+    it('shows every job exactly once, problem or healthy', () => {
+      const html = page([
+        job({ id: 'a' }),
+        job({ id: 'b', breakerTripped: true, breakerReason: 'exit 1' }),
+        job({ id: 'c' }),
+      ]);
+      for (const id of ['a', 'b', 'c']) {
+        const occurrences = html.match(new RegExp(`<strong>${id}</strong>`, 'g')) ?? [];
+        expect(occurrences).toHaveLength(1);
+      }
+    });
+
+    it('shows a healthy job\'s schedule, model and concurrency group', () => {
+      const jobs = [{ id: 'worker', schedule: '0 */3 * * *', model: 'sonnet', concurrencyGroup: 'tree' }];
+      const html = renderHtml(status([job()]), aggregate([], NOW), {}, NOW, jobs, {});
+      expect(html).toContain('0 */3 * * *');
+      expect(html).toContain('sonnet');
+      expect(html).toContain('group tree');
+    });
+
+    it('resolves a group a job inherits from defaults, not just its own field', () => {
+      // resolveGroup (lib/concurrency.mjs) is the single place that knows a job with no
+      // concurrencyGroup of its own still belongs to defaults.concurrencyGroup — reading
+      // job.concurrencyGroup directly here would silently show no group for it.
+      const jobs = [{ id: 'worker', schedule: '* * * * *' }];
+      const html = renderHtml(status([job()]), aggregate([], NOW), {}, NOW, jobs, { concurrencyGroup: 'tree' });
+      expect(html).toContain('group tree');
+    });
+
+    it('renders a job with no matching metadata entry, without its schedule/model/group line', () => {
+      // Reachable when a job is removed from jobs.yml but its state file (and so its
+      // status entry) is still on disk — the fifth argument then has no entry for it.
+      const html = renderHtml(status([job({ id: 'ghost' })]), aggregate([], NOW), {}, NOW, [], {});
+      expect(html).toContain('<strong>ghost</strong>');
+      expect(html).not.toContain('group ');
+    });
+
+    it('shows a job\'s guard freshness when it has recorded one', () => {
+      const html = renderHtml(
+        status([job({ lastGuard: { at: NOW - 40_000, outcome: 'quiet', reason: 'no work' } })]),
+        aggregate([], NOW), {}, NOW,
+      );
+      expect(html).toContain('guard quiet 40s ago (no work)');
+    });
+
+    it('escapes a guard\'s reason text', () => {
+      const html = renderHtml(
+        status([job({ lastGuard: { at: NOW, outcome: 'quiet', reason: '<script>x</script>' } })]),
+        aggregate([], NOW), {}, NOW,
+      );
+      expect(html).not.toContain('<script>x</script>');
+      expect(html).toContain('&lt;script&gt;x&lt;/script&gt;');
+    });
+
+    it('does not show a trouble line for a healthy job, even a held one with a reason', () => {
+      // The three problem states are breaker / self-pause / retry-pending only — an
+      // operator pause is deliberate and must not read like the other two.
+      const html = page([job({ paused: true, pauseOrigin: 'operator', pauseReason: 'holding for maintenance' })]);
+      expect(html).not.toContain('holding for maintenance');
+    });
+  });
+
+  describe('single-column feed layout', () => {
+    it('lays the feed out as one column, centred, at every width', () => {
+      const html = page([job()]);
+      // No responsive breakpoint and no multi-column grid — a laptop must not fan the
+      // feed out into several columns the way the old auto-fit grid did.
+      expect(html).not.toContain('auto-fit');
+      expect(html).not.toContain('minmax');
+      expect(html).toMatch(/\.feed\{[^}]*flex-direction:column/);
+      expect(html).toMatch(/\.feed\{[^}]*max-width:640px/);
+      expect(html).toMatch(/\.feed\{[^}]*margin:0 auto/);
+    });
   });
 });

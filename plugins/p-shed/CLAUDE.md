@@ -220,6 +220,22 @@ Pure scheduler/launcher. Key decisions:
   SVG; expanders are native `<details>`. It is read on a phone, and a half-loaded
   dashboard is worse than a plain one. `__tests__/html.test.ts` pins the absence of
   `<script`, `http://` and `https://`.
+- **Every job is one post in a single feed, whatever its state.** `lib/html.mjs`'s
+  `jobPost` renders the same skeleton for a broken job and a healthy one — before this,
+  a broken job got its own card and every healthy job was a row in a shared table, two
+  shapes on one page. Only the trouble line and the output-tail `<details>` are
+  conditional on the job's state; everything else (next/last, schedule/model/group,
+  runs and cost in the window, guard freshness) always tries to print. `renderHtml`
+  takes two more arguments for this: the EFFECTIVE jobs array `pshed.mjs` already builds
+  for `computeNext` (schedule/model/concurrencyGroup — `collectStatus` returns runtime
+  state only, none of that), and `defaults` from `jobs.yml`, because a job's group is
+  resolved through `resolveGroup` (`lib/concurrency.mjs`), not read off
+  `job.concurrencyGroup` directly — a job with no group of its own can still inherit one
+  from `defaults`. A job in `status.jobs` with no matching entry in the jobs array (state
+  left behind by a job removed from `jobs.yml`) still renders, just without the
+  schedule/model/group line. The feed is one column at every width (`.feed`, no
+  `auto-fit`/`minmax`, `max-width:640px`, centred) — a laptop showing three or four
+  columns was the layout this branch replaced.
 - **Run outcomes are four stat tiles, never one stacked proportion bar.** The four
   status colours fail the palette checks as adjacent fills — critical against good
   measures dE 4.1 under deuteranopia, serious against warning 13.6 for normal vision,
