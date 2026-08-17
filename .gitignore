@@ -12,9 +12,6 @@ desktop.ini
 # Node
 node_modules/
 
-# p-observe
-.pobserve/
-
 # p-graph local index — rebuildable, never committed
 .pgraph/
 

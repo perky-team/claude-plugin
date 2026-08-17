@@ -517,11 +517,10 @@ describe('tick', () => {
     // I3: the README's run-log contract promises `ts`/`job`/`durationMs` always and
     // `outcome` only ever one of success|failure|skipped|guard-error. The reclaim row
     // used to violate both (`{ ts, outcome: 'reclaimed-deploy-pause', reclaimed }` — no
-    // `job` field at all, and an `outcome` value outside the documented enum), which is
-    // exactly what made plugins/p-observe's adapter fall through to a phantom
-    // `job.launched` for job "-" on every reclaim (it has no `exit` field, so it isn't a
-    // real completion either). The fix logs a distinct `action` and an explicit `job:
-    // null`, honest about not being a run record.
+    // `job` field at all, and an `outcome` value outside the documented enum), which would
+    // make `lib/report.mjs`'s `aggregate` misread the row as a real run instead of an
+    // event (it branches on `action` present with no `outcome`). The fix logs a distinct
+    // `action` and an explicit `job: null`, honest about not being a run record.
     it('logs the reclaim as a distinct action with an explicit job:null, not an outcome', async () => {
       writeJobs(root, { version: 1, defaults: {}, jobs: [{ id: 'w', schedule: '* * * * *', enabled: true, prompt: 'go' }] });
       writeGlobalPause(root, { reason: 'prompt update', origin: 'deploy', now: NOW });

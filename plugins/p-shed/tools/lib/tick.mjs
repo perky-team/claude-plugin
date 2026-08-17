@@ -46,9 +46,10 @@ export async function tick({ root, now = Date.now(), deps = {} }) {
     // NOT a run record: no job launched, so `job` is explicit null rather than an absent
     // field, and this gets its own `action` rather than an `outcome` value — the README's
     // run-log contract promises `ts`/`job`/`durationMs` always and `outcome` only ever
-    // `success`|`failure`|`skipped`|`guard-error` for a real run. A consumer keyed on that
-    // contract (see plugins/p-observe's adapter) needs a distinct, recognisable shape here
-    // instead of a row that quietly fails both promises.
+    // `success`|`failure`|`skipped`|`guard-error` for a real run. `lib/report.mjs`'s
+    // `aggregate` branches on `action` being present with no `outcome` before treating a
+    // row as an event rather than a run, so this row needs a distinct, recognisable shape
+    // instead of quietly failing both promises.
     d.appendLog(root, { ts: now, job: null, action: 'reclaimed-deploy-pause', reclaimed }, now);
   }
 

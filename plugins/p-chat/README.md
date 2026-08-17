@@ -2,7 +2,7 @@
 
 A deliberately **dumb** Telegram channel for Claude Code loops: the mouth and ears,
 never the brain. p-chat never schedules anything and never decides content — p-shed
-jobs own both (p-shed = brains/schedule, p-observe = eyes, p-chat = mouth and ears).
+jobs own both (p-shed = brains/schedule, p-chat = mouth and ears).
 Zero external deps: the Bot API is plain HTTPS + JSON on Node ≥ 18.
 
 The core trick: `pchat guard` is a [p-shed job guard](../p-shed/README.md#job-guards).
@@ -45,7 +45,7 @@ Tool: `node tools/pchat.mjs <command>` (JSON output; exit `0` ok / `1` internal 
       "allowedChatIds": [123456789],
       "defaultChatId": 123456789,
       "commands": {
-        "/status": "node <p-observe>/tools/pobserve.mjs status",
+        "/status": "node <p-shed>/tools/pshed.mjs status",
         "/jobs":   "node <p-shed>/tools/pshed.mjs status --human"
       },
       "sessionFile": ".pchat/session.md"

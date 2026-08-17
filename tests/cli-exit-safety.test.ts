@@ -117,10 +117,9 @@ const EXIT_CODE_PLUGINS = [
   'p-shed',
   'p-wiki',
 ];
-// Deliberately NOT listed yet, and each still carries the truncation bug:
-//   p-graph   — die() hard-exits; emitJson() writes without any exit code at all
-//   p-observe — main().then((code) => process.exit(code ?? 0))
-// Add them here when they migrate; leaving them out is a known gap, not an oversight.
+// Deliberately NOT listed yet, and still carries the truncation bug:
+//   p-graph — die() hard-exits; emitJson() writes without any exit code at all
+// Add it here when it migrates; leaving it out is a known gap, not an oversight.
 
 describe('CLI exit safety: emitJson must not hard-exit', () => {
   for (const plugin of EXIT_CODE_PLUGINS) {

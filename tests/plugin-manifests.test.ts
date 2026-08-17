@@ -62,7 +62,8 @@ describe('plugin manifests', () => {
       // Discovery is by source text rather than a hardcoded list: a new CLI that adds
       // --version is covered automatically, and a CLI whose --version breaks fails here
       // instead of silently dropping out of the suite. Plugins with no CLI (p-flow,
-      // p-statusline) and CLIs with no --version (p-observe) have nothing to check.
+      // p-statusline) have nothing to check; so would a CLI with no --version flag, if one
+      // is ever added.
       const cli = cliPath(plugin);
       const declaresVersionFlag = cli !== null && readFileSync(cli, 'utf-8').includes('--version');
       it.runIf(declaresVersionFlag)('CLI --version prints plugin.json#version', () => {

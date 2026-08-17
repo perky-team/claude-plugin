@@ -13,7 +13,7 @@ const BEADS_RULE = join(HERE, '..', 'beads-arm-rule.md');
 // switched on is not ours to predict.
 export const OFF_SETTINGS = JSON.stringify({
   enabledPlugins: Object.fromEntries([
-    ...['p-graph', 'p-tasks', 'p-wiki', 'p-statusline', 'p-flow', 'p-shed', 'p-observe', 'p-chat']
+    ...['p-graph', 'p-tasks', 'p-wiki', 'p-statusline', 'p-flow', 'p-shed', 'p-chat']
       .map((n) => [`${n}@perky.team`, false]),
     ['gopls-lsp@claude-plugins-official', false],
   ]),

@@ -211,11 +211,11 @@ Pure scheduler/launcher. Key decisions:
   blast-radius widening `lib/target.mjs` exists to prevent.
 - **`report` renders; it never serves.** p-shed has no HTTP server, no port, and no
   access decision, and must not grow one — delivery is an off-the-shelf static file
-  server the operator runs, wired up in `jobs.yml` like any other job. A dashboard
-  plugin that read `.pshed/` from outside was considered and rejected: that is exactly
-  what p-observe does — `plugins/p-observe/tools/lib/adapters/pshed.mjs` keeps its own
-  hand-rolled parser for `jobs.yml`, separate from and in step with this plugin's own
-  (js-yaml-based) one in `lib/io.mjs`.
+  server the operator runs, wired up in `jobs.yml` like any other job. A separate
+  dashboard plugin that read `.pshed/` from outside was considered and rejected: it
+  would need its own parser for `jobs.yml`, kept in step by hand with this plugin's
+  real one (js-yaml-based, `lib/io.mjs`) — duplicated knowledge that drifts. `report`
+  renders from inside p-shed instead, off the same data and the same parser.
 - **The page carries no JavaScript and fetches nothing.** Charts are server-rendered
   SVG; expanders are native `<details>`. It is read on a phone, and a half-loaded
   dashboard is worse than a plain one. `__tests__/html.test.ts` pins the absence of

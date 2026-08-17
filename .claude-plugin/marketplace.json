@@ -37,11 +37,6 @@
       "description": "Scheduler/launcher for Claude Code headless runs: cron-scheduled `claude -p` launches with timeout, duplicate guard, catch-up, and log rotation. Per-job guard command gates each launch (0 launch / 75 quiet / else breaker), and its last stdout line is kept as the reason `status` shows. Speed profiles make pace one word: a `profiles:` table in jobs.yml, an active name resolved from PSHED_PROFILE / a file outside the scheduled repo / defaults.profile, applied in memory by tick, status and run alike. Maintenance windows via `deploy`. Skills: init, start, stop, job, reset-breaker."
     },
     {
-      "name": "p-observe",
-      "source": "./plugins/p-observe",
-      "description": "Zero-touch realtime observability: watches p-shed/p-tasks/p-graph/p-wiki runtime state and emits a normalized human-readable event stream (pobserve watch/status/capture/tui). Skills: init, watch, tui, help."
-    },
-    {
       "name": "p-chat",
       "source": "./plugins/p-chat",
       "description": "Dumb Telegram channel for Claude Code loops: a p-shed job guard + pchat CLI (init, guard, pending, ack, send, reset, status). Scripted /commands answered without Claude; free-text questions trigger a Claude responder launch via p-shed. Zero deps. Skills: init, respond."

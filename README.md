@@ -11,7 +11,7 @@ Open Claude Code CLI and add this repository as a marketplace, then install any 
 /plugin install <plugin-name>@perky.team
 ```
 
-`<plugin-name>` is one of `p-wiki`, `p-flow`, `p-tasks`, `p-statusline`, `p-graph`, `p-shed`, `p-observe`, `p-chat` (see below).
+`<plugin-name>` is one of `p-wiki`, `p-flow`, `p-tasks`, `p-statusline`, `p-graph`, `p-shed`, `p-chat` (see below).
 
 `/plugin install` asks for an install scope: **user** (you, in every project — the usual pick), **project** (everyone on this repo; the entry goes into `.claude/settings.json`), or **local** (you, this repo only). From a shell, `claude plugin install <plugin-name>@perky.team --scope user` skips the prompt. Run `/reload-plugins` afterwards to pick the plugin up in the current session.
 
@@ -269,12 +269,6 @@ Scheduler/launcher for Claude Code headless runs. `p-shed` schedules jobs (cron 
 
 Skills: `init`, `start`, `stop`, `job`, `reset-breaker`.
 
-### [`p-observe`](./plugins/p-observe/)
-
-Zero-touch realtime observability with a bundled `pobserve` CLI. Watches the runtime state of `p-shed`, `p-tasks`, `p-graph`, and `p-wiki` in the current repo — without modifying them — and emits a normalized, human-readable event stream (`pobserve watch`), a one-shot snapshot (`pobserve status`), and an opt-in headless journal (`pobserve capture`). Fully local, zero dependencies.
-
-Skills: `init`, `watch`, `tui`, `help`.
-
 ### [`p-chat`](./plugins/p-chat/)
 
 A deliberately dumb Telegram channel with a bundled `pchat` CLI — the mouth and ears of a Claude Code loop, never the brain. Runs as a p-shed job guard: scripted `/commands` are answered directly (no Claude launch, works even when Claude is usage-limited); a pending free-text question makes the guard request a Claude responder launch. Fail-closed chat allowlist, at-least-once delivery, zero dependencies.
@@ -356,18 +350,12 @@ Complements `npm test`: tests catch structural drift in our manifests/skills, `v
 │   │   ├── README.md
 │   │   ├── skills/
 │   │   └── tools/           ← the pshed CLI (timer, guard, breaker, log rotation)
-│   ├── p-chat/              ← dumb Telegram channel (pchat CLI + p-shed guard)
-│   │   ├── .claude-plugin/
-│   │   │   └── plugin.json
-│   │   ├── README.md
-│   │   ├── skills/
-│   │   └── tools/           ← the pchat CLI (config, queue, api, send, core)
-│   └── p-observe/           ← zero-touch realtime observability (pobserve CLI)
+│   └── p-chat/              ← dumb Telegram channel (pchat CLI + p-shed guard)
 │       ├── .claude-plugin/
 │       │   └── plugin.json
 │       ├── README.md
 │       ├── skills/
-│       └── tools/           ← the pobserve CLI (adapters, bus, journal, renderers)
+│       └── tools/           ← the pchat CLI (config, queue, api, send, core)
 └── README.md                ← this file
 ```
 

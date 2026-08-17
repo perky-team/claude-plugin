@@ -32,5 +32,5 @@ Ask for the token file path, then:
 Confirm with the owner it arrived on their phone.
 
 ## Step 4 — Explain what's next
-- Scripted commands: add entries to `commands` in `.pchat.json` (e.g. `"/status": "node <path>/pobserve.mjs status"`). The guard answers them without Claude.
+- Scripted commands: add entries to `commands` in `.pchat.json` (e.g. `"/status": "node <path>/pshed.mjs status"`). The guard answers them without Claude.
 - Free-text answering needs a p-shed job whose guard is `node <this plugin>/tools/pchat.mjs guard` and whose prompt invokes the `/p-chat:respond` skill. Recommend `guardTimeoutSec: 120` and `maxConsecutiveFailures: 10` for that job (short network outages must not trip the breaker).
