@@ -2,7 +2,7 @@ import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { appendLog, rotateLogs, readLogRecords } from '../lib/logs.mjs';
+import { appendLog, rotateLogs, readLogRecords, resolveLogRetentionDays } from '../lib/logs.mjs';
 import { paths } from '../lib/io.mjs';
 
 let root: string;
@@ -58,6 +58,59 @@ describe('rotateLogs', () => {
     expect(existsSync(join(dir, 'cron.log'))).toBe(true);
     expect(existsSync(join(dir, 'notes.txt'))).toBe(true);
     expect(existsSync(join(dir, '2026-01-01.jsonl'))).toBe(false);
+  });
+
+  it('deletes nothing when retentionDays is 0 (keep forever)', () => {
+    const dir = paths(root).logsDir;
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, '2020-01-01.jsonl'), 'x\n');   // years old
+    writeFileSync(join(dir, '2026-07-16.jsonl'), 'x\n');   // today
+    const deleted = rotateLogs(root, day('2026-07-16'), 0);
+    expect(deleted).toEqual([]);
+    expect(existsSync(join(dir, '2020-01-01.jsonl'))).toBe(true);
+    expect(existsSync(join(dir, '2026-07-16.jsonl'))).toBe(true);
+  });
+
+  it('deletes nothing for a negative retentionDays either, instead of wiping every file', () => {
+    const dir = paths(root).logsDir;
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, '2026-07-16.jsonl'), 'x\n');   // today — still being written
+    const deleted = rotateLogs(root, day('2026-07-16'), -1);
+    expect(deleted).toEqual([]);
+    expect(existsSync(join(dir, '2026-07-16.jsonl'))).toBe(true);
+  });
+
+  it('honours a configured retention shorter than the historical default', () => {
+    const dir = paths(root).logsDir;
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, '2026-07-14.jsonl'), 'x\n');   // 2 days old
+    writeFileSync(join(dir, '2026-07-16.jsonl'), 'x\n');   // today
+    const deleted = rotateLogs(root, day('2026-07-16'), 1);
+    expect(deleted).toEqual(['2026-07-14.jsonl']);
+    expect(existsSync(join(dir, '2026-07-16.jsonl'))).toBe(true);
+  });
+});
+
+describe('resolveLogRetentionDays', () => {
+  it('defaults to 7 when defaults.logRetentionDays is absent', () => {
+    expect(resolveLogRetentionDays({})).toBe(7);
+    expect(resolveLogRetentionDays(undefined)).toBe(7);
+  });
+
+  it('honours a configured value', () => {
+    expect(resolveLogRetentionDays({ logRetentionDays: 30 })).toBe(30);
+  });
+
+  it('honours 0 (keep everything)', () => {
+    expect(resolveLogRetentionDays({ logRetentionDays: 0 })).toBe(0);
+  });
+
+  it('falls back to 7 on a non-numeric value, without throwing', () => {
+    expect(resolveLogRetentionDays({ logRetentionDays: 'forever' })).toBe(7);
+  });
+
+  it('falls back to 7 on a negative value, without throwing', () => {
+    expect(resolveLogRetentionDays({ logRetentionDays: -5 })).toBe(7);
   });
 });
 

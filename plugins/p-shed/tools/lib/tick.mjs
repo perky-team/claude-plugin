@@ -2,7 +2,7 @@ import { readJobs, readConfig, readJobState, writeJobState, removeJobState, list
 import { parseCron, isDue } from './cron.mjs';
 import { runJob as realRunJob } from './launch.mjs';
 import { runGuard as realRunGuard, guardReason } from './guard.mjs';
-import { appendLog as realAppendLog, rotateLogs as realRotateLogs } from './logs.mjs';
+import { appendLog as realAppendLog, rotateLogs as realRotateLogs, resolveLogRetentionDays } from './logs.mjs';
 import { readPause } from './breaker.mjs';
 import { readGlobalPause } from './pause.mjs';
 import { isPidAlive, readPid, writePid, removePid } from './pids.mjs';
@@ -59,10 +59,13 @@ export async function tick({ root, now = Date.now(), deps = {} }) {
   // marker but for every job at once.
   if (d.readGlobalPause(root)) return { action: 'tick', paused: true, launched: 0, ...(reclaimed.length ? { reclaimed } : {}) };
 
-  d.rotateLogs(root, now);
   const jobsData = d.readJobs(root);
   const config = d.readConfig(root);
   const { defaults } = jobsData;
+  // Read the same way every other default is read here (job-then-defaults elsewhere,
+  // defaults-only for this one — retention has no per-job meaning). resolveLogRetentionDays
+  // is lenient on purpose: a bad value must shrink the tick's history, not stop the loop.
+  d.rotateLogs(root, now, resolveLogRetentionDays(defaults));
   // Speed profile: an operator-owned pace whose ACTIVE value can live outside this
   // repository (lib/profile.mjs). Overrides are layered in memory only — rewriting
   // jobs.yml would dirty the working tree of the repo the loop commits to, and the loop

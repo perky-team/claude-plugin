@@ -6,7 +6,7 @@ import { paths, readJobs, readConfig } from './lib/io.mjs';
 import { readLogRecords } from './lib/logs.mjs';
 import { aggregate, computeNext, windowStart } from './lib/report.mjs';
 import { renderHtml } from './lib/html.mjs';
-import { setJob, rmJob, ValidationError } from './lib/jobs.mjs';
+import { setJob, rmJob, jobFieldError, ValidationError } from './lib/jobs.mjs';
 import { PROFILE_FIELDS, effectiveJobs, profileFilePath, resolveProfile, validateProfiles } from './lib/profile.mjs';
 import { resetBreaker, writePause, readPause, removePause } from './lib/breaker.mjs';
 import { tick as runTick } from './lib/tick.mjs';
@@ -337,6 +337,14 @@ async function main() {
       const now = Date.now();
       const status = collectStatus(root, { installed: isTickInstalled(root) });
       const jobsData = readJobs(root);
+      // Strict here, unlike the tick: a human runs `report` (often via the guard-only
+      // job the README documents) and watches its result, so a bad retention setting
+      // should be a loud validation error, not a silent fallback. The tick reads the
+      // same field leniently — see lib/logs.mjs's resolveLogRetentionDays.
+      if (jobsData.defaults?.logRetentionDays !== undefined) {
+        const retentionErr = jobFieldError('logRetentionDays', jobsData.defaults.logRetentionDays);
+        if (retentionErr) return die(retentionErr, 2);
+      }
       const { jobs } = effectiveJobs({ root, jobsData, config: readConfig(root) });
       const { records, skippedLines, skippedFiles } = readLogRecords(root, windowStart(now));
       // aggregate reads no files, so it cannot count unreadable files or lines itself.

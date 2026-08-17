@@ -46,7 +46,7 @@ Tool: `node tools/pshed.mjs <command>` (exit `0` ok / `1` env / `2` validation; 
 | `jobs.yml` | git | `version`, `defaults` (may carry `profile:`), `jobs[]{ id, schedule, enabled, cwd?, prompt, timeoutSec?, permissionMode?, allowedTools?, model?, effort?, maxConsecutiveFailures?, guard?, guardTimeoutSec?, concurrencyGroup? }`, optional `profiles{}` (see Speed profiles) |
 | `config.json` | gitignore | `{ nodeBin, claudeBin, profileFile? }` (resolved at init; `profileFile` is the path — absolute, or relative to the repo root — of the file holding the active profile name) |
 | `state/<id>.json` | gitignore | per-job `{ lastRun, lastExit, pid, consecutiveFailures, consecutiveGuardFailures?, lastGuard?, breakerTripped?, breakerReason?, breakerAt?, lastSkipReason?, lastSkipAt?, lastSkipResetAt?, consecutiveSkips?, retryNotBefore? }` — one file per job (no shared state file). `lastSkip*` records the most recent skip (`lastSkipReason` is `usage-limit` or `api-overload`) and is cleared once the job runs for real again; `retryNotBefore` (epoch ms) is the earliest moment a quota/overload skip may relaunch and `consecutiveSkips` counts the run of them — both absent unless a retry is pending, and both cleared by any path that consumes the slot; `lastGuard` records the most recent guard check (`{ at, outcome, exit, reason? }` — `reason` is the last non-empty line of the guard's stdout, collapsed to one line and capped at 120 chars; absent when the guard printed nothing) |
-| `logs/<date>.jsonl` | gitignore | one record per run (see below); auto-rotated (7-day retention) |
+| `logs/<date>.jsonl` | gitignore | one record per run (see below); auto-rotated on `defaults.logRetentionDays` (default 7 days, `0` keeps every log forever). `report` (below) can only ever show what these files still hold, so a short retention also shortens the report |
 | `run/<id>.pid` | gitignore | duplicate-guard pidfile |
 | `run/<id>.pause` | gitignore | per-job pause marker (contents = a human-readable reason). A job's own run writes it to stop being scheduled; `pause --id/--group` writes the same file with a leading `#pshed origin=operator` line. Presence pauses, so a bare `touch` works and an empty marker is a valid self-pause |
 | `run/PAUSED` | gitignore | global pause marker (`{ createdAt, reason?, origin? }`); halts every job while cron stays installed. Written by `pause`, removed by `resume`. An operator `pause` landing on a `deploy`-origin marker takes ownership of it (origin flips to its own, reason replaces the deploy's) so the halt survives the deploy's own release |
@@ -104,6 +104,7 @@ Example `jobs.yml`:
       effort: low
       maxConsecutiveFailures: 3
       # usageLimitPattern: "my-custom-limit-regex"  # optional; overrides the built-in limit/overload detector
+      # logRetentionDays: 7   # optional; default 7, 0 keeps every log forever, negative is invalid
     jobs:
       - id: task-runner
         schedule: "*/15 * * * *"
@@ -515,8 +516,11 @@ here blocks that, and nothing here helps.
   instructions in the prompt.
 - Requires the OS scheduler (`schtasks` on Windows, user `crontab` on Linux/macOS) and
   `node` + `claude` resolvable at install time.
-- **The report covers only the last 7 days**, because that is how long `logs/` is kept.
-  A longer trend needs a retention change, which this does not include.
+- **The report covers only the last 7 days.** That is a fixed property of the report
+  page itself, not of `logs/` — but the report can never show more than `logs/` still
+  holds, so setting `defaults.logRetentionDays` below 7 shortens the report too. Raising
+  it above 7 keeps more raw history on disk (useful for your own tooling) without
+  changing what the built-in report displays.
 - **Windows: the tick runs in your interactive session.** A brief console window may
   appear each minute, and jobs run only while you are logged on. Running hidden and
   when logged off needs a Task Scheduler "run whether logged on or not" (S4U) entry,

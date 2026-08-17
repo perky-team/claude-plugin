@@ -1,6 +1,7 @@
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { paths } from './io.mjs';
+import { jobFieldError } from './jobs.mjs';
 
 function dateStr(ms) {
   return new Date(ms).toISOString().slice(0, 10); // YYYY-MM-DD (UTC)
@@ -15,6 +16,11 @@ export function appendLog(root, record, nowMs) {
 export function rotateLogs(root, nowMs, retentionDays = 7) {
   const dir = paths(root).logsDir;
   if (!existsSync(dir)) return [];
+  // 0 means "keep every log" (rotation disabled) — the operator's own opt-out, not a
+  // 0-day retention window. A negative value gets the same no-op: the formula below
+  // would put the cutoff in the FUTURE, which deletes every file including the one
+  // still being appended to today. Fail toward keeping data, never toward wiping it.
+  if (retentionDays <= 0) return [];
   const cutoff = Date.parse(dateStr(nowMs) + 'T00:00:00Z') - retentionDays * 24 * 60 * 60 * 1000;
   const deleted = [];
   for (const name of readdirSync(dir)) {
@@ -26,6 +32,16 @@ export function rotateLogs(root, nowMs, retentionDays = 7) {
     }
   }
   return deleted;
+}
+
+// The tick's own reading of `defaults.logRetentionDays` — same field, same rule as
+// jobFieldError, but LENIENT: missing, non-numeric or negative all fall back to the
+// historical 7-day default instead of throwing. A typo'd retention setting must shrink
+// the tick's history, never stop the loop — the same fail-toward-running split
+// lib/profile.mjs uses (applyProfile is lenient, validateProfiles is strict).
+export function resolveLogRetentionDays(defaults = {}) {
+  const value = defaults?.logRetentionDays;
+  return jobFieldError('logRetentionDays', value) === null ? value : 7;
 }
 
 // Every dated log file in the directory, parsed line by line. The tick appends to these

@@ -85,6 +85,20 @@ describe('pshed report', () => {
     expect(run(['report']).code).toBe(1);
   });
 
+  it('exits 2 on an invalid defaults.logRetentionDays', () => {
+    writeFileSync(join(root, '.pshed', 'jobs.yml'),
+      'version: 1\ndefaults:\n  logRetentionDays: -1\njobs:\n  - id: worker\n    schedule: "*/15 * * * *"\n    prompt: "x"\n');
+    expect(run(['report']).code).toBe(2);
+  });
+
+  it('accepts logRetentionDays: 0 (keep everything)', () => {
+    writeFileSync(join(root, '.pshed', 'jobs.yml'),
+      'version: 1\ndefaults:\n  logRetentionDays: 0\njobs:\n  - id: worker\n    schedule: "*/15 * * * *"\n    prompt: "x"\n');
+    const { out, code } = run(['report']);
+    expect(code).toBe(0);
+    expect(out.startsWith('<!doctype html>')).toBe(true);
+  });
+
   it('exits 1 and leaves nothing behind when the target cannot be written', () => {
     const target = join(root, 'no-such-dir', 'board.html');
     expect(run(['report', '--out', target]).code).toBe(1);

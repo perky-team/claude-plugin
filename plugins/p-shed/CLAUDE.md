@@ -319,3 +319,25 @@ Pure scheduler/launcher. Key decisions:
   fields are additive to `aggregate()`'s return shape and follow its existing rule: a
   missing or non-numeric field is left out,
   never coerced.
+- **`defaults.logRetentionDays` replaces the old hardcoded `retentionDays = 7` default
+  parameter on `rotateLogs`, and it is read TWICE, on purpose, in two different moods.**
+  Before this, nothing could ever pass a third argument to `rotateLogs` — not `jobs.yml`,
+  not an env var, not a flag — so `report`, which reads straight from these files, could
+  never show more history than seven days no matter what an operator wanted: the numbers
+  were collected correctly and then thrown away. `jobFieldError`'s `logRetentionDays`
+  case (`lib/jobs.mjs`) is the one rule; `resolveLogRetentionDays` (`lib/logs.mjs`) reads
+  it LENIENTLY for the tick — missing, non-numeric, or negative all fall back to 7
+  instead of throwing, because a typo'd retention setting must shrink the tick's history,
+  not stop the loop. `report` reads the same field STRICTLY (exit 2 on a bad value)
+  because a human runs it, often via the guard-only job this README documents, and a
+  config mistake should be loud there instead of silently doing the wrong thing forever.
+  This is the same lenient/strict split `lib/profile.mjs` already uses for
+  `applyProfile` vs `validateProfiles` — one rule, two callers, never two copies of the
+  rule itself. `0` means "keep every log forever", not "0-day retention": `rotateLogs`
+  treats any `retentionDays <= 0` as a no-op, because the cutoff formula would otherwise
+  land in the FUTURE for a negative value and delete every file, including the one
+  today's tick is still appending to. This is retention only — the report's own display
+  window (`aggregate`'s `windowDays`, still hardcoded at 7) is untouched: raising
+  retention keeps more raw JSONL on disk for an operator's own tooling, it does not make
+  the built-in report page show a longer trend. Lowering it below 7 DOES shrink what the
+  report can show, because the report can only ever display what `logs/` still holds.

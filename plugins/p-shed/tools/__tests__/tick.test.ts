@@ -75,6 +75,35 @@ describe('tick', () => {
     expect(deps.rotateLogs).toHaveBeenCalledOnce();
   });
 
+  it('rotates logs with the default 7-day retention when defaults sets none', async () => {
+    writeJobs(root, { version: 1, defaults: {}, jobs: [] });
+    const deps = fakeDeps();
+    await tick({ root, now: NOW, deps });
+    expect(deps.rotateLogs).toHaveBeenCalledWith(root, NOW, 7);
+  });
+
+  it('passes a configured defaults.logRetentionDays through to rotateLogs', async () => {
+    writeJobs(root, { version: 1, defaults: { logRetentionDays: 30 }, jobs: [] });
+    const deps = fakeDeps();
+    await tick({ root, now: NOW, deps });
+    expect(deps.rotateLogs).toHaveBeenCalledWith(root, NOW, 30);
+  });
+
+  it('passes 0 through unchanged (keep every log)', async () => {
+    writeJobs(root, { version: 1, defaults: { logRetentionDays: 0 }, jobs: [] });
+    const deps = fakeDeps();
+    await tick({ root, now: NOW, deps });
+    expect(deps.rotateLogs).toHaveBeenCalledWith(root, NOW, 0);
+  });
+
+  it('falls back to 7 instead of throwing when defaults.logRetentionDays is invalid', async () => {
+    writeJobs(root, { version: 1, defaults: { logRetentionDays: -5 }, jobs: [] });
+    const deps = fakeDeps();
+    const res = await tick({ root, now: NOW, deps }); // must not throw — the tick keeps ticking
+    expect(Array.isArray(res)).toBe(true);
+    expect(deps.rotateLogs).toHaveBeenCalledWith(root, NOW, 7);
+  });
+
   it('writes the pidfile at spawn (onSpawn) and removes it after a launch', async () => {
     writeJobs(root, { version: 1, defaults: {}, jobs: [{ id: 'a', schedule: '*/15 * * * *', enabled: true, prompt: 'go' }] });
     writeJobState(root, 'a', { lastRun: new Date(2026, 6, 16, 1, 5).getTime(), lastExit: 0, pid: null });

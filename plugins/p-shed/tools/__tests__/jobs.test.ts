@@ -138,4 +138,13 @@ describe('jobFieldError', () => {
   it('ignores fields it does not own', () => {
     expect(jobFieldError('prompt', 42)).toBeNull();
   });
+  it('accepts a non-negative logRetentionDays, 0 included', () => {
+    expect(jobFieldError('logRetentionDays', 7)).toBeNull();
+    expect(jobFieldError('logRetentionDays', 0)).toBeNull();
+  });
+  it('rejects a non-numeric or negative logRetentionDays', () => {
+    expect(jobFieldError('logRetentionDays', -1)).toMatch(/^invalid logRetentionDays: /);
+    expect(jobFieldError('logRetentionDays', 'forever')).toMatch(/^invalid logRetentionDays: /);
+    expect(jobFieldError('logRetentionDays', undefined)).toMatch(/^invalid logRetentionDays: /);
+  });
 });

@@ -21,6 +21,13 @@ export function jobFieldError(field, value) {
       return typeof value === 'boolean' ? null : `invalid enabled: ${value} (expected true or false)`;
     case 'model':
       return typeof value === 'string' && value.length > 0 ? null : `invalid model: ${value} (expected a name)`;
+    case 'logRetentionDays':
+      // A defaults-only setting (no per-job override, no profile field), but the same
+      // shared rule so a CLI check and the tick's lenient fallback can never disagree
+      // about what counts as valid — see lib/logs.mjs's resolveLogRetentionDays.
+      return Number.isFinite(value) && value >= 0
+        ? null
+        : `invalid logRetentionDays: ${value} (expected a non-negative number of days; 0 keeps every log)`;
     default:
       return null;
   }
