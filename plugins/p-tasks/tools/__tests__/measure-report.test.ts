@@ -36,24 +36,35 @@ describe('report', () => {
     expect(report(rows)).toContain('0.00–1.00');
   });
 
-  it('says plainly when the dollar cap bound too often to trust the numbers', () => {
-    const rows = [{ ...row('none', 1, 1, { R1: true }), hit_cap: true }];
-    expect(report(rows)).toContain('the cap bound');
+  // The budget IS the session length, so a healthy arm uses all of it nearly
+  // every session. Sessions that end early are the anomaly: that arm was handed
+  // less work than the others and its row cannot be set beside theirs.
+  it('stays quiet about an arm that used its whole budget every session', () => {
+    const rows = Array.from({ length: 4 },
+      (_, i) => ({ ...row('none', 1, i + 1, { R1: true }), hit_cap: true }));
+    expect(report(rows)).not.toContain('used their whole budget');
   });
 
-  // Twenty clean sessions in one arm and one capped session in another. Pooled,
-  // that is 1 in 21 and no warning fires; per arm, the second one capped every
-  // session it ran. The arm with the problem must be named — and only that
-  // arm: checked on the warning line itself, not the whole report, because a
+  it('says plainly when an arm kept ending its sessions early', () => {
+    const rows = Array.from({ length: 4 },
+      (_, i) => ({ ...row('none', 1, i + 1, { R1: true }), hit_cap: i === 0 }));
+    expect(report(rows)).toContain('used their whole budget');
+  });
+
+  // One arm behaving normally and one ending early. Pooled, the two average to
+  // the middle and nothing fires; per arm, only the second is the problem. The
+  // check reads the warning line itself rather than the whole report, because a
   // two-arm report also carries the always-on `none`-vs-tracker caveat, which
   // legitimately names `none` elsewhere on the page.
-  it('does not let a clean arm dilute a capped one', () => {
+  it('does not let a healthy arm average away an arm that stopped early', () => {
     const rows = [
-      ...Array.from({ length: 20 }, (_, i) => row('none', 1, i + 1, { R1: true })),
-      { ...row('ptasks', 1, 1, { R1: true }), hit_cap: true },
+      ...Array.from({ length: 10 },
+        (_, i) => ({ ...row('none', 1, i + 1, { R1: true }), hit_cap: true })),
+      ...Array.from({ length: 4 },
+        (_, i) => ({ ...row('ptasks', 1, i + 1, { R1: true }), hit_cap: false })),
     ];
     const out = report(rows);
-    const capLine = out.split('\n').find((l) => l.includes('the cap bound'));
+    const capLine = out.split('\n').find((l) => l.includes('used their whole budget'));
     expect(capLine).toContain('`ptasks`');
     expect(capLine).not.toContain('`none`');
   });

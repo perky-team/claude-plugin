@@ -15,9 +15,15 @@ const mean = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : nu
 const fmt = (x, digits = 2) => (x === null || x === undefined ? '—' : x.toFixed(digits));
 const spread = (xs) => (xs.length < 2 ? '—' : `${fmt(Math.min(...xs))}–${fmt(Math.max(...xs))}`);
 
-// One session in twenty. Above this the cap is shaping the result, not
-// catching a runaway, and the regression numbers stop meaning anything.
-const CAP_WARN = 0.05;
+// The cap is the session length now, so most sessions are SUPPOSED to hit it —
+// the old warning, which said the numbers were void above one session in
+// twenty, would fire on every healthy study and mean nothing.
+//
+// What is worth warning about is the opposite: an arm that barely ever reaches
+// its budget. That means its sessions are ending for some other reason —
+// erroring out, or finishing early — and the arms are then not being given the
+// same amount of work after all, which is the one thing this design rests on.
+const CAP_FLOOR = 0.5;
 
 // A single number hides everything that matters about feature work: five runs
 // with the same mean can be five identical runs or two disasters and three wins.
@@ -53,14 +59,11 @@ export function report(rows) {
         : null))
       .filter((x) => typeof x === 'number' && x > 0);
 
-    // Per arm, never pooled. The arms are expected to hit the cap at different
-    // rates — a tracker arm spends part of each session on upkeep and gets
-    // there with less code written — so a study-wide share is exactly the
-    // number that hides the problem. One capped arm among four clean ones
-    // averages down to nothing, and its own regression figure still prints as
-    // if it were sound.
+    // Per arm, never pooled. One arm that is behaving differently averages away
+    // to nothing against the others, and its own numbers still print as if they
+    // were sound.
     const capped = capShare(mine.flatMap((r) => r.sessions));
-    if (capped !== null && capped > CAP_WARN) noisy.push({ arm, capped });
+    if (capped !== null && capped < CAP_FLOOR) noisy.push({ arm, capped });
 
     // "Sessions to done" means the finished runs only. Printing the mean
     // alone hid how many runs that mean is even about — 1 of 5 runs finishing
@@ -87,8 +90,9 @@ export function report(rows) {
   }
 
   for (const { arm, capped } of noisy) {
-    lines.push('', `**the cap bound in ${(capped * 100).toFixed(0)}% of \`${arm}\` sessions — `
-      + `that arm's regression number above is void until the per-session cap goes up**`);
+    lines.push('', `**only ${(capped * 100).toFixed(0)}% of \`${arm}\` sessions used their whole budget — `
+      + 'the rest ended early, so this arm was not given the same amount of work as the others '
+      + 'and its row cannot be compared with them**');
   }
   lines.push('');
   return lines.join('\n');

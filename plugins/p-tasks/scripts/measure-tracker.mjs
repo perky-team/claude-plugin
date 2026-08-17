@@ -34,7 +34,23 @@ const ACCEPTANCE = join(HERE, 'polygon-acceptance', 'acceptance.test.js');
 const ARMS = ['none', 'ptasks', 'beads'];
 const RUNS = 5;
 const SESSIONS = 10;
-const CAP_USD = 5;
+
+// The session length, not a safety net. This is the whole experiment.
+//
+// Measured twice: a single `claude -p` finished all ten original requirements
+// for $0.73, and after the job grew six times over it finished all sixty for
+// $2.74. `claude -p` runs until the work is done — there is no turn limit to
+// set and a million tokens of context to fill — so a job big enough to need a
+// second session is not something we can author our way to.
+//
+// Money is the only lever the CLI offers, and it stands in for the two things
+// that really end a session in the field: the context window and the clock.
+// Every arm gets the same budget per session, so the question the study asks
+// becomes a sharp one — given the same money split into ten sessions with
+// amnesia between them, does a tracker get further?
+//
+// $0.40 is about a seventh of what one uninterrupted session needed.
+const CAP_USD = 0.4;
 const MODEL = 'sonnet';
 
 const args = process.argv.slice(2);
