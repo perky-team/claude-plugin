@@ -340,193 +340,174 @@ The graph is purely local — there is no remote service, no MCP server, and no 
 
 ## Measured benefit
 
-[`docs/measured-benefit.md`](./docs/measured-benefit.md) runs the contest: the same 42 structural
+[`docs/measured-benefit.md`](./docs/measured-benefit.md) runs the contest: the same structural
 questions put to the same agent twice — once with nothing but `grep` and `Read`, once with p-graph
-installed. **Twelve public repos, three per language**, 252 runs in the current set.
-
-**The plugin pays for itself on a big repository, and not on a small one.** On the eleven questions
-that follow the calls — "what breaks if I change X", "how does X reach Y" — split by repository size:
-
-| | cost | time | steps | call sites invented |
-|---|---|---|---|---|
-| gin 80 files, leveldb 132, flask, requests | grep **25% cheaper** | grep **55% faster** | grep **18% fewer** | 12 → **5** |
-| caddy 325 files, hugo 905 | p-graph **52% cheaper** | p-graph **55% faster** | p-graph **63% fewer** | 24 → **3** |
-
-Accuracy goes p-graph's way in both; money and time only above some size between leveldb (132 files,
-9k call edges) and caddy (326 files, 24k). Both big points are Go, so that threshold is a Go result —
-Python and C++ have no follow-the-calls question on a big repository, and TypeScript has none at all.
-The single hugo question ran **$1.06 against $0.30**, 27 steps against 7.7, and grep invented 21 call
-sites against 15 real ones. On a small repository the chain often lives in one file: grep opens it
-once and sees everything, while the graph pays a query per hop.
-
-Sizes, read out of each repository's own graph:
-
-| Repository | Language | Files | Symbols | Call edges |
-|---|---|---:|---:|---:|
-| nest | TypeScript | 1,728 | 13,037 | 38,315 |
-| **hugo** | Go | **930** | 10,314 | 55,499 |
-| **caddy** | Go | **326** | 3,656 | 23,642 |
-| axios | JavaScript | 240 | 3,462 | 14,343 |
-| spdlog | C++ | 152 | 2,563 | 8,239 |
-| **leveldb** | C++ | **132** | 2,155 | 9,241 |
-| **gin** | Go | **99** | 1,552 | 9,191 |
-| re2 | C++ | 89 | 1,760 | 8,273 |
-| got | TypeScript | 85 | 3,505 | 14,329 |
-| **flask** | Python | **83** | 1,619 | 3,905 |
-| httpx | Python | 60 | 1,241 | 4,188 |
-| **requests** | Python | 37 | 807 | 2,684 |
-
-Bold rows carry the split. **Both big points are Go**, so the threshold is a Go result: Python and C++
-have no follow-the-calls question on a big repository, and TypeScript has none of that shape at all.
-
-On the thirty "who calls X" questions, which is the shape grep is best at, two things hold up:
-**p-graph invents a third as many call sites, and it tells you when it might be short. On price there
-is no difference.**
-
-| What was measured | grep | p-graph | Gap | Verdict |
-|---|---|---|---|---|
-| "who calls X" — call sites found | **1401 of 1410** | 1392 of 1410 | −9 | **grep** |
-| "who calls X" — call sites invented | 51 | **19** | −63% | **p-graph** |
-| "who calls X" — cost per question | $0.238 | $0.233 | −2% (0.3 SE) | **noise** |
-| "who calls X" — time per question | 44.0 s | 42.0 s | −5% (0.5 SE) | **noise** |
-| "who calls X" — steps per question | 7.7 | **6.6** | −14% (**2.6 SE**) | **p-graph** |
-| "who calls X" — context read back | **627k** | 638k | +2% | **grep** |
-| "who calls X" — text searches | 3.7 | **1.6** | −57% | **p-graph** |
-| "what breaks if X changes" — cost | $0.86 | **$0.42** | −51% | **p-graph** |
-| "what breaks if X changes" — time | 237 s | **91 s** | −62% | **p-graph** |
-| "what breaks if X changes" — steps | 50 | **7** | −85% | **p-graph** |
-| Answers that admit their own limits | 4% (4/93) | **44% (41/93)** | +40 pts | **p-graph** |
-
-Per language — three repositories each:
-
-| Language | Repos | Call sites found, grep / p-graph | Invented | Cost, grep / p-graph | Cost gap |
-|---|---|---|---|---|---|
-| Go | hugo, caddy, gin | 331 of 336 / **334 of 336** | 51 / **17** | $0.300 / **$0.251** | **−16%** |
-| Python | flask, requests, httpx | 135 of 135 / 135 of 135 | 0 / 0 | $0.181 / **$0.171** | **−5%** |
-| C++ | leveldb, re2, spdlog | 476 of 480 / **477 of 480** | 0 / 0 | **$0.301** / $0.327 | **+9%** |
-| TypeScript | nest, got, axios | **459 of 459** / 446 of 459 | **0** / 2 | $0.166 / **$0.155** | **−7%** |
-
-**noise** means the gap is under two standard errors. **tie** means the same number on both sides.
-
-Read the recall row carefully. p-graph is nine call sites behind, and that gap is one hard question
-having a good day for grep: on `re2::Prog::size` grep scored 57 of 75 in one pass and 75 of 75 in the
-next, paying $1.11 and 213 s for the second against $0.74 and 123 s for the first. p-graph scored
-74 of 75 both times. An earlier version of this README claimed +22 call sites for C++ on the strength
-of the cheap grep run — that claim is withdrawn.
-
-The invented rows come from one question: a call written on caddy's `Handler` interface, which a text
-search cannot tell from a call on any of the 31 types that implement it. grep averages 17 invented
-sites per run there. On the transitive question, which grep cannot answer in one step, p-graph is half
-the cost and takes seven times fewer steps. And it says what it might be missing in 45% of answers
-against grep's 8%, which is the gap banner and the guess marking being relayed.
+installed. **Fourteen public repos, 52 structural questions, 312 runs, three runs a side** — plus a
+third arm on 6 Go questions against a language server, below. Every table here is printed by
+`measure-agent.mjs --score`, not worked out by hand, so any of it can be regenerated.
 
 ### Every row, per language
 
-Three repositories per language, three runs a side. `text searches` counts Grep and grep through Bash
-— a graph query is not a search. The transitive question ("what breaks if X changes") only exists for
-Go, so only that table has its rows.
+Below are the 36 "who calls X" questions — the shape grep is best at — split by language and by how
+big the repository is. The size line falls between leveldb (132 files, 9k call edges) and caddy
+(326 files, 24k). **Read the accuracy rows here knowing that one truth list in this set was wrong
+until August 2026** and its correction reversed the headline; the note under big-Go says which.
 
-**Go** — hugo, caddy, gin
+Big repositories:
 
-| What was measured | grep | p-graph | Gap | Winner |
-|---|---|---|---|---|
-| "who calls X" — call sites found | 331 of 336 | **334 of 336** | +1% | **p-graph** |
-| "who calls X" — call sites invented | 51 | **17** | −67% | **p-graph** |
-| "who calls X" — cost | $0.300 | **$0.251** | −16% | **p-graph** |
-| "who calls X" — time | 65 s | **51 s** | −23% | **p-graph** |
-| "who calls X" — tool calls | 7.9 | **6.8** | −13% | **p-graph** |
-| "who calls X" — output tokens / context read | 8,609 / 850k | 17,748 / **699k** | +106% / −18% | grep |
-| "who calls X" — text searches | 3.8 | **1.9** | −50% | **p-graph** |
-| "what breaks if X changes" — cost | $0.86 | **$0.42** | −51% | **p-graph** |
-| "what breaks if X changes" — time | 237 s | **91 s** | −62% | **p-graph** |
-| "what breaks if X changes" — steps | 50 | **7** | −85% | **p-graph** |
-| Answers that admit their own limits | 17% (3/18) | **44% (8/18)** | +28 pts | **p-graph** |
+**Go** — hugo 930 files / 55.5k call edges, caddy 326 / 23.6k · 5 questions
 
-Output tokens are the one row grep wins, and one question does it: on `caddyhttp.Handler.ServeHTTP`
-p-graph's answers list far more call sites, because they list them right.
+| | grep | p-graph | Gap |
+|---|---|---|---|
+| Call sites found | **277 of 279** | 229 of 279 | **grep, by 48** |
+| Invented | 0 | 0 | tie |
+| Cost per question | $0.337 | **$0.294** | **−13%** |
+| Time per question | 72 s | **51 s** | **−30%** |
 
-**Python** — flask, requests, httpx
+This row used to read `226 of 228` both ways with grep inventing 51 — and both halves of that
+were an artifact of one wrong truth list. `caddy-handler-servehttp` really has **51** call
+sites, not 34: `metrics_test.go` calls the interface's two-argument `ServeHTTP` eighteen times
+and the list carried one of them. So grep never invented anything there, and p-graph is short
+by 48 of 279 — a miss the short list had been hiding. See
+[the write-up](./docs/measured-benefit.md) for how it was found.
 
-| What was measured | grep | p-graph | Gap | Winner |
-|---|---|---|---|---|
-| "who calls X" — call sites found | 135 of 135 | 135 of 135 | +0% | tie |
-| "who calls X" — call sites invented | 0 | 0 | 0% | tie |
-| "who calls X" — cost | $0.181 | **$0.171** | −5% | **p-graph** |
-| "who calls X" — time | 34 s | **30 s** | −12% | **p-graph** |
-| "who calls X" — tool calls | 4.0 | **3.5** | −13% | **p-graph** |
-| "who calls X" — output tokens / context read | **2,979** / 365k | 4,029 / **352k** | +35% / −4% | grep |
-| "who calls X" — text searches | 2.6 | **0.6** | −77% | **p-graph** |
-| Answers that admit their own limits | 0% (0/15) | **47% (7/15)** | +47 pts | **p-graph** |
+**TypeScript** — nest 1,728 / 38.3k · 5 questions
 
-Python used to be a tie, because the graph read none of the types Python writes. It now reads them —
-parameter, variable and field annotations, `-> T`, `@property`, `with C() as x` — and it won every row
-it can win. Member calls resolved with certainty went 20.8% → 31.2% on httpx and 17.4% → 21.1% on
-requests. `callers "Cookies.set"` used to print seven rows to go and grep for, none of which was a
-call of `Cookies.set`; it now prints none. Read the cost and time gaps against the noise floor: at
-five questions they are a fraction of a standard error. The search row and the banners are the real
-change.
+| | grep | p-graph | Gap |
+|---|---|---|---|
+| Call sites found | 177 of 177 | 177 of 177 | tie |
+| Invented | 0 | 0 | tie |
+| Cost per question | **$0.143** | $0.166 | +16% |
+| Time per question | **20 s** | 24 s | +24% |
 
-**C++** — leveldb, re2, spdlog
+**C++** — rocksdb 1,454 / 318.7k · 3 questions
 
-| What was measured | grep | p-graph | Gap | Winner |
-|---|---|---|---|---|
-| "who calls X" — call sites found | 476 of 480 | **477 of 480** | +0% | **p-graph** |
-| "who calls X" — call sites invented | 0 | 0 | 0% | tie |
-| "who calls X" — cost | **$0.301** | $0.327 | +9% | grep |
-| "who calls X" — time | **52 s** | 58 s | +11% | grep |
-| "who calls X" — tool calls | 9.2 | **8.2** | −11% | **p-graph** |
-| "who calls X" — output tokens / context read | 13,072 / **905k** | **11,411** / 1,077k | −13% / +19% | **p-graph** |
-| "who calls X" — text searches | 5.1 | **3.0** | −41% | **p-graph** |
-| Answers that admit their own limits | 4% (1/27) | **37% (10/27)** | +33 pts | **p-graph** |
+| | grep | p-graph | Gap |
+|---|---|---|---|
+| Call sites found | 114 of 114 | 114 of 114 | tie |
+| Invented | 0 | 0 | tie |
+| Cost per question | $0.124 | **$0.111** | **−11%** |
+| Time per question | 21 s | **16 s** | **−25%** |
 
-C++ is the only language where the graph still costs more than grep, and one question is the whole of
-it: `re2::Prog::size` runs $1.46 against $1.11. Five fixes this round took the cost gap from +17% to
-+9% and the time gap from +38% to +11% — see [docs/measured-benefit.md](docs/measured-benefit.md).
+**Python** — django 3,036 / 195.1k · 3 questions
 
-**TypeScript / JavaScript** — nest, got, axios
+| | grep | p-graph | Gap |
+|---|---|---|---|
+| Call sites found | 108 of 108 | 108 of 108 | tie |
+| Invented | 0 | 0 | tie |
+| Cost per question | **$0.094** | $0.109 | +16% |
+| Time per question | 17 s | **14 s** | **−17%** |
 
-| What was measured | grep | p-graph | Gap | Winner |
-|---|---|---|---|---|
-| "who calls X" — call sites found | **459 of 459** | 446 of 459 | −3% | grep |
-| "who calls X" — call sites invented | **0** | 2 | — | grep |
-| "who calls X" — cost | $0.166 | **$0.155** | −7% | **p-graph** |
-| "who calls X" — time | 25 s | 25 s | −3% | tie |
-| "who calls X" — tool calls | 4.8 | **3.2** | −33% | **p-graph** |
-| "who calls X" — output tokens / context read | 4,827 / 353k | **3,672 / 316k** | −24% / −11% | **p-graph** |
-| "who calls X" — text searches | 2.7 | **0.3** | −89% | **p-graph** |
-| Answers that admit their own limits | 0% (0/27) | **41% (11/27)** | +41 pts | **p-graph** |
+Small repositories:
 
-TypeScript used to lose steps, tokens and context. Two rounds fixed it. The first was not "JavaScript
-has no annotations" — it was that `js.scm` had no rule for a variable at all, so in a `.js` file
-p-graph recorded no binding and no type, and every receiver became a bare-name guess. axios is 191
-`.js` files against 23 `.ts`, and it had **9 of 7,940 member calls resolved with certainty — 0.1%**.
-The second found that TypeScript's **return types were never read either** — all three graphs held
-zero `#ret` rows — that a call on an imported name (`Test.createTestingModule(...)`) was guessed at a
-repo symbol 264 times in nest, and that a constructor parameter property was skipped whenever a
-decorator came first, which in nest is nearly always.
+**Go** — gin 99 / 9.2k · 2 questions
 
-`callers "AxiosHeaders.has"` went from 0 certain rows and 18 guesses to 11 certain rows covering 24
-call sites, and its run from 12.7 steps to 6.7. nest's guesses went 906 → 630.
+| | grep | p-graph | Gap |
+|---|---|---|---|
+| Call sites found | 105 of 108 | **108 of 108** | **p-graph** |
+| Invented | 0 | 0 | tie |
+| Cost per question | $0.170 | **$0.145** | **−14%** |
+| Time per question | 45 s | **20 s** | **−55%** |
 
-Recall did not move: 10 of the 13 missed sites are still `AxiosHeaders.has` and 3 are `Options.merge`
-in got. In both the graph's own answer is now right and the agent under-reports it — see
-[docs/measured-benefit.md](docs/measured-benefit.md).
+**TypeScript** — axios 240 / 14.3k, got 85 / 14.3k · 4 questions
 
-Every table comes from `measure-agent.mjs --score`. Re-make them with the commands in
-[docs/measured-benefit.md](docs/measured-benefit.md#run-it-again).
+| | grep | p-graph | Gap |
+|---|---|---|---|
+| Call sites found | **282 of 282** | 254 of 282 | **grep** |
+| Invented | 0 | 0 | tie |
+| Cost per question | $0.194 | **$0.176** | **−10%** |
+| Time per question | 33 s | **27 s** | **−16%** |
 
-C++ is where the gap is widest, and it was the other way round two rounds ago. Reading the type the
-source writes on a receiver took leveldb's guesses from 58% of resolved edges to 5%. The same fix in
-TypeScript — reading the type written on a class field — took nest's certain `x.m()` rows from 2,819
-to 3,750 and made TypeScript win every row on the repositories measured at the time; adding axios
-later took that win back. See [docs/measured-benefit.md](docs/measured-benefit.md).
+**C++** — spdlog 152 / 8.2k, leveldb 132 / 9.2k, re2 89 / 8.3k · 9 questions
 
-The first pass did not read like that: p-graph was 48% dearer and 59% slower, because `callers`
-returned caller *functions* and not call *sites* — 0 of 32 of the lines the question asked for — so
-every run had to go and grep for them. Printing the call site closed the gap. C++ then stayed 77%
-dearer on its own for one more pass, until a per-language split showed that a `Class::Method` query
-matched nothing at all. The page keeps every pass, including a fix that was built, measured, and
-changed nothing.
+| | grep | p-graph | Gap |
+|---|---|---|---|
+| Call sites found | 476 of 480 | **477 of 480** | **p-graph** |
+| Invented | 0 | 0 | tie |
+| Cost per question | **$0.301** | $0.311 | +3% |
+| Time per question | 52 s | **48 s** | **−9%** |
+
+**Python** — flask 83 / 3.9k, httpx 60 / 4.2k, requests 37 / 2.7k · 5 questions
+
+| | grep | p-graph | Gap |
+|---|---|---|---|
+| Call sites found | 135 of 135 | 135 of 135 | tie |
+| Invented | **0** | 14 | **grep** |
+| Cost per question | $0.181 | **$0.173** | **−5%** |
+| Time per question | 34 s | **27 s** | **−21%** |
+
+**Read these tables for accuracy, not for size.** Size decides nothing here: big C++ runs 11% cheaper
+and big Python 16% dearer, and on this question shape the study's own answer is that cost is noise
+(−2%, 0.3 standard errors).
+
+**The accuracy claim this section used to make has been withdrawn.** It said p-graph invents far
+fewer call sites, 51 against 14. Both numbers came from truth lists, and one of them was wrong:
+after the fix, **grep invents 0 across all 36 questions and p-graph invents 14**, and grep is ahead
+on recall by 72 call sites of 1,683 (1,674 against 1,602). On this question shape — "list every
+call site" — grep is now the more accurate of the two.
+
+What survives on this shape is not accuracy: **16% fewer steps** (5.7 against 6.8, 2.1 standard
+errors) and answers that say what they might be missing, 74 of 156 against 4 of 156.
+
+### Following the calls
+
+The size effect lives on the other question shape — "what breaks if I change X", "how does X reach Y".
+There p-graph is **40% cheaper, 48% faster and 55% fewer steps** on the big repositories, and 22%
+dearer on the small ones, measured on Go, C++ and Python alike.
+
+**And that shape is where p-graph's accuracy advantage actually lives.** Over the 16 questions that
+follow the calls, p-graph finds more and invents almost nothing:
+
+| 16 questions that follow the calls | grep | p-graph |
+|---|---|---|
+| Call sites found | 180 of 216 | **187 of 216** |
+| Invented | 32 | **1** |
+| Steps per question | 9.4 | **6.8** |
+
+On the big repositories the invented count is 26 against 0. That is the claim the list-shape tables
+cannot support and this one can.
+
+### Against a language server
+
+grep is the floor. The question a user asks next is how the graph compares to the strong alternative,
+so the same questions were put to an agent with **gopls** and the built-in `LSP` tool — 6 Go
+questions, 3 runs a side, same clones, same model.
+
+| 4 list questions + 1 trap, caddy and hugo | grep | p-graph | gopls |
+|---|---|---|---|
+| Call sites found | 277 of 279 | 229 of 279 | **279 of 279** |
+| Invented | 0 | 0 | 0 |
+| Cost per question | $0.337 | **$0.294** | $0.357 |
+| Time per question | 72 s | **51 s** | 78 s |
+| Steps per question | 10.8 | **9.3** | 17.1 |
+| `caddy-addnode-impact` — steps | 16.7 | **8.7** | 28.7 |
+
+**A language server is the most accurate of the three and the most expensive in steps.** It answered
+every call site on every question, including the one where p-graph is short by a third. It pays for
+that with roughly twice the round trips, because the `LSP` API is addressed by file, line and
+character — a list of N call sites costs N calls, where a graph query costs one.
+
+Two things a language server cannot do, and they decide when the graph still wins: it needs the
+project to **build** (resolved modules, `npm install`, a C++ `compile_commands.json`), and it walks a
+call chain one request per hop — 28.7 steps against p-graph's 8.7 on the transitive question.
+
+So for Go and TypeScript, reach for the language server first. Reach for p-graph for "what breaks if
+I change X" on a big repository, and for any repository that does not build.
+
+Read this arm with its limits in view: 6 questions, Go only, one machine, 3 runs a side — and
+17 of the first 18 runs had to be thrown away because `gopls` was silently answering nothing at all.
+Both are written up in
+[the plan](./docs/superpowers/plans/2026-08-14-p-graph-lsp-arm.md).
+
+**Three runs a side is not enough to read the accuracy rows closely.** Re-running only the p-graph arm
+after a C++-only change moved two languages the change cannot touch: axios lost 24 of its 75 call
+sites and requests invented 14 where it had invented none. The graph's own answers were checked and
+were unchanged and correct, so that swing is the agent writing its answer up differently from one run
+to the next. The published noise floor covers cost, time and steps — it has never covered found and
+invented.
+
+Every fix and every pass that got here, including the round-by-round history before the fourteenth
+and thirteenth repositories were added, is in [docs/measured-benefit.md](./docs/measured-benefit.md).
 
 ## Design
 
