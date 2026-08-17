@@ -260,11 +260,72 @@ describe('aggregate', () => {
   });
 });
 
+describe('aggregate — windowDays: 0 means unbounded (defaults.logRetentionDays: 0)', () => {
+  it('defaults to 7 when no windowDays option is given at all', () => {
+    // The setting that drives this (defaults.logRetentionDays) itself defaults to 7 —
+    // an installation that sets nothing must see exactly today's usual page.
+    const a = aggregate([], NOW);
+    expect(a.windowDays).toBe(7);
+    expect(a.byDay).toHaveLength(7);
+  });
+
+  it('a configured retention changes both the window length and the byDay count', () => {
+    const a = aggregate([], NOW, { windowDays: 30 });
+    expect(a.windowDays).toBe(30);
+    expect(a.byDay).toHaveLength(30);
+    expect(a.byDay[0].date).toBe('2026-07-16');
+    expect(a.byDay[29].date).toBe('2026-08-14');
+  });
+
+  it('with no records at all, an unbounded window still shows exactly one day: today', () => {
+    const a = aggregate([], NOW, { windowDays: 0 });
+    expect(a.windowDays).toBe(1);
+    expect(a.byDay).toHaveLength(1);
+    expect(a.byDay[0].date).toBe('2026-08-14');
+  });
+
+  it('spans back to the oldest record actually present, inclusive of both ends', () => {
+    const a = aggregate([run({ ts: at('2026-08-01T09:00:00') })], NOW, { windowDays: 0 });
+    // 2026-08-01 through 2026-08-14 is 14 calendar days.
+    expect(a.windowDays).toBe(14);
+    expect(a.byDay).toHaveLength(14);
+    expect(a.byDay[0].date).toBe('2026-08-01');
+    expect(a.byDay[13].date).toBe('2026-08-14');
+  });
+
+  it('never reports the window as 0 — the page must show a real day count', () => {
+    const a = aggregate([], NOW, { windowDays: 0 });
+    expect(a.windowDays).not.toBe(0);
+  });
+
+  it('counts every record once the window has actually widened to reach it', () => {
+    const a = aggregate([
+      run({ ts: at('2026-08-01T09:00:00'), usage: { costUsd: 1 } }),
+      run({ ts: at('2026-08-14T09:00:00'), usage: { costUsd: 2 } }),
+    ], NOW, { windowDays: 0 });
+    expect(a.totals.runs).toBe(2);
+    expect(a.totals.costUsd).toBeCloseTo(3, 6);
+  });
+
+  it('picks the oldest record regardless of input order', () => {
+    const a = aggregate([
+      run({ ts: at('2026-08-10T09:00:00') }),
+      run({ ts: at('2026-08-02T09:00:00') }),
+      run({ ts: at('2026-08-12T09:00:00') }),
+    ], NOW, { windowDays: 0 });
+    expect(a.byDay[0].date).toBe('2026-08-02');
+  });
+});
+
 describe('windowStart', () => {
   it('returns local midnight windowDays - 1 days back', () => {
     // NOW is 2026-08-14T14:32 local; a 7-day window starts 6 days earlier.
     const start = windowStart(NOW, 7);
     expect(start).toBe(new Date(2026, 7, 8, 0, 0, 0, 0).getTime());
+  });
+
+  it('treats windowDays: 0 as unbounded — no record can be older than -Infinity', () => {
+    expect(windowStart(NOW, 0)).toBe(-Infinity);
   });
 
   describe('stepping across a DST change (Europe/Berlin) — autumn fall-back', () => {

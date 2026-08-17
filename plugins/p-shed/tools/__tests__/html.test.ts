@@ -694,4 +694,20 @@ describe('renderHtml', () => {
       expect(page([job()])).not.toContain('Group hold');
     });
   });
+
+  describe('card headings follow the configured window, not a hardcoded 7', () => {
+    it('shows the real number everywhere the window is named', () => {
+      const html = renderHtml(status([job()]), aggregate([], NOW, { windowDays: 14 }), {}, NOW);
+      expect(html).toContain('Cost · 14 days');
+      expect(html).toContain('Runs · 14 days');
+      expect(html).toContain('window 14 days');
+      expect(html).not.toContain('Cost · 7 days');
+      expect(html).not.toContain('Runs · 7 days');
+    });
+
+    it('the quota card names the configured window too', () => {
+      const html = renderHtml(status([job()]), aggregate([], NOW, { windowDays: 14 }), {}, NOW);
+      expect(html).toContain('no quota skips in 14d');
+    });
+  });
 });

@@ -336,8 +336,23 @@ Pure scheduler/launcher. Key decisions:
   rule itself. `0` means "keep every log forever", not "0-day retention": `rotateLogs`
   treats any `retentionDays <= 0` as a no-op, because the cutoff formula would otherwise
   land in the FUTURE for a negative value and delete every file, including the one
-  today's tick is still appending to. This is retention only — the report's own display
-  window (`aggregate`'s `windowDays`, still hardcoded at 7) is untouched: raising
-  retention keeps more raw JSONL on disk for an operator's own tooling, it does not make
-  the built-in report page show a longer trend. Lowering it below 7 DOES shrink what the
-  report can show, because the report can only ever display what `logs/` still holds.
+  today's tick is still appending to.
+- **The report's window is the same number, not a second one.** `pshed.mjs`'s `report`
+  command calls `resolveLogRetentionDays(jobsData.defaults)` — the exact helper and the
+  exact field the tick already resolves for rotation, never read a second way — and
+  passes the result to both `windowStart` (deciding which log files `readLogRecords`
+  even opens) and `aggregate`'s `windowDays` option. Raising retention to 30 now also
+  makes the report a 30-day report; there is no separate knob, because a page that
+  shows 7 days while 30 sit on disk is the exact defect this wiring exists to close —
+  the numbers were being collected and then thrown away before a trend could show.
+  `windowDays: 0` cannot zero-fill an unbounded window, so `aggregate` (`lib/report.mjs`)
+  special-cases it: it scans every record it was given for the oldest `ts`, and shows
+  however many local days that takes to reach, ending today (a `logs/` with nothing in
+  it yet still shows one bucket, today's — the same shape the fixed-size window already
+  has when nothing was ever run). `windowStart(now, 0)` returns `-Infinity` for the same
+  reason: the CLI needs a lower bound no real record's `ts` can be less than, so
+  `readLogRecords` excludes nothing and every file still on disk gets read. The returned
+  `windowDays` is always this computed span, never the literal `0` that was passed in —
+  every heading on the page ("Cost · N days", "Runs · N days", the quota card, the
+  footer) already read `agg.windowDays` rather than a hardcoded 7, so fixing it in one
+  place fixes every heading at once.

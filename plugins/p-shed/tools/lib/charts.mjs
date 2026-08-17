@@ -15,6 +15,26 @@ const AXIS_H = 14;
 const GAP = 2;      // surface gap between neighbouring bars — never a border on the bar
 const RADIUS = 4;   // rounded data-end only; the baseline end stays square
 
+// The viewBox is a fixed 320 units wide (see the call site in html.mjs) no matter how
+// many days the window covers, so more days means a narrower slot per bar — the report
+// window now follows defaults.logRetentionDays, so this can reach 30, 90, or far more.
+// Measured on a rendered page, at both a 390px phone width and a 640px desktop card
+// (the feed's own max-width):
+//   - through 60 days, bars stay individually distinct, gap clearly visible.
+//   - at 90 days on the 390px phone card, bars thin to under 2px with a similar-sized
+//     gap and blur into a dense comb — a single day is no longer easy to pick out,
+//     though the overall shape (which weeks cost more) still reads fine. The same 90
+//     days on a 640px desktop card stays clearly readable.
+//   - even out to 365 days (the longest tried), `barW`'s floor of 1 unit keeps every
+//     bar drawn — it never goes invisible or renders invalid markup — and adjacent
+//     bars overlapping by a fraction of a unit reads as a dense, still-honest density
+//     chart, not a solid undifferentiated block.
+// So this degrades gradually and stays truthful at any window length; nothing here
+// needs a cap or a different chart type for that reason. If a single day's bar must
+// stay legible at 90+ days, the fix is a wider chart or fewer than one bar per day,
+// not a change to this file's geometry.
+
+
 // A vertical bar with a rounded top and a flat bottom, anchored on the baseline.
 function barPath(x, y, w, h) {
   const r = Math.min(RADIUS, w / 2, h);

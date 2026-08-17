@@ -65,20 +65,61 @@ function emptyOutcomes() {
 //
 // Stepping a Date with setDate survives a DST change; adding 86_400_000 does not, and
 // would shift every day label by an hour for half the year.
+//
+// `windowDays === 0` means unbounded (the operator kept every log forever — see
+// resolveLogRetentionDays), so there is no fixed lower bound to compute: the CLI must
+// read every log file present, not just the last few. `-Infinity` is a boundary no real
+// record's `ts` can be less than, so nothing gets excluded.
 export function windowStart(now, windowDays = 7) {
+  if (windowDays === 0) return -Infinity;
   const start = new Date(now);
   start.setHours(0, 0, 0, 0);
   start.setDate(start.getDate() - (windowDays - 1));
   return start.getTime();
 }
 
+// How many local days it takes to reach the oldest record's own day, counting today as
+// one. Used only when windowDays is 0 (unbounded) — see aggregate below. No records at
+// all still counts as one day (today), the same "just today, nothing in it" shape the
+// fixed-size window already has when logs/ is empty.
+//
+// Counts by stepping a Date with setDate, never by dividing milliseconds: a day that
+// crosses a DST change is 23 or 25 real hours, and dividing would report a fractional
+// day for exactly that one step (see windowStart's own comment above).
+function daysToOldest(records, now) {
+  let oldest = now;
+  for (const rec of records) {
+    const ts = num(rec?.ts);
+    if (ts !== null && ts < oldest) oldest = ts;
+  }
+  const cursor = new Date(oldest);
+  cursor.setHours(0, 0, 0, 0);
+  const end = new Date(now);
+  end.setHours(0, 0, 0, 0);
+  let days = 1; // the oldest day counts as one, even before the loop below adds more
+  while (cursor.getTime() < end.getTime()) {
+    cursor.setDate(cursor.getDate() + 1);
+    days++;
+  }
+  return days;
+}
+
 export function aggregate(records, now, { windowDays = 7 } = {}) {
-  const from = windowStart(now, windowDays);
+  const recs = Array.isArray(records) ? records : [];
+
+  // 0 means unbounded (logRetentionDays: 0 — rotation never deletes, and the report
+  // follows the same number, see pshed.mjs's `report` command). There is no fixed
+  // length to zero-fill, so this shows every record present instead: the window
+  // becomes however many days it takes to reach the oldest one still on disk, ending
+  // today. `days` — not the 0 that was passed in — is what the page shows in every
+  // "N days" heading, because 0 would read as "no window" rather than "all of it".
+  const days = windowDays === 0 ? daysToOldest(recs, now) : windowDays;
+  const from = windowStart(now, days);
 
   const byDay = [];
   const dayIndex = new Map();
   const cursor = new Date(from);
-  for (let i = 0; i < windowDays; i++) {
+  for (let i = 0; i < days; i++) {
     const key = dayKey(cursor.getTime());
     dayIndex.set(key, i);
     byDay.push({ date: key, costUsd: null, runs: 0, usageLimit: 0, apiOverload: 0 });
@@ -111,7 +152,7 @@ export function aggregate(records, now, { windowDays = 7 } = {}) {
   // Holds both real events and run rows; every entry here ends up in `recent`.
   const feed = [];
 
-  for (const rec of Array.isArray(records) ? records : []) {
+  for (const rec of recs) {
     const ts = num(rec?.ts);
     if (ts === null || ts < from) continue;
     const job = typeof rec.job === 'string' ? rec.job : null;
@@ -214,7 +255,7 @@ export function aggregate(records, now, { windowDays = 7 } = {}) {
   }
 
   return {
-    windowDays,
+    windowDays: days,
     from,
     to: now,
     totals,

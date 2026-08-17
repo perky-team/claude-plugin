@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync 
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { paths, readJobs, readConfig } from './lib/io.mjs';
-import { readLogRecords } from './lib/logs.mjs';
+import { readLogRecords, resolveLogRetentionDays } from './lib/logs.mjs';
 import { aggregate, computeNext, windowStart } from './lib/report.mjs';
 import { renderHtml } from './lib/html.mjs';
 import { setJob, rmJob, jobFieldError, ValidationError } from './lib/jobs.mjs';
@@ -345,10 +345,17 @@ async function main() {
         const retentionErr = jobFieldError('logRetentionDays', jobsData.defaults.logRetentionDays);
         if (retentionErr) return die(retentionErr, 2);
       }
+      // The report's window follows the same setting the tick uses to rotate logs —
+      // resolveLogRetentionDays is called here, not read a second way, so the two can
+      // never disagree about what a given jobs.yml means. Keeping 30 days of logs now
+      // gives a 30-day report; keeping 3 gives a 3-day report; the default (nothing
+      // set) is still 7. 0 is passed straight through to windowStart/aggregate, which
+      // both treat it as "unbounded" — see their own comments for what that means.
+      const windowDays = resolveLogRetentionDays(jobsData.defaults);
       const { jobs } = effectiveJobs({ root, jobsData, config: readConfig(root) });
-      const { records, skippedLines, skippedFiles } = readLogRecords(root, windowStart(now));
+      const { records, skippedLines, skippedFiles } = readLogRecords(root, windowStart(now, windowDays));
       // aggregate reads no files, so it cannot count unreadable files or lines itself.
-      const agg = { ...aggregate(records, now), skippedLines, skippedFiles };
+      const agg = { ...aggregate(records, now, { windowDays }), skippedLines, skippedFiles };
       // jobs/defaults ride along so each post can show its schedule, model and
       // concurrency group — collectStatus returns runtime state only, no config.
       const html = renderHtml(status, agg, computeNext(jobs, status.jobs, now), now, jobs, jobsData.defaults);

@@ -99,6 +99,40 @@ describe('pshed report', () => {
     expect(out.startsWith('<!doctype html>')).toBe(true);
   });
 
+  it('defaults the window to 7 days when nothing is configured', () => {
+    const { out } = run(['report']);
+    expect(out).toContain('Cost · 7 days');
+    expect(out).toContain('Runs · 7 days');
+    expect(out).toContain('window 7 days');
+  });
+
+  it('a configured retention widens the window and every heading follows it', () => {
+    writeFileSync(join(root, '.pshed', 'jobs.yml'),
+      'version: 1\ndefaults:\n  logRetentionDays: 30\njobs:\n  - id: worker\n    schedule: "*/15 * * * *"\n    prompt: "x"\n');
+    const { out, code } = run(['report']);
+    expect(code).toBe(0);
+    expect(out).toContain('Cost · 30 days');
+    expect(out).toContain('Runs · 30 days');
+    expect(out).toContain('window 30 days');
+  });
+
+  it('logRetentionDays: 0 shows every log present, however far back it goes', () => {
+    // One old record, well outside the fixed 7-day window a bare "0" could be mistaken
+    // for. The report must widen to reach it, not read 0 as "0-day window".
+    writeFileSync(join(root, '.pshed', 'logs', '2026-07-01.jsonl'),
+      JSON.stringify({ ts: new Date('2026-07-01T09:00:00').getTime(), job: 'worker', exit: 0, outcome: 'success', durationMs: 1000, usage: { costUsd: 3 } }) + '\n');
+    writeFileSync(join(root, '.pshed', 'jobs.yml'),
+      'version: 1\ndefaults:\n  logRetentionDays: 0\njobs:\n  - id: worker\n    schedule: "*/15 * * * *"\n    prompt: "x"\n');
+    const { out, code } = run(['report']);
+    expect(code).toBe(0);
+    // Never literally "0 days" — the page must show the real span it actually found.
+    expect(out).not.toMatch(/window 0 days/);
+    expect(out).not.toMatch(/Cost · 0 days/);
+    // beforeEach seeds a $1.25 run on 2026-08-14; this test adds a $3 run on 2026-07-01.
+    // Their sum only appears if the old file actually got read — proof the window widened.
+    expect(out).toContain('$4.25');
+  });
+
   it('exits 1 and leaves nothing behind when the target cannot be written', () => {
     const target = join(root, 'no-such-dir', 'board.html');
     expect(run(['report', '--out', target]).code).toBe(1);
