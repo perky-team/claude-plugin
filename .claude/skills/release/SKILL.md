@@ -82,8 +82,16 @@ version bump in Step 4 — note it.
 Apply the procedure from `.claude/CLAUDE.md` literally. For each plugin
 under `plugins/<name>/`:
 
-1. Find the commit where its `plugin.json#version` was last bumped:
-   `git log --diff-filter=M --pretty=%H -- plugins/<name>/.claude-plugin/plugin.json | head -1`.
+1. Find the commit where its `plugin.json#version` was last bumped — by the
+   value of the field, never by "the file changed":
+   `git log --format='%h %s' -p -- plugins/<name>/.claude-plugin/plugin.json | grep -E '^[0-9a-f]{7} |^\+.*"version"'`
+   The first `+  "version": …` line is the value now in the file; the commit
+   printed above it is the real bump.
+   Do **not** use `--diff-filter=M … | head -1`. The manifest also carries the
+   plugin's `description`, which ordinary work edits, so that returns the last
+   commit to touch the file for any reason. Measured: a docs commit adding
+   `report` to p-shed's command list came back as its "last bump", hiding a
+   whole feature branch and nearly shipping it untagged.
 2. Check if any file under `plugins/<name>/` changed since that commit, plus
    any pending fixes from Step 3:
    `git log --oneline <bump-sha>..HEAD -- plugins/<name>/`.

@@ -126,6 +126,12 @@ When the user asks to push changes that alter plugin behavior or content (anythi
 
 1. List what's in the release: `git log <last-tag>..HEAD --oneline` (or `git log --oneline` if no tags exist yet).
 2. Identify which plugins are affected: for each plugin under `plugins/<name>/`, check whether any of its files changed since its own `plugin.json#version` was last bumped (`git log <last-version-bump-commit>..HEAD -- plugins/<name>/`). A plugin with no file changes since its last bump does not get a new version.
+
+   **Find that commit by the value of `version`, not by "the file changed".** `git log --diff-filter=M -- plugins/<name>/.claude-plugin/plugin.json | head -1` looks right and is wrong: the manifest also carries the plugin's `description`, which ordinary work edits. Measured — a docs commit that added `report` to p-shed's command list was returned as its "last bump", which hid every commit of a whole feature branch and would have shipped it untagged. Read the history of the field itself instead:
+
+       git log --format='%h %s' -p -- plugins/<name>/.claude-plugin/plugin.json | grep -E '^[0-9a-f]{7} |^\+.*"version"'
+
+   The first `+  "version": …` line names the value now in the file, and the commit printed above it is the real bump.
 3. For each affected plugin, read the commits touching it and pick the smallest bump that covers them:
    - **patch** (`vX.Y.Z+1`) — bug fix, refactor without behavior change, tests, docs, CI tweaks.
    - **minor** (`vX.Y+1.0`) — new skill, new template, new slash command, additive optional frontmatter field — any backwards-compatible extension.
