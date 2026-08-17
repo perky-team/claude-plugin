@@ -324,6 +324,31 @@ describe('renderHtml', () => {
       expect(html).toContain('group tree');
     });
 
+    describe('model resolution (job then defaults, defect 1)', () => {
+      it('uses the job\'s own model over defaults', () => {
+        const jobs = [{ id: 'worker', schedule: '* * * * *', model: 'opus' }];
+        const html = renderHtml(status([job()]), aggregate([], NOW), {}, NOW, jobs, { model: 'sonnet' });
+        expect(html).toContain('opus');
+        expect(html).not.toContain('sonnet');
+      });
+
+      it('shows a model a job inherits from defaults, not just its own field', () => {
+        // Setting `model:` once in `defaults` is the ordinary way to configure a loop.
+        // Reading `jobMeta.model` directly used to show no model at all on any post in
+        // such a loop, which reads like a bug rather than an inherited setting.
+        const jobs = [{ id: 'worker', schedule: '* * * * *' }];
+        const html = renderHtml(status([job()]), aggregate([], NOW), {}, NOW, jobs, { model: 'sonnet' });
+        expect(html).toContain('sonnet');
+      });
+
+      it('shows no model when neither the job nor defaults sets one', () => {
+        const jobs = [{ id: 'worker', schedule: '* * * * *' }];
+        const html = renderHtml(status([job()]), aggregate([], NOW), {}, NOW, jobs, {});
+        // Only the schedule prints in the meta line — no stray " · " for a missing model.
+        expect(html).toContain('<div class="sub">* * * * *</div>');
+      });
+    });
+
     it('renders a job with no matching metadata entry, without its schedule/model/group line', () => {
       // Reachable when a job is removed from jobs.yml but its state file (and so its
       // status entry) is still on disk — the fifth argument then has no entry for it.
@@ -600,6 +625,36 @@ describe('renderHtml', () => {
       const html = renderHtml(status([job()]), aggregate(records, NOW), {}, NOW);
       expect(html).not.toContain('<script>x</script>');
       expect(html).toContain('&lt;script&gt;x&lt;/script&gt;');
+    });
+
+    it('resolves a job\'s timeout from defaults, not just its own field', () => {
+      const records = [{ ts: at('2026-08-14T10:00:00'), job: 'worker', outcome: 'success', exit: 0, durationMs: 890_000 }];
+      const jobs = [{ id: 'worker' }];
+      const html = renderHtml(status([job()]), aggregate(records, NOW), {}, NOW, jobs, { timeoutSec: 1200 });
+      expect(html).toContain('20m00s timeout');
+    });
+
+    it('falls back to the built-in 900s timeout when neither the job nor defaults sets one', () => {
+      const records = [{ ts: at('2026-08-14T10:00:00'), job: 'worker', outcome: 'success', exit: 0, durationMs: 46_000 }];
+      const html = renderHtml(status([job()]), aggregate(records, NOW), {}, NOW, [{ id: 'worker' }], {});
+      expect(html).toContain('15m00s timeout');
+    });
+
+    it('caps one job\'s rows so several jobs can appear (defect 2)', () => {
+      // A chronically slow job used to take every visible row — seven of seven in a
+      // real render — leaving the card no way to show where time goes across the
+      // whole scheduler.
+      const dominant = Array.from({ length: 10 }, (_, i) =>
+        ({ ts: at('2026-08-14T10:00:00') + i, job: 'planner', outcome: 'success', exit: 0, durationMs: 900_000 - i * 1000 }));
+      const others = [
+        { ts: at('2026-08-14T11:00:00'), job: 'worker', outcome: 'success', exit: 0, durationMs: 50_000 },
+        { ts: at('2026-08-14T12:00:00'), job: 'chat', outcome: 'success', exit: 0, durationMs: 40_000 },
+      ];
+      const html = renderHtml(status([job()]), aggregate([...dominant, ...others], NOW), {}, NOW);
+      expect(html).toContain('worker');
+      expect(html).toContain('chat');
+      const plannerRows = html.match(/<td>planner<\/td>/g) ?? [];
+      expect(plannerRows.length).toBeLessThanOrEqual(2);
     });
   });
 

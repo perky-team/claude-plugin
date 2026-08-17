@@ -15,6 +15,11 @@ const SKIP_KEY = { 'usage-limit': 'usageLimit', 'api-overload': 'apiOverload' };
 
 const RECENT_CAP = 20;
 const SLOWEST_CAP = 8;
+// One chronically slow job (a `planner` that always takes 10+ minutes, say) would
+// otherwise fill every row of the "slowest runs" card with its own runs, and the card
+// stops being an overview of where time goes. Two is enough to show a job is
+// consistently slow (not a one-off) while still leaving room for six other jobs.
+const SLOWEST_PER_JOB_CAP = 2;
 
 function num(v) {
   return typeof v === 'number' && Number.isFinite(v) ? v : null;
@@ -194,6 +199,20 @@ export function aggregate(records, now, { windowDays = 7 } = {}) {
   feed.sort((a, b) => b.ts - a.ts);
   durations.sort((a, b) => b.durationMs - a.durationMs);
 
+  // Cap how many rows one job can take, walked AFTER the sort so the slowest run of
+  // each job is the one that survives (a job's later, shorter runs are the ones
+  // dropped). Without this cap a single chronically slow job fills every row and the
+  // card stops showing where time goes across the whole scheduler.
+  const slowestRuns = [];
+  const slowestPerJob = new Map();
+  for (const d of durations) {
+    const seen = slowestPerJob.get(d.job) ?? 0;
+    if (seen >= SLOWEST_PER_JOB_CAP) continue;
+    slowestPerJob.set(d.job, seen + 1);
+    slowestRuns.push(d);
+    if (slowestRuns.length >= SLOWEST_CAP) break;
+  }
+
   return {
     windowDays,
     from,
@@ -202,7 +221,7 @@ export function aggregate(records, now, { windowDays = 7 } = {}) {
     byDay,
     byJob,
     byModel,
-    slowestRuns: durations.slice(0, SLOWEST_CAP),
+    slowestRuns,
     recent: feed.slice(0, RECENT_CAP),
     // aggregate() reads no files, so it cannot count unreadable ones itself — these are
     // placeholders the CLI overwrites with readLogRecords()'s real counts.

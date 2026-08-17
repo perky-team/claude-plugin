@@ -228,10 +228,16 @@ Pure scheduler/launcher. Key decisions:
   runs and cost in the window, guard freshness) always tries to print. `renderHtml`
   takes two more arguments for this: the EFFECTIVE jobs array `pshed.mjs` already builds
   for `computeNext` (schedule/model/concurrencyGroup — `collectStatus` returns runtime
-  state only, none of that), and `defaults` from `jobs.yml`, because a job's group is
-  resolved through `resolveGroup` (`lib/concurrency.mjs`), not read off
-  `job.concurrencyGroup` directly — a job with no group of its own can still inherit one
-  from `defaults`. A job in `status.jobs` with no matching entry in the jobs array (state
+  state only, none of that), and `defaults` from `jobs.yml`, because a job's group AND
+  its model are resolved through the same job-then-defaults precedence the scheduler
+  itself uses — `resolveGroup` (`lib/concurrency.mjs`) for the group, `effectiveModel`
+  (`lib/html.mjs`, mirroring `launch.mjs`'s `buildArgs`) for the model — not read off
+  `job.concurrencyGroup` / `job.model` directly. A job with no group or model of its own
+  can still inherit either from `defaults` — the ordinary way to configure a loop, and
+  before `effectiveModel` existed this silently showed no model at all on every post in
+  such a loop. `effectiveTimeoutSec` (same file) resolves the same way, one step
+  further, all the way to p-shed's built-in 900s, for the "slowest runs" card's timeout
+  column. A job in `status.jobs` with no matching entry in the jobs array (state
   left behind by a job removed from `jobs.yml`) still renders, just without the
   schedule/model/group line. The feed is one column at every width (`.feed`, no
   `auto-fit`/`minmax`, `max-width:640px`, centred) — a laptop showing three or four
@@ -304,7 +310,12 @@ Pure scheduler/launcher. Key decisions:
   `totals.skips`), `totals.lastResetAt` (the verbatim reset text a limit message most
   recently quoted, tracked by the record's own `ts` so input order never matters — the
   reporting form from `classify.mjs`'s `parseResetAt`, not a parsed timestamp), and
-  `slowestRuns` (every record with a numeric `durationMs`, capped at 8 after sorting, so
-  record order never matters there either). All three are additive to `aggregate()`'s
-  return shape and follow its existing rule: a missing or non-numeric field is left out,
+  `slowestRuns` (every record with a numeric `durationMs`, sorted longest first and
+  capped at 8 total AND at 2 per job — the per-job cap is walked AFTER the sort, so a
+  job's slowest run is the one that survives — so record order never matters there
+  either). The per-job cap exists because one chronically slow job otherwise fills every
+  row and the card stops showing where time goes across the whole scheduler; two is
+  enough to show a job is consistently slow while leaving room for others. All three
+  fields are additive to `aggregate()`'s return shape and follow its existing rule: a
+  missing or non-numeric field is left out,
   never coerced.

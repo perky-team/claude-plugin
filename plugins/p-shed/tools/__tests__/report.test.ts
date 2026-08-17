@@ -207,6 +207,45 @@ describe('aggregate', () => {
     expect(a.slowestRuns).toEqual([]);
   });
 
+  describe('per-job cap on slowest runs (defect 2)', () => {
+    // A chronically slow job (`planner`, in the real render this fixed) took every row
+    // of the card, all seven visible ones. The cap must not just shrink that job's
+    // count — it must free rows for jobs that would otherwise never show up at all.
+    const dominant = (n: number) => Array.from({ length: n }, (_, i) =>
+      run({ job: 'planner', durationMs: 900_000 - i * 1000 }));
+
+    it('does not let one job with many slow runs fill the card', () => {
+      const a = aggregate([
+        ...dominant(10),
+        run({ job: 'worker', durationMs: 50_000 }),
+        run({ job: 'chat', durationMs: 40_000 }),
+      ], NOW);
+      const plannerRows = a.slowestRuns.filter((r) => r.job === 'planner');
+      expect(plannerRows.length).toBeLessThanOrEqual(2);
+      expect(a.slowestRuns.some((r) => r.job === 'worker')).toBe(true);
+      expect(a.slowestRuns.some((r) => r.job === 'chat')).toBe(true);
+    });
+
+    it('still shows the overall slowest run, even from the capped job', () => {
+      const a = aggregate(dominant(10), NOW);
+      expect(a.slowestRuns[0]).toMatchObject({ job: 'planner', durationMs: 900_000 });
+    });
+
+    it('still shows a job with only a single slow run', () => {
+      const a = aggregate([...dominant(10), run({ job: 'lonely', durationMs: 1000 })], NOW);
+      expect(a.slowestRuns.some((r) => r.job === 'lonely')).toBe(true);
+    });
+
+    it('does not cap jobs that are each already under the per-job limit', () => {
+      // Confirms the existing "capped at 8" behaviour survives: with one run per job,
+      // the per-job cap never engages and the top 8 by duration still win.
+      const many = Array.from({ length: 12 }, (_, i) => run({ job: `j${i}`, durationMs: i * 1000 }));
+      const a = aggregate(many, NOW);
+      expect(a.slowestRuns).toHaveLength(8);
+      expect(a.slowestRuns[0]).toMatchObject({ job: 'j11', durationMs: 11_000 });
+    });
+  });
+
   it('returns recent newest first and caps it at 20', () => {
     const many = Array.from({ length: 25 }, (_, i) =>
       run({ ts: at('2026-08-14T10:00:00') + i * 1000, job: `j${i}` }));

@@ -90,6 +90,23 @@ function effectiveMaxFailures(jobMeta, defaults) {
   return jobMeta?.maxConsecutiveFailures ?? defaults?.maxConsecutiveFailures ?? 3;
 }
 
+// The job's own model, falling back to defaults.yml's — the exact precedence
+// launch.mjs's buildArgs uses to build the real `claude -p --model …` call. A jobs.yml
+// that sets `model:` once in `defaults` (the ordinary way to configure a loop) used to
+// show no model on any post, since this used to read `jobMeta.model` directly — a bare
+// cron string that reads like a bug, not like a job inheriting its model normally.
+function effectiveModel(jobMeta, defaults) {
+  return jobMeta?.model ?? defaults?.model ?? null;
+}
+
+// The job's own timeout, falling back to defaults.yml's, then p-shed's built-in 900s —
+// the exact precedence launch.mjs's runJob uses to decide when a run gets killed. Used
+// by the "slowest runs" card so a run is never shown against a timeout the scheduler
+// would not actually enforce.
+function effectiveTimeoutSec(jobMeta, defaults) {
+  return jobMeta?.timeoutSec ?? defaults?.timeoutSec ?? 900;
+}
+
 // True for a job whose failures are building but whose breaker has not tripped yet —
 // invisible everywhere else on the page (jobState reads `ok`/`held`/`running` for it,
 // same as a job with a clean record). `maxFailures <= 0` disables the breaker for that
@@ -242,12 +259,16 @@ function jobPost(j, state, jobMeta, defaults, agg, next, now) {
 
   // Schedule is the raw cron string, never a phrased-out "every 3h": a wrong human
   // phrasing would be a silent lie about when the job actually runs, while the cron
-  // field is already the checkable source everywhere else on this page. The group comes
-  // through resolveGroup, not job.concurrencyGroup read directly, so a job that inherits
-  // its group from `defaults` (rather than naming one itself) still shows it correctly.
+  // field is already the checkable source everywhere else on this page. The model and
+  // the group both come through the same job-then-defaults resolution the scheduler
+  // itself uses (effectiveModel / resolveGroup), not read off the job's own entry
+  // directly — a job that sets neither on itself still shows what will actually run.
   const metaParts = jobMeta ? [
     jobMeta.schedule ? escapeHtml(jobMeta.schedule) : '',
-    jobMeta.model ? escapeHtml(jobMeta.model) : '',
+    (() => {
+      const model = effectiveModel(jobMeta, defaults);
+      return model ? escapeHtml(model) : '';
+    })(),
     (() => {
       const group = resolveGroup(jobMeta, defaults);
       return group ? `group ${escapeHtml(group)}` : '';
@@ -421,15 +442,18 @@ ${reset}
 // The longest runs in the window, with the job's own timeout beside them where it has
 // one — a run at 14m50s against a 15m timeout is about to start being killed, and
 // duration alone does not say that. `jobMetaById` is the same EFFECTIVE-jobs lookup
-// renderHtml already builds for jobPost, so the timeout shown is the one the tick will
-// actually enforce, profile overrides included.
-function slowestRunsCard(agg, jobMetaById) {
+// renderHtml already builds for jobPost, and `timeoutSec` is resolved the same
+// job-then-defaults-then-900s way launch.mjs resolves it, so the timeout shown is the
+// one the tick will actually enforce, profile and `defaults.yml` overrides included —
+// not just a job's own field, which used to leave the column blank for any job that
+// relied on `defaults.timeoutSec` (or on the built-in 900s) instead of setting its own.
+function slowestRunsCard(agg, jobMetaById, defaults) {
   const rows = agg.slowestRuns ?? [];
   if (!rows.length) {
     return `<div class="card"><h2>Slowest runs</h2><div class="sub">no runs recorded this window</div></div>`;
   }
   const lines = rows.map((r) => {
-    const timeoutSec = jobMetaById.get(r.job)?.timeoutSec;
+    const timeoutSec = effectiveTimeoutSec(jobMetaById.get(r.job), defaults);
     const vsTimeout = timeoutSec ? ` / ${fmtDuration(timeoutSec * 1000)} timeout` : '';
     return `<tr><td>${escapeHtml(r.job ?? '—')}</td><td>${fmtDuration(r.durationMs)}${vsTimeout}${r.timedOut ? ' (timed out)' : ''}</td></tr>`;
   }).join('');
@@ -528,7 +552,7 @@ ${problems.map(post).join('')}
 ${accumulating.map(post).join('')}
 ${costByModelCard(agg)}
 ${quotaCard(agg)}
-${slowestRunsCard(agg, jobMetaById)}
+${slowestRunsCard(agg, jobMetaById, defaults)}
 ${tokensCard(agg)}
 ${healthCard(status)}
 ${costCard(agg)}
