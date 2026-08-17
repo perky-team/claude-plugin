@@ -56,8 +56,9 @@ Tool: `node tools/pshed.mjs <command>` (exit `0` ok / `1` env / `2` validation; 
 
 One JSON object per line, appended per run and rotated after 7 days. Fields are added,
 never renamed or removed — read by name and ignore what you don't know. There are two
-kinds of row, distinguished by which fields they carry — a consumer should branch on
-`action` being present before assuming the run-record shape below:
+kinds of row — run records, and event records (there is more than one shape of event) —
+distinguished by which fields they carry: a consumer should branch on `action` being
+present before assuming the run-record shape below.
 
 **Run records** — one per job launch/skip/guard-error. `ts` is always present:
 
@@ -80,6 +81,17 @@ rather than an absent field:
 
     {"ts":1784154000000,"job":null,"action":"reclaimed-deploy-pause",
      "reclaimed":[{"scope":"global"}]}
+
+**Group-hold records** — one per tick that skipped one or more due jobs because their
+concurrency group was held by a live groupmate (see "Concurrency groups" below). Also
+not a run — same `action`-with-no-`outcome` shape as a reclaim record, `job: null` for
+the same reason: the row can cover several held jobs, not one. One row per tick, not
+one row per held job — every hold that tick saw goes in the `held` array together,
+which is how a job stuck behind a long groupmate for half an hour becomes thirty rows
+of history instead of one:
+
+    {"ts":1784154060000,"job":null,"action":"group-held",
+     "held":[{"id":"chat-responder","group":"tree","holder":"worker"}]}
 
 The `usage` block is captured for **every** run whose `--output-format json` result
 parsed, successful runs included, so "which job is expensive" is answerable without
@@ -157,8 +169,15 @@ and p-shed allows **at most one live run per group**:
 - A due job whose group is held by a live groupmate is **skipped for this tick** —
   `{"action":"skipped-group","group":"tree","holder":"worker"}`. There is no queue, no
   lock file and no waiting.
-- The skip writes **nothing**: no `lastRun`, no breaker movement. Missed-tick catch-up
-  starts the job on the first tick after the group frees, so nothing is lost.
+- The skip writes **nothing to the job's own state**: no `lastRun`, no breaker
+  movement. Missed-tick catch-up starts the job on the first tick after the group
+  frees, so nothing is lost.
+- **The hold is visible, though.** Once a tick, if any job was skipped this way, one
+  `group-held` row goes into the run log naming every job/group/holder it skipped that
+  minute (see "Run log records" above) — batched per tick, not one row per held job, so
+  a job stuck behind a long groupmate for half an hour costs one growing count, not
+  thirty history lines. `pshed report` shows the tally in its "Group holds" card: how
+  often a due job was held, which group, and which job was holding it.
 - Jobs with no group (neither their own nor a default) are unconstrained — the
   behavior every existing config already has.
 - `skipped` (this job's own previous run is still alive) and `skipped-group` (a

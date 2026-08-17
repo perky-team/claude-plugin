@@ -495,6 +495,57 @@ describe('tick', () => {
       const res = await tick({ root, now: NOW, deps: liveDeps() });
       expect(resultFor(res, 'b')).toEqual({ id: 'b', action: 'not-due' });
     });
+
+    // The hold is invisible in state (see above) but must not stay invisible in the
+    // log — otherwise "why is this job silent when nothing is broken?" has no answer
+    // anywhere on disk. See lib/report.mjs / lib/html.mjs for the card this feeds.
+    describe('logs the hold (batched, one row per tick — see tick.mjs\'s own comment on why)', () => {
+      const groupHeldRows = (deps: any) =>
+        deps.appendLog.mock.calls.map((c: any[]) => c[1]).filter((r: any) => r.action === 'group-held');
+
+      it('writes one group-held row shaped like reclaimed-deploy-pause: action, no outcome, job null', async () => {
+        grouped('tree', 'tree');
+        const deps = liveDeps();
+        await tick({ root, now: NOW, deps });
+        const rows = groupHeldRows(deps);
+        expect(rows).toHaveLength(1);
+        expect(rows[0]).toEqual({ ts: NOW, job: null, action: 'group-held', held: [{ id: 'b', group: 'tree', holder: 'a' }] });
+      });
+
+      it('writes nothing when no group is actually held', async () => {
+        grouped('tree', 'chat');
+        const deps = liveDeps();
+        await tick({ root, now: NOW, deps });
+        expect(groupHeldRows(deps)).toHaveLength(0);
+      });
+
+      it('writes nothing when the group gate never fires (a stale pidfile does not hold it)', async () => {
+        grouped('tree', 'tree');
+        const deps = fakeDeps({ isPidAlive: vi.fn(() => false) });
+        await tick({ root, now: NOW, deps });
+        expect(groupHeldRows(deps)).toHaveLength(0);
+      });
+
+      it('batches every hold the tick sees into ONE row, not one per held job', async () => {
+        writeJobs(root, { version: 1, defaults: { maxConsecutiveFailures: 3 }, jobs: [
+          { id: 'a', schedule: '* * * * *', enabled: true, prompt: 'go', concurrencyGroup: 'tree' },
+          { id: 'b', schedule: '* * * * *', enabled: true, prompt: 'go', concurrencyGroup: 'tree' },
+          { id: 'x', schedule: '* * * * *', enabled: true, prompt: 'go', concurrencyGroup: 'net' },
+          { id: 'y', schedule: '* * * * *', enabled: true, prompt: 'go', concurrencyGroup: 'net' },
+        ] });
+        for (const id of ['a', 'b', 'x', 'y']) writeJobState(root, id, { lastRun: NOW - MIN, lastExit: 0, pid: null });
+        writePid(root, 'a', 111);
+        writePid(root, 'x', 222);
+        const deps = fakeDeps({ isPidAlive: vi.fn((pid: number) => pid === 111 || pid === 222) });
+        await tick({ root, now: NOW, deps });
+        const rows = groupHeldRows(deps);
+        expect(rows).toHaveLength(1);
+        expect(rows[0].held).toEqual([
+          { id: 'b', group: 'tree', holder: 'a' },
+          { id: 'y', group: 'net', holder: 'x' },
+        ]);
+      });
+    });
   });
 
   it('clears a stale usage-limit skip marker once the job runs for real again', async () => {

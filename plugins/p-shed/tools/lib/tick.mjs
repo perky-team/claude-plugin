@@ -74,6 +74,10 @@ export async function tick({ root, now = Date.now(), deps = {} }) {
   // job's own values and stays visible in `profile show` / `status`.
   const { jobs } = effectiveJobs({ root, jobsData, config });
   const results = [...preamble];
+  // Every group hold this tick, collected as the loop runs and logged as ONE row after
+  // the loop ends (below) — see that row's own comment for why one row per TICK, not
+  // one per job.
+  const groupHolds = [];
 
   for (const job of jobs) {
     if (job.enabled === false) continue;
@@ -121,14 +125,20 @@ export async function tick({ root, now = Date.now(), deps = {} }) {
     }
 
     // Cross-job duplicate guard: a groupmate is live, so this job does not start —
-    // SKIPPED, not queued, exactly like the same-job guard above. Nothing is written:
+    // SKIPPED, not queued, exactly like the same-job guard above. State is untouched:
     // no lastRun (the slot is not consumed), no breaker movement, so catch-up starts
     // this job on the first tick after the group frees. Placed after the schedule
     // check (only DUE jobs contend) and before the guard (no point running a guard
-    // command for a launch that cannot happen).
+    // command for a launch that cannot happen). The hold IS now recorded — batched
+    // into one log row after the loop, below — but that is visibility only, layered on
+    // top of the same no-state gate; it changes nothing about what this branch writes.
     const holder = findGroupHolder({ root, job, jobs, defaults, isAlive: d.isPidAlive });
     if (holder) {
       results.push({ id: job.id, action: 'skipped-group', group: holder.group, holder: holder.id });
+      // Recorded for the batched log row below, not written here: the gate's own state
+      // rule (no lastRun, no breaker movement) is untouched by this — collecting a hold
+      // for logging is not the same as consuming the slot.
+      groupHolds.push({ id: job.id, group: holder.group, holder: holder.id });
       continue;
     }
 
@@ -256,6 +266,22 @@ export async function tick({ root, now = Date.now(), deps = {} }) {
     d.appendLog(root, withRunDetail({ ts: now, job: job.id, exit: r.exit, timedOut: r.timedOut, durationMs: r.durationMs, outcome, ...(guarded ? { guarded: true } : {}) }), now);
     d.removePid(job.id);
     results.push({ id: job.id, action: 'launched', exit: r.exit, timedOut: r.timedOut });
+  }
+
+  // One row per TICK for every group hold it saw, not one row per held job. A held
+  // job's slot stays open (see the gate above), so a minutely job stuck behind a
+  // thirty-minute groupmate would otherwise write a row every minute for the whole
+  // thirty minutes; batching turns that into ONE row, and a tick where several jobs
+  // share one held group — or several groups are held at once — still costs only one
+  // row instead of one per job. This does not remove the bound the log-noise policy
+  // cares about: a hold only exists while a groupmate is actually running, so the
+  // worst case across a day is one row per tick for as long as runs actually take, the
+  // same ceiling `reclaimed-deploy-pause` already accepts for its own batched event —
+  // never the 1440-rows/day risk a quiet guard would have without its own no-log rule.
+  // Same shape as `reclaimed-deploy-pause`: `action` and no `outcome`, `job: null`
+  // because the row covers however many jobs were held, not one.
+  if (groupHolds.length) {
+    d.appendLog(root, { ts: now, job: null, action: 'group-held', held: groupHolds }, now);
   }
 
   // Orphan prune: drop state files for jobs no longer in jobs.yml.

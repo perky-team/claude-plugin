@@ -20,6 +20,10 @@ const SLOWEST_CAP = 8;
 // stops being an overview of where time goes. Two is enough to show a job is
 // consistently slow (not a one-off) while still leaving room for six other jobs.
 const SLOWEST_PER_JOB_CAP = 2;
+// Rows shown in the "group holds" card, sorted busiest-first — a page-size cap like
+// RECENT_CAP/SLOWEST_CAP above, not a load-bearing limit: a deployment normally has a
+// handful of concurrency groups, so this is very unlikely to ever bind.
+const GROUP_HOLDS_CAP = 8;
 
 function num(v) {
   return typeof v === 'number' && Number.isFinite(v) ? v : null;
@@ -52,6 +56,10 @@ function eventDetail(rec) {
   if (rec.action === 'reclaimed-deploy-pause') {
     const n = Array.isArray(rec.reclaimed) ? rec.reclaimed.length : 0;
     return `reclaimed ${n} pause(s)`;
+  }
+  if (rec.action === 'group-held') {
+    const n = Array.isArray(rec.held) ? rec.held.length : 0;
+    return `${n} job(s) held by their group`;
   }
   return String(rec.action);
 }
@@ -151,6 +159,14 @@ export function aggregate(records, now, { windowDays = 7 } = {}) {
   const durations = [];
   // Holds both real events and run rows; every entry here ends up in `recent`.
   const feed = [];
+  // Folded from every `group-held` event's `held` array, keyed by the (job, group,
+  // holder) triple so the same pairing across many ticks becomes one row with a count,
+  // not one row per tick — a Map (not a plain object) because a job id could otherwise
+  // collide with a built-in property name. Total is tracked separately because a row
+  // this version does not know how to key (a malformed entry) must still count toward
+  // the headline number, the same "never silently drop a row" rule `outcomes` follows.
+  let groupHoldTotal = 0;
+  const groupHoldsByKey = new Map();
 
   for (const rec of recs) {
     const ts = num(rec?.ts);
@@ -158,9 +174,28 @@ export function aggregate(records, now, { windowDays = 7 } = {}) {
     const job = typeof rec.job === 'string' ? rec.job : null;
 
     // A row carrying `action` and no `outcome` is not a run — it is an event the tick
-    // recorded (today: a reclaimed deploy pause). It moves no counter.
+    // recorded (a reclaimed deploy pause, or a batch of group holds). It moves no run
+    // counter, but a `group-held` row does feed the group-holds card below.
     if (rec.action !== undefined && rec.outcome === undefined) {
       feed.push({ ts, job, kind: String(rec.action), detail: eventDetail(rec) });
+      if (rec.action === 'group-held' && Array.isArray(rec.held)) {
+        for (const h of rec.held) {
+          // Every entry counts toward the headline total even when it cannot be keyed
+          // (same "an unrecognised value is still counted, just not bucketed" rule
+          // `outcomes` follows above) — only a well-formed triple earns its own row.
+          groupHoldTotal++;
+          const heldId = h && typeof h.id === 'string' && h.id ? h.id : null;
+          const group = h && typeof h.group === 'string' && h.group ? h.group : null;
+          const holder = h && typeof h.holder === 'string' && h.holder ? h.holder : null;
+          if (!heldId || !group || !holder) continue;
+          // JSON-encoded triple as the key: safe from delimiter collisions a plain
+          // joined string would risk if an id ever contained the separator itself.
+          const key = JSON.stringify([heldId, group, holder]);
+          const entry = groupHoldsByKey.get(key) ?? { job: heldId, group, holder, count: 0 };
+          entry.count++;
+          groupHoldsByKey.set(key, entry);
+        }
+      }
       continue;
     }
 
@@ -254,6 +289,10 @@ export function aggregate(records, now, { windowDays = 7 } = {}) {
     if (slowestRuns.length >= SLOWEST_CAP) break;
   }
 
+  // Busiest pairing first, then capped — the same sort-then-cap shape as slowestRuns
+  // above, so a row order in the input never matters for which rows survive.
+  const groupHoldRows = [...groupHoldsByKey.values()].sort((a, b) => b.count - a.count).slice(0, GROUP_HOLDS_CAP);
+
   return {
     windowDays: days,
     from,
@@ -263,6 +302,7 @@ export function aggregate(records, now, { windowDays = 7 } = {}) {
     byJob,
     byModel,
     slowestRuns,
+    groupHolds: { total: groupHoldTotal, rows: groupHoldRows },
     recent: feed.slice(0, RECENT_CAP),
     // aggregate() reads no files, so it cannot count unreadable ones itself — these are
     // placeholders the CLI overwrites with readLogRecords()'s real counts.

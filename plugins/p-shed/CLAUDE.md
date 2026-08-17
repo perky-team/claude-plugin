@@ -11,8 +11,10 @@ Pure scheduler/launcher. Key decisions:
 - **Concurrency groups extend that guard across jobs — still a skip, never a wait.**
   An optional `concurrencyGroup` (per job, or in `defaults`) means "at most one LIVE run
   per group": a due job whose group is held by a live groupmate reports
-  `skipped-group` (+ `group`, `holder`) and writes **nothing** — no `lastRun`, no
-  breaker movement — so catch-up starts it on the first tick after the group frees.
+  `skipped-group` (+ `group`, `holder`) and writes **nothing to its own state** — no
+  `lastRun`, no breaker movement — so catch-up starts it on the first tick after the
+  group frees. The hold IS visible in the run log, though: see the group-holds bullet
+  further down for the batched `group-held` row this now writes and the card it feeds.
   `resolveGroup`/`findGroupHolder` live in `lib/concurrency.mjs`; an explicit
   `concurrencyGroup: null` on a job beats `defaults`, and no group anywhere is
   unconstrained (the pre-existing behavior). This exists so a deployment does not wrap
@@ -291,16 +293,31 @@ Pure scheduler/launcher. Key decisions:
   own, right after the real problems. `maxConsecutiveFailures <= 0` disables the
   breaker for that job entirely, so an ever-climbing count there is not a warning and
   prints nothing.
-- **Five summary cards were added — cost by model, quota, slowest runs, tokens, and
-  scheduler health — and a sixth (group holds) was deliberately NOT built.** A
-  `skipped-group` gate in `tick.mjs` (the cross-job concurrency guard) writes **no log
-  row at all** — same log-noise policy as `not-due` and `skipped-retry-wait` — so the
-  run log this page is built from carries zero evidence a hold ever happened. Building
-  the card anyway would have meant inventing a number nobody computes, which is worse
-  than not having the card. If a group-holds card is wanted later, `tick.mjs` needs to
-  start logging the event first (mirroring `reclaimed-deploy-pause`'s `action`-only row,
-  never an `outcome`, so it stays a distinct shape from a real run) — this page must
-  keep reading it, not inventing it.
+- **Six summary cards: cost by model, quota, group holds, slowest runs, tokens, and
+  scheduler health.** The group-holds card used to be left out on purpose, because the
+  `skipped-group` gate in `tick.mjs` wrote no log row at all and the report had nothing
+  real to read. `tick.mjs` now logs it: a `group-held` row (`action`, no `outcome` —
+  same distinct shape as `reclaimed-deploy-pause`, `job: null`) carrying a `held` array
+  of every `{ id, group, holder }` the tick skipped that minute.
+  - **One row per TICK, not one per held job.** The gate itself still writes nothing —
+    no `lastRun`, no breaker movement, so catch-up still starts the job on the first
+    free tick; only the log gained a line. The noise risk is real: a minutely job stuck
+    behind a thirty-minute groupmate would write a row every minute for the whole half
+    hour if logged per job, and a tick where several jobs share one held group would
+    multiply that further. Batching into one row per tick removes both multipliers at
+    once — the worst case becomes one row per tick for as long as a hold lasts, capped
+    by how long real runs actually take (unlike a quiet guard, a hold cannot exist
+    without a groupmate genuinely running), never the 1440-rows/day a per-job, per-tick
+    row would risk on a busy loop.
+  - `aggregate()` (`lib/report.mjs`) folds every `group-held` row's `held` array into
+    `groupHolds: { total, rows }`, keyed by the `(job, group, holder)` triple so the
+    same pairing across many ticks becomes one row with a count rather than one row per
+    tick — `total` counts every entry seen (even one that fails to key, the same
+    "an unrecognised value still counts, just isn't bucketed" rule `outcomes` follows),
+    `rows` only the well-formed triples, sorted busiest-first and capped like
+    `slowestRuns`. `groupHoldsCard` (`lib/html.mjs`) renders it next to `quotaCard` —
+    both answer "why did this job not run, when nothing is broken?" — and says
+    `no group holds in Nd` rather than an empty box when nothing was held.
 - **Cost by model folds `usage.models` (`classify.mjs`'s `parseModelUsage`) the same way
   cost-by-job folds `usage.costUsd`: `costUsd` starts `null` and only becomes a number
   once one is actually seen for that model.** A model with token counts but no parsed

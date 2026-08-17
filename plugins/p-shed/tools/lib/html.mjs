@@ -439,6 +439,30 @@ ${reset}
 </div>`;
 }
 
+// How often a due job was held back by its own concurrency group (see CLAUDE.md,
+// "Concurrency groups") — a silent skip that otherwise looks exactly like a job with
+// nothing to do. Reads `agg.groupHolds`, which `aggregate()` (lib/report.mjs) folds
+// from `tick.mjs`'s `group-held` log rows: one row per TICK, batching every hold that
+// tick saw, so a job stuck behind a long-running groupmate for half an hour shows up
+// here as one running total, not thirty separate lines. Sits next to Quota — the two
+// answer the same question, "why did this job not run, when nothing is broken?" —
+// quota for an exhausted subscription, this one for a busy groupmate. The held job's
+// id, its group, and the holder's id are all job ids / group names an operator wrote
+// into `jobs.yml`, so all three are escaped like any other outside value on this page.
+function groupHoldsCard(agg) {
+  const { total, rows } = agg.groupHolds ?? { total: 0, rows: [] };
+  if (!total) {
+    return `<div class="card"><h2>Group holds</h2><div class="sub">no group holds in ${agg.windowDays}d</div></div>`;
+  }
+  const lines = rows.map((r) =>
+    `<tr><td>${escapeHtml(r.job)} · group ${escapeHtml(r.group)}</td><td>${r.count} held by ${escapeHtml(r.holder)}</td></tr>`).join('');
+  return `<div class="card">
+<h2>Group holds</h2>
+<div class="hero">${total}</div>
+<table>${lines}</table>
+</div>`;
+}
+
 // The longest runs in the window, with the job's own timeout beside them where it has
 // one — a run at 14m50s against a 15m timeout is about to start being killed, and
 // duration alone does not say that. `jobMetaById` is the same EFFECTIVE-jobs lookup
@@ -552,6 +576,7 @@ ${problems.map(post).join('')}
 ${accumulating.map(post).join('')}
 ${costByModelCard(agg)}
 ${quotaCard(agg)}
+${groupHoldsCard(agg)}
 ${slowestRunsCard(agg, jobMetaById, defaults)}
 ${tokensCard(agg)}
 ${healthCard(status)}

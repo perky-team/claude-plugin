@@ -100,6 +100,49 @@ describe('aggregate', () => {
     expect(a.recent[0].detail).toBe('reclaimed 1 pause(s)');
   });
 
+  describe('group-held rows (see tick.mjs — one batched row per tick)', () => {
+    const held = (entries: Record<string, unknown>[], ts = at('2026-08-14T09:00:00')) =>
+      ({ ts, job: null, action: 'group-held', held: entries });
+
+    it('treats a group-held row as an event and never as a run', () => {
+      const a = aggregate([held([{ id: 'chat', group: 'tree', holder: 'worker' }])], NOW);
+      expect(a.totals.runs).toBe(0);
+      expect(a.recent[0].kind).toBe('group-held');
+      expect(a.recent[0].detail).toBe('1 job(s) held by their group');
+    });
+
+    it('folds every held entry into one counted row, keyed by (job, group, holder)', () => {
+      const a = aggregate([
+        held([{ id: 'chat', group: 'tree', holder: 'worker' }]),
+        held([{ id: 'chat', group: 'tree', holder: 'worker' }], at('2026-08-14T09:01:00')),
+      ], NOW);
+      expect(a.groupHolds.total).toBe(2);
+      expect(a.groupHolds.rows).toEqual([{ job: 'chat', group: 'tree', holder: 'worker', count: 2 }]);
+    });
+
+    it('keeps different (job, group, holder) triples as separate rows', () => {
+      const a = aggregate([
+        held([
+          { id: 'chat', group: 'tree', holder: 'worker' },
+          { id: 'probe', group: 'net', holder: 'crawler' },
+        ]),
+      ], NOW);
+      expect(a.groupHolds.total).toBe(2);
+      expect(a.groupHolds.rows).toHaveLength(2);
+    });
+
+    it('still counts a malformed held entry toward the total, without a row for it', () => {
+      const a = aggregate([held([{ id: 'chat' /* no group/holder */ }, null, 'nope'])], NOW);
+      expect(a.groupHolds.total).toBe(3);
+      expect(a.groupHolds.rows).toHaveLength(0);
+    });
+
+    it('reports an empty groupHolds when nothing was ever held', () => {
+      const a = aggregate([run()], NOW);
+      expect(a.groupHolds).toEqual({ total: 0, rows: [] });
+    });
+  });
+
   it('reports a timed-out run as a timeout event and a failure count', () => {
     const a = aggregate([run({ outcome: 'failure', exit: null, timedOut: true })], NOW);
     expect(a.totals.outcomes.failure).toBe(1);

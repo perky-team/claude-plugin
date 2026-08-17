@@ -354,7 +354,13 @@ describe('renderHtml', () => {
       // status entry) is still on disk — the fifth argument then has no entry for it.
       const html = renderHtml(status([job({ id: 'ghost' })]), aggregate([], NOW), {}, NOW, [], {});
       expect(html).toContain('<strong>ghost</strong>');
-      expect(html).not.toContain('group ');
+      // Scoped to this job's OWN card, not the whole page: the Group holds summary
+      // card also legitimately says "group" in its empty-state line ("no group holds
+      // in Nd"), which would false-positive a page-wide check.
+      const cardStart = html.indexOf('<strong>ghost</strong>');
+      const cardEnd = html.indexOf('<div class="card">', cardStart);
+      const card = html.slice(cardStart, cardEnd === -1 ? html.length : cardEnd);
+      expect(card).not.toContain('group ');
     });
 
     it('shows a job\'s guard freshness when it has recorded one', () => {
@@ -604,6 +610,35 @@ describe('renderHtml', () => {
     });
   });
 
+  describe('Group holds card', () => {
+    it('shows how often a job was held, its group, and which job was holding it', () => {
+      const records = [
+        { ts: at('2026-08-14T09:00:00'), job: null, action: 'group-held', held: [{ id: 'chat', group: 'tree', holder: 'worker' }] },
+        { ts: at('2026-08-14T09:01:00'), job: null, action: 'group-held', held: [{ id: 'chat', group: 'tree', holder: 'worker' }] },
+      ];
+      const html = renderHtml(status([job()]), aggregate(records, NOW), {}, NOW);
+      expect(html).toContain('Group holds');
+      expect(html).toContain('chat');
+      expect(html).toContain('group tree');
+      expect(html).toContain('2 held by worker');
+    });
+
+    it('says so when there were no group holds in the window', () => {
+      expect(page([job()])).toContain('no group holds in 7d');
+    });
+
+    it('escapes the held job id, the group and the holder', () => {
+      const records = [
+        { ts: at('2026-08-14T09:00:00'), job: null, action: 'group-held', held: [{ id: '<i>x</i>', group: '<b>g</b>', holder: '<u>h</u>' }] },
+      ];
+      const html = renderHtml(status([job()]), aggregate(records, NOW), {}, NOW);
+      expect(html).not.toContain('<i>x</i>');
+      expect(html).not.toContain('<b>g</b>');
+      expect(html).not.toContain('<u>h</u>');
+      expect(html).toContain('&lt;i&gt;x&lt;/i&gt;');
+    });
+  });
+
   describe('Slowest runs card', () => {
     it('lists the longest runs with the job\'s own timeout beside them', () => {
       const records = [
@@ -673,7 +708,7 @@ describe('renderHtml', () => {
   });
 
   describe('extra-cards feed order', () => {
-    it('lays out header, problems, accumulating, the five new cards, Cost, Runs, healthy, then Recent', () => {
+    it('lays out header, problems, accumulating, the six cards, Cost, Runs, healthy, then Recent', () => {
       const jobs = [
         job({ id: 'broken', breakerTripped: true }),
         job({ id: 'climbing', consecutiveFailures: 1 }),
@@ -682,16 +717,12 @@ describe('renderHtml', () => {
       const html = renderHtml(status(jobs), aggregate([], NOW), {}, NOW, [], {});
       const marks = [
         '<strong>broken</strong>', '<strong>climbing</strong>',
-        'Cost by model', 'Quota', 'Slowest runs', 'Tokens', 'Scheduler health',
+        'Cost by model', 'Quota', 'Group holds', 'Slowest runs', 'Tokens', 'Scheduler health',
         'Cost · 7 days', 'Runs · 7 days',
         '<strong>fine</strong>', '<h2>Recent</h2>',
       ].map((m) => html.indexOf(m));
       expect(marks.every((i) => i >= 0)).toBe(true);
       for (let i = 1; i < marks.length; i++) expect(marks[i]).toBeGreaterThan(marks[i - 1]);
-    });
-
-    it('has no card for group holds — the tick writes no log row for a skipped-group, so there is nothing to show', () => {
-      expect(page([job()])).not.toContain('Group hold');
     });
   });
 
