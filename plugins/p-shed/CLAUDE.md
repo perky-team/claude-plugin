@@ -209,3 +209,113 @@ Pure scheduler/launcher. Key decisions:
   keeps writing the same checkout is a window that only looks safe. `parseArgs` swallows
   unknown flags, so ignoring `--id` would silently mean "pause everything" — the same
   blast-radius widening `lib/target.mjs` exists to prevent.
+- **`report` renders; it never serves.** p-shed has no HTTP server, no port, and no
+  access decision, and must not grow one — delivery is an off-the-shelf static file
+  server the operator runs, wired up in `jobs.yml` like any other job. A dashboard
+  plugin that read `.pshed/` from outside was considered and rejected: that is exactly
+  what p-observe does — `plugins/p-observe/tools/lib/adapters/pshed.mjs` keeps its own
+  hand-rolled parser for `jobs.yml`, separate from and in step with this plugin's own
+  (js-yaml-based) one in `lib/io.mjs`.
+- **The page carries no JavaScript and fetches nothing.** Charts are server-rendered
+  SVG; expanders are native `<details>`. It is read on a phone, and a half-loaded
+  dashboard is worse than a plain one. `__tests__/html.test.ts` pins the absence of
+  `<script`, `http://` and `https://`.
+- **Every job is one post in a single feed, whatever its state.** `lib/html.mjs`'s
+  `jobPost` renders the same skeleton for a broken job and a healthy one — before this,
+  a broken job got its own card and every healthy job was a row in a shared table, two
+  shapes on one page. Only the trouble line and the output-tail `<details>` are
+  conditional on the job's state; everything else (next/last, schedule/model/group,
+  runs and cost in the window, guard freshness) always tries to print. `renderHtml`
+  takes two more arguments for this: the EFFECTIVE jobs array `pshed.mjs` already builds
+  for `computeNext` (schedule/model/concurrencyGroup — `collectStatus` returns runtime
+  state only, none of that), and `defaults` from `jobs.yml`, because a job's group AND
+  its model are resolved through the same job-then-defaults precedence the scheduler
+  itself uses — `resolveGroup` (`lib/concurrency.mjs`) for the group, `effectiveModel`
+  (`lib/html.mjs`, mirroring `launch.mjs`'s `buildArgs`) for the model — not read off
+  `job.concurrencyGroup` / `job.model` directly. A job with no group or model of its own
+  can still inherit either from `defaults` — the ordinary way to configure a loop, and
+  before `effectiveModel` existed this silently showed no model at all on every post in
+  such a loop. `effectiveTimeoutSec` (same file) resolves the same way, one step
+  further, all the way to p-shed's built-in 900s, for the "slowest runs" card's timeout
+  column. A job in `status.jobs` with no matching entry in the jobs array (state
+  left behind by a job removed from `jobs.yml`) still renders, just without the
+  schedule/model/group line. The feed is one column at every width (`.feed`, no
+  `auto-fit`/`minmax`, `max-width:640px`, centred) — a laptop showing three or four
+  columns was the layout this branch replaced.
+- **Run outcomes are four stat tiles, never one stacked proportion bar.** The four
+  status colours fail the palette checks as adjacent fills — critical against good
+  measures dE 4.1 under deuteranopia, serious against warning 13.6 for normal vision,
+  under a floor of 15. Status colours are built to be read one at a time, next to an
+  icon and a label. Do not "tidy" the tiles back into a bar.
+- **`computeNext` checks `isDue` before falling back to `nextRun` — except a job that
+  has never run, which skips `isDue` and goes straight to `nextRun`.** p-shed catches
+  missed ticks up, so a job whose slot passed is due NOW; `nextRun` alone would print a
+  time hours away for a job that launches in sixty seconds. `isDue` must never be asked
+  about a job with no `lastRun`: it reads a missing `lastRun` as "24 hours ago", which
+  counts as due for anything more frequent than daily. It also reads the EFFECTIVE
+  schedule (profiles rewrite `schedule` in memory) and lets a pending `retryNotBefore`
+  win over both. **A job whose own run is still alive gets `at: null`, never a guessed
+  time — checked before all of the above.** `nextRun` only answers "the next matching
+  cron minute from now"; it has no idea a run is still going and will still be going
+  when that minute arrives. Printing the guess named a launch the tick's own baseline/
+  pid-alive gates would simply not make, and since the report re-renders on a schedule,
+  the guessed time slid forward every render — a job stuck forever read as "coming up
+  soon" forever. This took three fix rounds to get right and is the rule most likely to
+  get "simplified" away next.
+- **Day buckets come from `ts` in local time, never from the log file name.** Log files
+  are named by UTC date while schedules fire in local time; on UTC+3 the two disagree by
+  three hours, and bucketing by file name silently drops the local end of the window.
+- **A broken profile shows in the report's "Scheduler health" card, not as a job
+  problem.** `profileNote` (`lib/html.mjs`) prints `profile.problem` / `profile.warning`
+  even when no profile name resolved at all — the case an operator most needs to catch,
+  since the scheduler is then quietly ticking at its default pace instead of the
+  configured one. It is not one of the three states that count toward the page's
+  problem tally (breaker, self-pause, quota retry): a broken profile can affect every
+  job at once, so folding it into a per-job count would double-count or misreport it.
+- **The header shows only task name, problem count, window cost and the generated-at
+  stamp — everything else moved into a "Scheduler health" card.** Cron install state,
+  the global pause (with its origin and reason) and the active profile used to live in
+  the header's small print; saying the same thing in two places on one page added
+  nothing. What stays in the header is deliberately the minimum that defends against a
+  dead render job serving stale numbers: the reader needs the generated-at stamp next
+  to the numbers it describes, not two scrolls away.
+- **A job whose failures are climbing but whose breaker has not tripped gets its own
+  feed bucket, between the real problems and the summary cards — and it is NOT one of
+  the three problem states.** `isAccumulating` (`lib/html.mjs`) is
+  `!breakerTripped && consecutiveFailures > 0 && effectiveMaxFailures > 0` — the same
+  precedence tick.mjs uses for `maxConsecutiveFailures` (job, then `defaults`, then 3).
+  Folding it into the problem count was tried and rejected: a count that includes jobs
+  which never actually stopped is a count nobody trusts, and the page's problem tally
+  is pinned at exactly three states on purpose (see above). But the same job must not
+  sit at the bottom of a now-long feed where nobody scrolls, so it gets a bucket of its
+  own, right after the real problems. `maxConsecutiveFailures <= 0` disables the
+  breaker for that job entirely, so an ever-climbing count there is not a warning and
+  prints nothing.
+- **Five summary cards were added — cost by model, quota, slowest runs, tokens, and
+  scheduler health — and a sixth (group holds) was deliberately NOT built.** A
+  `skipped-group` gate in `tick.mjs` (the cross-job concurrency guard) writes **no log
+  row at all** — same log-noise policy as `not-due` and `skipped-retry-wait` — so the
+  run log this page is built from carries zero evidence a hold ever happened. Building
+  the card anyway would have meant inventing a number nobody computes, which is worse
+  than not having the card. If a group-holds card is wanted later, `tick.mjs` needs to
+  start logging the event first (mirroring `reclaimed-deploy-pause`'s `action`-only row,
+  never an `outcome`, so it stays a distinct shape from a real run) — this page must
+  keep reading it, not inventing it.
+- **Cost by model folds `usage.models` (`classify.mjs`'s `parseModelUsage`) the same way
+  cost-by-job folds `usage.costUsd`: `costUsd` starts `null` and only becomes a number
+  once one is actually seen for that model.** A model with token counts but no parsed
+  cost stays out of the ranking rather than showing as a misleading $0.00 row.
+- **Quota and Slowest-runs read fields report.mjs's `aggregate()` already had to start
+  tracking:** `byDay[].usageLimit` / `.apiOverload` (a per-day split of the existing
+  `totals.skips`), `totals.lastResetAt` (the verbatim reset text a limit message most
+  recently quoted, tracked by the record's own `ts` so input order never matters — the
+  reporting form from `classify.mjs`'s `parseResetAt`, not a parsed timestamp), and
+  `slowestRuns` (every record with a numeric `durationMs`, sorted longest first and
+  capped at 8 total AND at 2 per job — the per-job cap is walked AFTER the sort, so a
+  job's slowest run is the one that survives — so record order never matters there
+  either). The per-job cap exists because one chronically slow job otherwise fills every
+  row and the card stops showing where time goes across the whole scheduler; two is
+  enough to show a job is consistently slow while leaving room for others. All three
+  fields are additive to `aggregate()`'s return shape and follow its existing rule: a
+  missing or non-numeric field is left out,
+  never coerced.

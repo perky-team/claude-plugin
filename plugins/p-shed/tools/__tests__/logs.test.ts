@@ -2,7 +2,7 @@ import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { appendLog, rotateLogs } from '../lib/logs.mjs';
+import { appendLog, rotateLogs, readLogRecords } from '../lib/logs.mjs';
 import { paths } from '../lib/io.mjs';
 
 let root: string;
@@ -58,5 +58,65 @@ describe('rotateLogs', () => {
     expect(existsSync(join(dir, 'cron.log'))).toBe(true);
     expect(existsSync(join(dir, 'notes.txt'))).toBe(true);
     expect(existsSync(join(dir, '2026-01-01.jsonl'))).toBe(false);
+  });
+});
+
+describe('readLogRecords', () => {
+  const write = (name: string, lines: string[]) => {
+    const dir = paths(root).logsDir;
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, name), lines.join('\n') + '\n');
+  };
+
+  it('returns an empty result when there is no log directory', () => {
+    expect(readLogRecords(root, 0)).toEqual({ records: [], skippedLines: 0, skippedFiles: 0 });
+  });
+
+  it('reads every dated file and sorts records oldest first', () => {
+    write('2026-07-15.jsonl', [JSON.stringify({ ts: 200, job: 'b' })]);
+    write('2026-07-16.jsonl', [JSON.stringify({ ts: 100, job: 'a' })]);
+    const { records } = readLogRecords(root, 0);
+    expect(records.map((r) => r.job)).toEqual(['a', 'b']);
+  });
+
+  it('drops records older than sinceMs without counting them as skipped', () => {
+    write('2026-07-16.jsonl', [
+      JSON.stringify({ ts: 100, job: 'old' }),
+      JSON.stringify({ ts: 300, job: 'new' }),
+    ]);
+    const { records, skippedLines } = readLogRecords(root, 200);
+    expect(records.map((r) => r.job)).toEqual(['new']);
+    expect(skippedLines).toBe(0);
+  });
+
+  it('skips and counts a line that does not parse', () => {
+    write('2026-07-16.jsonl', [JSON.stringify({ ts: 100, job: 'a' }), '{"ts":1,']);
+    const { records, skippedLines, skippedFiles } = readLogRecords(root, 0);
+    expect(records).toHaveLength(1);
+    expect(skippedLines).toBe(1);
+    expect(skippedFiles).toBe(0);
+  });
+
+  it('skips and counts a record with no numeric ts', () => {
+    write('2026-07-16.jsonl', [JSON.stringify({ job: 'a' })]);
+    expect(readLogRecords(root, 0)).toEqual({ records: [], skippedLines: 1, skippedFiles: 0 });
+  });
+
+  it('ignores files that are not dated jsonl', () => {
+    write('2026-07-16.jsonl', [JSON.stringify({ ts: 100, job: 'a' })]);
+    writeFileSync(join(paths(root).logsDir, 'cron.log'), 'noise\n');
+    expect(readLogRecords(root, 0).records).toHaveLength(1);
+  });
+
+  it('counts a whole unreadable FILE separately from a bad line, not folded into it (A6)', () => {
+    // A directory where a dated log file is expected is unreadable as a log for the
+    // same reason a permission error is: readFileSync fails on the whole thing, not
+    // on one line. Portable across Windows and POSIX, unlike chmod.
+    write('2026-07-15.jsonl', [JSON.stringify({ ts: 100, job: 'a' })]);
+    mkdirSync(join(paths(root).logsDir, '2026-07-16.jsonl'));
+    const { records, skippedLines, skippedFiles } = readLogRecords(root, 0);
+    expect(records.map((r) => r.job)).toEqual(['a']);
+    expect(skippedFiles).toBe(1);
+    expect(skippedLines).toBe(0);
   });
 });

@@ -462,7 +462,7 @@ git commit -m "feat(p-shed): fold the run log into cost, outcome and per-job tot
 
 **Interfaces:**
 - Consumes: `parseCron(expr)` and `matches(cron, date)`, both already exported from this file.
-- Produces: `nextRun(cron, fromMs) -> number | null`. `cron` is a parsed object from `parseCron`, not a string. The result is the epoch milliseconds of the first whole minute strictly after `fromMs` that the spec matches, or `null` when none falls within 40 days.
+- Produces: `nextRun(cron, fromMs) -> number | null`. `cron` is a parsed object from `parseCron`, not a string. The result is the epoch milliseconds of the first whole minute strictly after `fromMs` that the spec matches, or `null` when none falls within 400 days.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -474,6 +474,11 @@ describe('nextRun', () => {
 
   it('finds the next quarter hour', () => {
     const t = nextRun(parseCron('*/15 * * * *'), at('2026-08-14T10:07:30'));
+    expect(t).toBe(at('2026-08-14T10:15:00'));
+  });
+
+  it('steps forward by exactly one minute, not two', () => {
+    const t = nextRun(parseCron('*/15 * * * *'), at('2026-08-14T10:14:00'));
     expect(t).toBe(at('2026-08-14T10:15:00'));
   });
 
@@ -495,6 +500,11 @@ describe('nextRun', () => {
   it('returns null for a spec that can never match', () => {
     expect(nextRun(parseCron('0 0 30 2 *'), at('2026-08-14T10:00:00'))).toBeNull();
   });
+
+  it('reaches a yearly schedule', () => {
+    const t = nextRun(parseCron('0 0 1 1 *'), at('2026-08-14T10:00:00'));
+    expect(t).toBe(at('2027-01-01T00:00:00'));
+  });
 });
 ```
 
@@ -511,13 +521,18 @@ Append to `plugins/p-shed/tools/lib/cron.mjs`:
 // The first whole minute strictly after `fromMs` that this spec matches, or null.
 //
 // It walks minute by minute through the same matcher the tick uses, so it can never
-// disagree with it. Forty days covers a monthly schedule (`0 0 1 * *`) from any starting
-// day; the worst case is 57,600 matcher calls, which is far cheaper than reading the
-// logs the same command reads anyway. A spec that can never match — the 30th of
-// February — returns null rather than spinning.
+// disagree with it. 400 days covers a yearly schedule (`0 0 1 1 *`) from any starting
+// day, with room to spare; the worst case is 576,000 matcher calls, which is still far
+// cheaper than reading the logs the same command reads anyway. A spec that can never
+// match — the 30th of February — returns null rather than spinning.
+//
+// One legal spec still reads as null despite having a real next run: a leap day
+// (`0 0 29 2 *`) can be up to eight years away, spanning a non-leap century year like
+// 2100. Covering that would cost millions of iterations for a schedule nobody writes,
+// so it is left out on purpose.
 export function nextRun(cron, fromMs) {
   const MIN = 60_000;
-  const CAP = 40 * 24 * 60;
+  const CAP = 400 * 24 * 60;
   let t = Math.floor(fromMs / MIN) * MIN + MIN;
   for (let i = 0; i < CAP; i++, t += MIN) {
     if (matches(cron, new Date(t))) return t;
@@ -731,7 +746,7 @@ describe('barsByDay', () => {
   it('gives the tallest bar the full plot height', () => {
     const svg = barsByDay(days([1, 4]), opts);
     // height 96 - padTop 12 - axis band 14 = 70
-    expect(svg).toContain('h="70"');
+    expect(svg).toContain('data-h="70"');
   });
 
   it('leaves a 2px gap between neighbouring bars', () => {
@@ -826,7 +841,7 @@ export function barsByDay(byDay, { width, height, series, muted, grid }) {
       const h = round((d.costUsd / max) * plotH);
       const y = round(baseY - h);
       bars.push(
-        `<path class="bar" d="${barPath(x, y, round(barW), h)}" fill="${series}" data-x="${x}" data-w="${round(barW)}" h="${h}"/>`,
+        `<path class="bar" d="${barPath(x, y, round(barW), h)}" fill="${series}" data-x="${x}" data-w="${round(barW)}" data-h="${h}"/>`,
       );
     }
     // Only the ends are labelled. A date under every bar is unreadable at phone width,
@@ -1024,13 +1039,18 @@ const hhmm = (ms) => {
 const money = (v) => (typeof v === 'number' ? `$${v.toFixed(2)}` : '—');
 
 // A job is in exactly one of these states, and the order is the precedence.
+//
+// Status colours are literal hex because they are mode-invariant by design — the same
+// four steps clear their contrast floor on both surfaces. The two non-status colours are
+// `var(...)` instead: the series blue and the muted grey have a different step per mode,
+// and a literal here would freeze the light step onto the dark surface.
 function jobState(j) {
   if (j.breakerTripped) return { key: 'breaker', label: 'breaker', icon: '⛔', color: STATUS.critical, problem: true };
   if (j.paused && j.pauseOrigin === 'self') return { key: 'self-pause', label: 'paused itself', icon: '⏸', color: STATUS.serious, problem: true };
-  if (j.paused) return { key: 'held', label: `paused (${j.pauseOrigin ?? 'operator'})`, icon: '⏸', color: PALETTE.light.muted, problem: false };
+  if (j.paused) return { key: 'held', label: `paused (${j.pauseOrigin ?? 'operator'})`, icon: '⏸', color: 'var(--muted)', problem: false };
   if (j.retryNotBefore != null) return { key: 'retry', label: 'retry pending', icon: '⏳', color: STATUS.warning, problem: true };
-  if (j.running) return { key: 'running', label: 'running', icon: '●', color: PALETTE.light.series, problem: false };
-  if (j.enabled === false) return { key: 'off', label: 'disabled', icon: '○', color: PALETTE.light.muted, problem: false };
+  if (j.running) return { key: 'running', label: 'running', icon: '●', color: 'var(--series)', problem: false };
+  if (j.enabled === false) return { key: 'off', label: 'disabled', icon: '○', color: 'var(--muted)', problem: false };
   return { key: 'ok', label: 'ok', icon: '○', color: STATUS.good, problem: false };
 }
 
