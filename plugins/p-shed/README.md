@@ -231,8 +231,8 @@ Semantics worth knowing:
   a name absent from `profiles:`, a malformed table, an invalid single override — each
   falls back to the job's own values and keeps ticking. Fail toward running: a stopped loop
   is a worse failure than a loop running at its default pace. The condition is visible in
-  `profile show`, in `status` (`[unknown-name]`, `[file-missing]`), and in the header line
-  of the `report` page.
+  `profile show`, in `status` (`[unknown-name]`, `[file-missing]`), and in the "Scheduler
+  health" card of the `report` page.
 - **Strict where a human is watching**: `profile show` / `list` / `set` validate the table
   with `set-job`'s own rules and fail with a message naming the profile, job and field —
   including for an unknown key, so a `schedul:` typo cannot sit there doing nothing.

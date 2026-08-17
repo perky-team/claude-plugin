@@ -259,11 +259,52 @@ Pure scheduler/launcher. Key decisions:
 - **Day buckets come from `ts` in local time, never from the log file name.** Log files
   are named by UTC date while schedules fire in local time; on UTC+3 the two disagree by
   three hours, and bucketing by file name silently drops the local end of the window.
-- **A broken profile shows in the report's header line, not as a job problem.**
-  `profileNote` (`lib/html.mjs`) prints `profile.problem` / `profile.warning` next to the
-  cron/pause line even when no profile name resolved at all — the case an operator most
-  needs to catch, since the scheduler is then quietly ticking at its default pace
-  instead of the configured one. It is not one of the three states that count toward the
-  page's problem tally (breaker, self-pause, quota retry): a broken profile can affect
-  every job at once, so folding it into a per-job count would double-count or misreport
-  it.
+- **A broken profile shows in the report's "Scheduler health" card, not as a job
+  problem.** `profileNote` (`lib/html.mjs`) prints `profile.problem` / `profile.warning`
+  even when no profile name resolved at all — the case an operator most needs to catch,
+  since the scheduler is then quietly ticking at its default pace instead of the
+  configured one. It is not one of the three states that count toward the page's
+  problem tally (breaker, self-pause, quota retry): a broken profile can affect every
+  job at once, so folding it into a per-job count would double-count or misreport it.
+- **The header shows only task name, problem count, window cost and the generated-at
+  stamp — everything else moved into a "Scheduler health" card.** Cron install state,
+  the global pause (with its origin and reason) and the active profile used to live in
+  the header's small print; saying the same thing in two places on one page added
+  nothing. What stays in the header is deliberately the minimum that defends against a
+  dead render job serving stale numbers: the reader needs the generated-at stamp next
+  to the numbers it describes, not two scrolls away.
+- **A job whose failures are climbing but whose breaker has not tripped gets its own
+  feed bucket, between the real problems and the summary cards — and it is NOT one of
+  the three problem states.** `isAccumulating` (`lib/html.mjs`) is
+  `!breakerTripped && consecutiveFailures > 0 && effectiveMaxFailures > 0` — the same
+  precedence tick.mjs uses for `maxConsecutiveFailures` (job, then `defaults`, then 3).
+  Folding it into the problem count was tried and rejected: a count that includes jobs
+  which never actually stopped is a count nobody trusts, and the page's problem tally
+  is pinned at exactly three states on purpose (see above). But the same job must not
+  sit at the bottom of a now-long feed where nobody scrolls, so it gets a bucket of its
+  own, right after the real problems. `maxConsecutiveFailures <= 0` disables the
+  breaker for that job entirely, so an ever-climbing count there is not a warning and
+  prints nothing.
+- **Five summary cards were added — cost by model, quota, slowest runs, tokens, and
+  scheduler health — and a sixth (group holds) was deliberately NOT built.** A
+  `skipped-group` gate in `tick.mjs` (the cross-job concurrency guard) writes **no log
+  row at all** — same log-noise policy as `not-due` and `skipped-retry-wait` — so the
+  run log this page is built from carries zero evidence a hold ever happened. Building
+  the card anyway would have meant inventing a number nobody computes, which is worse
+  than not having the card. If a group-holds card is wanted later, `tick.mjs` needs to
+  start logging the event first (mirroring `reclaimed-deploy-pause`'s `action`-only row,
+  never an `outcome`, so it stays a distinct shape from a real run) — this page must
+  keep reading it, not inventing it.
+- **Cost by model folds `usage.models` (`classify.mjs`'s `parseModelUsage`) the same way
+  cost-by-job folds `usage.costUsd`: `costUsd` starts `null` and only becomes a number
+  once one is actually seen for that model.** A model with token counts but no parsed
+  cost stays out of the ranking rather than showing as a misleading $0.00 row.
+- **Quota and Slowest-runs read fields report.mjs's `aggregate()` already had to start
+  tracking:** `byDay[].usageLimit` / `.apiOverload` (a per-day split of the existing
+  `totals.skips`), `totals.lastResetAt` (the verbatim reset text a limit message most
+  recently quoted, tracked by the record's own `ts` so input order never matters — the
+  reporting form from `classify.mjs`'s `parseResetAt`, not a parsed timestamp), and
+  `slowestRuns` (every record with a numeric `durationMs`, capped at 8 after sorting, so
+  record order never matters there either). All three are additive to `aggregate()`'s
+  return shape and follow its existing rule: a missing or non-numeric field is left out,
+  never coerced.

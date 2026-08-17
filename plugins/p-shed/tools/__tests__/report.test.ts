@@ -40,7 +40,7 @@ describe('aggregate', () => {
     expect(a.byDay).toHaveLength(7);
     expect(a.byDay[0].date).toBe('2026-08-08');
     expect(a.byDay[6].date).toBe('2026-08-14');
-    expect(a.byDay[6]).toEqual({ date: '2026-08-14', costUsd: null, runs: 0 });
+    expect(a.byDay[6]).toEqual({ date: '2026-08-14', costUsd: null, runs: 0, usageLimit: 0, apiOverload: 0 });
   });
 
   it('sums cost and leaves it null when nothing was measured', () => {
@@ -151,6 +151,60 @@ describe('aggregate', () => {
     expect(a.totals.tokens).toEqual({ in: 14, out: 5, cacheRead: 0, cacheCreate: 3 });
     expect(a.totals.turns).toBe(2);
     expect(a.totals.apiMs).toBe(100);
+  });
+
+  it('folds per-model cost from usage.models, leaving an unmeasured model null', () => {
+    const a = aggregate([
+      run({ usage: { models: { opus: { costUsd: 3 }, sonnet: { costUsd: 0.5 } } } }),
+      run({ usage: { models: { opus: { costUsd: 1 } } } }),
+      run({ usage: { models: { haiku: { in: 10 } } } }), // no costUsd
+    ], NOW);
+    expect(a.byModel.opus.costUsd).toBeCloseTo(4, 6);
+    expect(a.byModel.sonnet.costUsd).toBeCloseTo(0.5, 6);
+    expect(a.byModel.haiku.costUsd).toBeNull();
+  });
+
+  it('never throws on a malformed usage.models shape', () => {
+    expect(() => aggregate([run({ usage: { models: 'nope' } })], NOW)).not.toThrow();
+    expect(() => aggregate([run({ usage: { models: ['a'] } })], NOW)).not.toThrow();
+    expect(() => aggregate([run({ usage: { models: { opus: 'nope' } } })], NOW)).not.toThrow();
+  });
+
+  it('breaks quota skips down per day and counts the two reasons separately', () => {
+    const a = aggregate([
+      run({ outcome: 'skipped', reason: 'usage-limit', ts: at('2026-08-13T09:00:00') }),
+      run({ outcome: 'skipped', reason: 'api-overload', ts: at('2026-08-14T09:00:00') }),
+      run({ outcome: 'skipped', reason: 'api-overload', ts: at('2026-08-14T10:00:00') }),
+    ], NOW);
+    const d13 = a.byDay.find((d) => d.date === '2026-08-13');
+    const d14 = a.byDay.find((d) => d.date === '2026-08-14');
+    expect(d13).toMatchObject({ usageLimit: 1, apiOverload: 0 });
+    expect(d14).toMatchObject({ usageLimit: 0, apiOverload: 2 });
+  });
+
+  it('keeps the most recent reset text quoted, by timestamp not input order', () => {
+    const a = aggregate([
+      { ...run({ outcome: 'skipped', reason: 'usage-limit', ts: at('2026-08-14T09:00:00') }), resetAt: 'newer text' },
+      { ...run({ outcome: 'skipped', reason: 'usage-limit', ts: at('2026-08-13T09:00:00') }), resetAt: 'older text' },
+    ], NOW);
+    expect(a.totals.lastResetAt).toBe('newer text');
+  });
+
+  it('leaves lastResetAt null when no skip ever quoted one', () => {
+    expect(aggregate([run()], NOW).totals.lastResetAt).toBeNull();
+  });
+
+  it('keeps the slowest runs, longest first, capped at 8', () => {
+    const many = Array.from({ length: 12 }, (_, i) => run({ job: `j${i}`, durationMs: i * 1000 }));
+    const a = aggregate(many, NOW);
+    expect(a.slowestRuns).toHaveLength(8);
+    expect(a.slowestRuns[0]).toMatchObject({ job: 'j11', durationMs: 11_000 });
+    expect(a.slowestRuns[7].durationMs).toBe(4000);
+  });
+
+  it('leaves slowestRuns empty when no record carries a numeric durationMs', () => {
+    const a = aggregate([{ ts: at('2026-08-14T10:00:00'), job: 'worker', outcome: 'success', exit: 0 }], NOW);
+    expect(a.slowestRuns).toEqual([]);
   });
 
   it('returns recent newest first and caps it at 20', () => {

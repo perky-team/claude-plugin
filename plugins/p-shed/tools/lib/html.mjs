@@ -59,6 +59,45 @@ function whenLabel(ms, now) {
 
 const money = (v) => (typeof v === 'number' ? `$${v.toFixed(2)}` : '—');
 
+// Large token/turn counts are easier to scan on a phone with separators — built into
+// the platform, so this needs no vendored formatting library.
+const fmtNum = (n) => (typeof n === 'number' ? n.toLocaleString('en-US') : '0');
+
+// "14m50s" / "46s" — the same shape a run's duration is shown in everywhere else on
+// this page (see report.mjs's `secs` helper, which this deliberately mirrors instead
+// of reusing: that one only ever wraps a value in parentheses for the recent list).
+function fmtDuration(ms) {
+  const total = Math.max(0, Math.round(ms / 1000));
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return m > 0 ? `${m}m${String(s).padStart(2, '0')}s` : `${s}s`;
+}
+
+const PROMPT_SUMMARY_MAX = 80;
+
+// Collapse a (possibly multi-line) prompt to one line, cut to `max` characters. The
+// untouched original always sits behind the <details> this feeds, so nothing here
+// needs to be exact — only short enough to fit one line on a 640px-wide phone card.
+function trimOneLine(text, max) {
+  const oneLine = String(text).replace(/\s+/g, ' ').trim();
+  return oneLine.length > max ? `${oneLine.slice(0, max - 1)}…` : oneLine;
+}
+
+// The job's own maxConsecutiveFailures, falling back to defaults.yml's, then p-shed's
+// built-in default — the exact precedence tick.mjs uses to decide when the breaker
+// trips, so this page can never warn about a threshold the scheduler does not use.
+function effectiveMaxFailures(jobMeta, defaults) {
+  return jobMeta?.maxConsecutiveFailures ?? defaults?.maxConsecutiveFailures ?? 3;
+}
+
+// True for a job whose failures are building but whose breaker has not tripped yet —
+// invisible everywhere else on the page (jobState reads `ok`/`held`/`running` for it,
+// same as a job with a clean record). `maxFailures <= 0` disables the breaker for that
+// job entirely (see tick.mjs), so an ever-climbing count there is not a warning.
+function isAccumulating(j, jobMeta, defaults) {
+  return !j.breakerTripped && j.consecutiveFailures > 0 && effectiveMaxFailures(jobMeta, defaults) > 0;
+}
+
 // A job is in exactly one of these states, and the order is the precedence.
 //
 // Status colours are literal hex because they are mode-invariant by design — the same
@@ -90,6 +129,9 @@ function jobState(j) {
 //                            NO overrides are applied.
 //   warning 'file-missing'   the configured profile file could not be read at all.
 //   warning 'file-unreadable' the file exists but reading it failed.
+//
+// Rendered inside the "Scheduler health" card, not the header — printing it twice on
+// the same page said nothing more than printing it once.
 function profileNote(profile) {
   if (!profile) return '';
   const parts = [`profile ${profile.name ? escapeHtml(profile.name) : '—'}`];
@@ -101,7 +143,7 @@ function profileNote(profile) {
   } else if (profile.warning === 'file-unreadable') {
     parts.push(badge({ key: 'profile-warning', label: 'profile file unreadable', icon: '⚠', color: STATUS.warning }));
   }
-  return ` · ${parts.join(' ')}`;
+  return parts.join(' ');
 }
 
 function nextLabel(entry, now) {
@@ -178,6 +220,15 @@ function jobPost(j, state, jobMeta, defaults, agg, next, now) {
     ? ` (${escapeHtml(j.consecutiveFailures)} fails in a row)` : '';
   const trouble = state.problem && reason ? `<div class="reason">“${escapeHtml(reason)}${fails}”</div>` : '';
 
+  // A job whose failures are building but whose breaker has not tripped yet looks
+  // exactly like a healthy job everywhere else on the page — `trouble` above only
+  // fires once the breaker is already tripped. This is the line that closes that gap.
+  // The colour rule (dot only, label in plain ink) is the same one badge() and the
+  // outcome tiles follow.
+  const failureLine = isAccumulating(j, jobMeta, defaults)
+    ? `<div class="sub"><span class="dot" style="background:${STATUS.warning}"></span> ${j.consecutiveFailures} of ${effectiveMaxFailures(jobMeta, defaults)} failures</div>`
+    : '';
+
   // When it runs, when it last ran — always shown, problem or not. `lastSkipReason`
   // (usage-limit / api-overload) rides along on the "last" side rather than getting its
   // own line: it is a property of the last attempt, same as the exit code next to it.
@@ -203,10 +254,26 @@ function jobPost(j, state, jobMeta, defaults, agg, next, now) {
     })(),
   ].filter(Boolean) : [];
 
+  // A job pointed at the wrong folder is a common, otherwise invisible mistake — shown
+  // whenever the job sets one, same escaping as every other value a job file can write.
+  const cwd = jobMeta?.cwd ? `<div class="sub">cwd ${escapeHtml(jobMeta.cwd)}</div>` : '';
+
   // What the job did and cost in the report window — omitted entirely for a job with
   // no runs there, rather than printing "0 runs" for every job that simply was not due.
+  // Only the outcome counts that are actually non-zero print: a healthy job showing
+  // "0 failed · 0 skipped" next to every other job would bury the ones that matter.
   const runs = jobAgg?.runs ?? 0;
   const cost = jobAgg?.costUsd;
+  const o = jobAgg?.outcomes;
+  const statsLine = runs > 0
+    ? [
+        `${runs} run${runs === 1 ? '' : 's'}`,
+        o?.failure ? `${o.failure} failed` : '',
+        o?.skipped ? `${o.skipped} skipped` : '',
+        o?.guardError ? `${o.guardError} guard err` : '',
+        cost != null ? money(cost) : '',
+      ].filter(Boolean).join(' · ')
+    : '';
 
   // Guard freshness, same wording as status --human's table, shown for any job that has
   // ever recorded one — a guardless job has no `lastGuard` and prints nothing here.
@@ -227,13 +294,23 @@ function jobPost(j, state, jobMeta, defaults, agg, next, now) {
   const rawTail = jobAgg?.lastRaw;
   const rawTailTs = jobAgg?.lastRawTs;
 
+  // Nothing on the page otherwise says what a job is FOR. One trimmed line as the
+  // summary, the untouched prompt behind it — `<details>` rather than a second `<pre>`
+  // inline, so a long multi-step prompt does not push every card below it off screen.
+  const promptBlock = jobMeta?.prompt
+    ? `<details><summary>${escapeHtml(trimOneLine(jobMeta.prompt, PROMPT_SUMMARY_MAX))}</summary><pre>${escapeHtml(jobMeta.prompt)}</pre></details>`
+    : '';
+
   return `<div class="card">
 <div class="row"><strong>${escapeHtml(j.id)}</strong>${badge(state)}</div>
 ${trouble}
+${failureLine}
 <div class="sub">next ${nextLabel(next[j.id], now)} · ${last}</div>
 ${metaParts.length ? `<div class="sub">${metaParts.join(' · ')}</div>` : ''}
-${runs > 0 ? `<div class="sub">${agg.windowDays}d: ${runs} run${runs === 1 ? '' : 's'}${cost != null ? ` · ${money(cost)}` : ''}</div>` : ''}
+${cwd}
+${statsLine ? `<div class="sub">${agg.windowDays}d: ${statsLine}</div>` : ''}
 ${guard ? `<div class="sub">${guard}</div>` : ''}
+${promptBlock}
 ${rawTail ? `<details><summary>show output (${whenLabel(rawTailTs, now)})</summary><pre>${escapeHtml(rawTail)}</pre></details>` : ''}
 </div>`;
 }
@@ -293,6 +370,107 @@ ${tile(o.guardError, 'guard err', STATUS.serious)}
 </div>`;
 }
 
+// The most actionable number on the page: which model actually burned the money, so
+// an operator can move a job from opus to sonnet. Folded from every run's
+// `usage.models` (see report.mjs / classify.mjs's parseModelUsage) — a model with no
+// parsed cost stays out of the ranking entirely (costUsd null means unmeasured, not
+// free) rather than showing as a $0.00 row that would rank it dead last for no reason.
+function costByModelCard(agg) {
+  const rows = Object.entries(agg.byModel ?? {})
+    .filter(([, m]) => m.costUsd != null)
+    .sort((a, b) => b[1].costUsd - a[1].costUsd);
+  if (!rows.length) {
+    return `<div class="card"><h2>Cost by model</h2><div class="sub">no model cost recorded</div></div>`;
+  }
+  const max = rows.reduce((m, [, v]) => Math.max(m, v.costUsd), 0);
+  const bars = rows.map(([name, v]) => `<div>
+<div class="row"><span>${escapeHtml(name)}</span><span>${money(v.costUsd)}</span></div>
+<div class="bar-track"><div class="bar-fill" style="width:${max > 0 ? Math.min(100, Math.round((v.costUsd / max) * 100)) : 0}%"></div></div>
+</div>`).join('');
+  return `<div class="card"><h2>Cost by model</h2>${bars}</div>`;
+}
+
+// How often runs were skipped for quota, split by day and by WHY: a subscription
+// limit (`usage-limit`) burns real quota, an overload (`api-overload`) is Anthropic
+// having a bad minute — same scheduling either way, very different operational
+// meaning, and folding them together is exactly the confusion classifySkipReason
+// (classify.mjs) exists to remove. `lastResetAt` is the verbatim text the most recent
+// limit message quoted (report.mjs tracks it by timestamp, not input order) — the
+// reporting form, not a parsed time, so it is escaped like any other outside text.
+function quotaCard(agg) {
+  const { usageLimit, apiOverload } = agg.totals.skips;
+  const total = usageLimit + apiOverload;
+  if (!total) {
+    return `<div class="card"><h2>Quota</h2><div class="sub">no quota skips in ${agg.windowDays}d</div></div>`;
+  }
+  const days = agg.byDay.filter((d) => d.usageLimit || d.apiOverload);
+  const table = days.map((d) =>
+    `<tr><td>${escapeHtml(d.date)}</td><td>${d.usageLimit}</td><td>${d.apiOverload}</td></tr>`).join('');
+  const reset = agg.totals.lastResetAt
+    ? `<div class="sub">last reset quoted: “${escapeHtml(agg.totals.lastResetAt)}”</div>` : '';
+  return `<div class="card">
+<h2>Quota</h2>
+<div class="hero">${total}</div>
+<div class="sub">${usageLimit} usage-limit · ${apiOverload} overload</div>
+${reset}
+<details class="table-view"><summary>by day</summary>
+<table><tr><td>day</td><td>usage-limit</td><td>overload</td></tr>${table}</table></details>
+</div>`;
+}
+
+// The longest runs in the window, with the job's own timeout beside them where it has
+// one — a run at 14m50s against a 15m timeout is about to start being killed, and
+// duration alone does not say that. `jobMetaById` is the same EFFECTIVE-jobs lookup
+// renderHtml already builds for jobPost, so the timeout shown is the one the tick will
+// actually enforce, profile overrides included.
+function slowestRunsCard(agg, jobMetaById) {
+  const rows = agg.slowestRuns ?? [];
+  if (!rows.length) {
+    return `<div class="card"><h2>Slowest runs</h2><div class="sub">no runs recorded this window</div></div>`;
+  }
+  const lines = rows.map((r) => {
+    const timeoutSec = jobMetaById.get(r.job)?.timeoutSec;
+    const vsTimeout = timeoutSec ? ` / ${fmtDuration(timeoutSec * 1000)} timeout` : '';
+    return `<tr><td>${escapeHtml(r.job ?? '—')}</td><td>${fmtDuration(r.durationMs)}${vsTimeout}${r.timedOut ? ' (timed out)' : ''}</td></tr>`;
+  }).join('');
+  return `<div class="card"><h2>Slowest runs</h2><table>${lines}</table></div>`;
+}
+
+// Token totals for the window — already summed in report.mjs and never shown before
+// this. Tokens have no null-when-unmeasured state (unlike cost): every run either adds
+// numbers or adds nothing, so 0 is always a real count, not "unknown". The empty case
+// here is therefore keyed on `totals.runs`, not on the token fields themselves.
+function tokensCard(agg) {
+  if (!agg.totals.runs) {
+    return `<div class="card"><h2>Tokens</h2><div class="sub">no token usage recorded this window</div></div>`;
+  }
+  const t = agg.totals.tokens;
+  return `<div class="card">
+<h2>Tokens</h2>
+<div class="sub">in ${fmtNum(t.in)} · out ${fmtNum(t.out)} · cache read ${fmtNum(t.cacheRead)} · cache create ${fmtNum(t.cacheCreate)}</div>
+<div class="sub">turns ${fmtNum(agg.totals.turns)}</div>
+</div>`;
+}
+
+// Whatever used to sit in the header's small print — cron install state, the global
+// pause (with its origin and reason), and the active speed profile — now lives here
+// instead, so it is said once, not twice. The header keeps only what defends against
+// a dead render job serving stale numbers: task name, problem count, window cost, and
+// the generated-at stamp.
+function healthCard(status) {
+  const cron = status.installed === null ? 'unknown' : status.installed ? 'installed' : 'NOT installed';
+  const pauseLine = status.paused
+    ? `<div class="sub">paused${status.pauseReason ? ` (${escapeHtml(status.pauseReason)})` : ''}${status.pauseOrigin && status.pauseOrigin !== 'operator' ? ` [${escapeHtml(status.pauseOrigin)}]` : ''}</div>`
+    : '';
+  const profileLine = status.profile ? `<div class="sub">${profileNote(status.profile)}</div>` : '';
+  return `<div class="card">
+<h2>Scheduler health</h2>
+<div class="sub">cron ${cron}</div>
+${pauseLine}
+${profileLine}
+</div>`;
+}
+
 function recentCard(agg, now) {
   const rows = agg.recent.map((e) =>
     `<tr><td>${whenLabel(e.ts, now)} ${escapeHtml(e.job ?? '—')}</td><td>${escapeHtml(e.detail)}</td></tr>`).join('');
@@ -321,7 +499,15 @@ export function renderHtml(status, agg, next, now, jobs = [], defaults = {}) {
   const jobMetaById = new Map(jobs.map((j) => [j.id, j]));
   const states = status.jobs.map((j) => ({ j, state: jobState(j) }));
   const problems = states.filter((s) => s.state.problem);
-  const healthy = states.filter((s) => !s.state.problem);
+  const nonProblem = states.filter((s) => !s.state.problem);
+  // A job whose failures are climbing but whose breaker has not tripped is NOT one of
+  // the three problem states (breaker / self-pause / retry-pending) — the header count
+  // must stay exactly those three, so a count that also includes jobs which never
+  // actually stopped is a count nobody trusts. But it must not sit at the bottom of the
+  // feed where nobody looks either, so it gets its own bucket, placed right after the
+  // real problems and before the summary cards.
+  const accumulating = nonProblem.filter((s) => isAccumulating(s.j, jobMetaById.get(s.j.id), defaults));
+  const healthy = nonProblem.filter((s) => !isAccumulating(s.j, jobMetaById.get(s.j.id), defaults));
   const head = `${problems.length} problem${problems.length === 1 ? '' : 's'} · ${money(agg.totals.costUsd)} / ${agg.windowDays}d`;
   const post = ({ j, state }) => jobPost(j, state, jobMetaById.get(j.id), defaults, agg, next, now);
 
@@ -336,9 +522,15 @@ export function renderHtml(status, agg, next, now, jobs = [], defaults = {}) {
 <div class="card">
 <h1>p-shed · ${escapeHtml(status.task)}</h1>
 <div class="sub">${head}</div>
-<div class="sub">generated ${dateStr(now)} ${hhmm(now)} · cron ${status.installed === null ? 'unknown' : status.installed ? 'installed' : 'NOT installed'}${profileNote(status.profile)}${status.paused ? ' · SCHEDULER PAUSED' : ''}</div>
+<div class="sub">generated ${dateStr(now)} ${hhmm(now)}</div>
 </div>
 ${problems.map(post).join('')}
+${accumulating.map(post).join('')}
+${costByModelCard(agg)}
+${quotaCard(agg)}
+${slowestRunsCard(agg, jobMetaById)}
+${tokensCard(agg)}
+${healthCard(status)}
 ${costCard(agg)}
 ${runsCard(agg)}
 ${healthy.map(post).join('')}

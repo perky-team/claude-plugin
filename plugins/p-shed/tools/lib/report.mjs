@@ -14,6 +14,7 @@ const OUTCOME_KEY = {
 const SKIP_KEY = { 'usage-limit': 'usageLimit', 'api-overload': 'apiOverload' };
 
 const RECENT_CAP = 20;
+const SLOWEST_CAP = 8;
 
 function num(v) {
   return typeof v === 'number' && Number.isFinite(v) ? v : null;
@@ -75,7 +76,7 @@ export function aggregate(records, now, { windowDays = 7 } = {}) {
   for (let i = 0; i < windowDays; i++) {
     const key = dayKey(cursor.getTime());
     dayIndex.set(key, i);
-    byDay.push({ date: key, costUsd: null, runs: 0 });
+    byDay.push({ date: key, costUsd: null, runs: 0, usageLimit: 0, apiOverload: 0 });
     cursor.setDate(cursor.getDate() + 1);
   }
 
@@ -87,8 +88,21 @@ export function aggregate(records, now, { windowDays = 7 } = {}) {
     tokens: { in: 0, out: 0, cacheRead: 0, cacheCreate: 0 },
     turns: 0,
     apiMs: 0,
+    // The verbatim reset text a limit message most recently quoted (parseResetAt's
+    // reporting form, not a parsed timestamp) — the operator-facing half of the quota
+    // card. Tracked by TS, below, so record order in the input never matters.
+    lastResetAt: null,
   };
+  let lastResetAtTs = null;
   const byJob = {};
+  // Per-model cost, folded from each run's `usage.models` (classify.mjs's parseUsage).
+  // costUsd stays null until a numeric figure is actually seen for that model — same
+  // null-means-unmeasured rule as byJob.costUsd, so a model with token counts but no
+  // parsed cost is not silently reported as $0.
+  const byModel = {};
+  // Every run that carried a numeric durationMs, for the "slowest runs" card. Collected
+  // unbounded like `feed` and capped only at the end, so record order never matters.
+  const durations = [];
   // Holds both real events and run rows; every entry here ends up in `recent`.
   const feed = [];
 
@@ -124,10 +138,36 @@ export function aggregate(records, now, { windowDays = 7 } = {}) {
     const apiMs = num(rec.usage?.apiMs);
     if (apiMs !== null) totals.apiMs += apiMs;
 
+    // Per-model cost, same null-until-measured rule as everywhere else on this page.
+    // Guarded against anything but a plain object: `usage.models` comes from a job's own
+    // output via classify.mjs's best-effort JSON salvage, so a malformed shape here must
+    // cost this one field, never the render.
+    const models = rec.usage?.models;
+    if (models && typeof models === 'object' && !Array.isArray(models)) {
+      for (const [name, m] of Object.entries(models)) {
+        if (!name || !m || typeof m !== 'object') continue;
+        const entry = byModel[name] ?? (byModel[name] = { costUsd: null });
+        const modelCost = num(m.costUsd);
+        if (modelCost !== null) entry.costUsd = (entry.costUsd ?? 0) + modelCost;
+      }
+    }
+
+    const durationMs = num(rec.durationMs);
+    if (durationMs !== null) durations.push({ job, ts, durationMs, timedOut: rec.timedOut === true });
+
+    // The reset text is reporting-only (parseResetAt's verbatim capture), so "most
+    // recent" is decided by the record's own ts, never by input order.
+    if (typeof rec.resetAt === 'string' && rec.resetAt && (lastResetAtTs === null || ts >= lastResetAtTs)) {
+      totals.lastResetAt = rec.resetAt;
+      lastResetAtTs = ts;
+    }
+
     const di = dayIndex.get(dayKey(ts));
     if (di !== undefined) {
       byDay[di].runs++;
       if (cost !== null) byDay[di].costUsd = (byDay[di].costUsd ?? 0) + cost;
+      if (rec.outcome === 'skipped' && skipKey === 'usageLimit') byDay[di].usageLimit++;
+      if (rec.outcome === 'skipped' && skipKey === 'apiOverload') byDay[di].apiOverload++;
     }
 
     if (job) {
@@ -152,6 +192,7 @@ export function aggregate(records, now, { windowDays = 7 } = {}) {
   }
 
   feed.sort((a, b) => b.ts - a.ts);
+  durations.sort((a, b) => b.durationMs - a.durationMs);
 
   return {
     windowDays,
@@ -160,6 +201,8 @@ export function aggregate(records, now, { windowDays = 7 } = {}) {
     totals,
     byDay,
     byJob,
+    byModel,
+    slowestRuns: durations.slice(0, SLOWEST_CAP),
     recent: feed.slice(0, RECENT_CAP),
     // aggregate() reads no files, so it cannot count unreadable ones itself — these are
     // placeholders the CLI overwrites with readLogRecords()'s real counts.

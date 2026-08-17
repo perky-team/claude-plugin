@@ -369,4 +369,274 @@ describe('renderHtml', () => {
       expect(html).toMatch(/\.feed\{[^}]*margin:0 auto/);
     });
   });
+
+  describe('accumulating-failure line and bucket', () => {
+    it('shows "N of M failures" once failures start climbing, before the breaker trips', () => {
+      const html = page([job({ consecutiveFailures: 2 })]);
+      expect(html).toContain('2 of 3 failures');
+    });
+
+    it('stops once the breaker has tripped — the trouble line already says so', () => {
+      const html = page([job({ consecutiveFailures: 3, breakerTripped: true })]);
+      expect(html).not.toContain('of 3 failures');
+    });
+
+    it('uses the job\'s own maxConsecutiveFailures over the built-in default', () => {
+      const jobs = [{ id: 'worker', maxConsecutiveFailures: 5 }];
+      const html = renderHtml(status([job({ consecutiveFailures: 2 })]), aggregate([], NOW), {}, NOW, jobs, {});
+      expect(html).toContain('2 of 5 failures');
+    });
+
+    it('falls back to defaults.maxConsecutiveFailures when the job sets none', () => {
+      const html = renderHtml(status([job({ consecutiveFailures: 2 })]), aggregate([], NOW), {}, NOW, [], { maxConsecutiveFailures: 10 });
+      expect(html).toContain('2 of 10 failures');
+    });
+
+    it('shows nothing when the breaker is disabled for the job (maxConsecutiveFailures 0)', () => {
+      const html = renderHtml(status([job({ consecutiveFailures: 9 })]), aggregate([], NOW), {}, NOW, [], { maxConsecutiveFailures: 0 });
+      expect(html).not.toContain('failures</div>');
+    });
+
+    it('does not count an accumulating-failure job as a problem', () => {
+      const html = page([job({ consecutiveFailures: 2 })]);
+      expect(html).toContain('0 problems');
+    });
+
+    it('places an accumulating job right after the real problems, above the summary cards and above healthy jobs', () => {
+      const jobs = [
+        job({ id: 'broken', breakerTripped: true }),
+        job({ id: 'climbing', consecutiveFailures: 1 }),
+        job({ id: 'fine' }),
+      ];
+      const html = renderHtml(status(jobs), aggregate([], NOW), {}, NOW, [], {});
+      const iBroken = html.indexOf('<strong>broken</strong>');
+      const iClimbing = html.indexOf('<strong>climbing</strong>');
+      const iCostByModel = html.indexOf('Cost by model');
+      const iFine = html.indexOf('<strong>fine</strong>');
+      expect(iBroken).toBeGreaterThan(-1);
+      expect(iBroken).toBeLessThan(iClimbing);
+      expect(iClimbing).toBeLessThan(iCostByModel);
+      expect(iCostByModel).toBeLessThan(iFine);
+    });
+  });
+
+  describe('per-job outcome breakdown', () => {
+    it('shows the runs/failed/skipped breakdown, omitting zero categories', () => {
+      const records = [
+        ...Array.from({ length: 36 }, (_, i) => ({ ts: at('2026-08-14T10:00:00') + i, job: 'worker', outcome: 'success', exit: 0 })),
+        ...Array.from({ length: 3 }, (_, i) => ({ ts: at('2026-08-14T10:05:00') + i, job: 'worker', outcome: 'failure', exit: 1 })),
+        ...Array.from({ length: 2 }, (_, i) => ({ ts: at('2026-08-14T10:10:00') + i, job: 'worker', outcome: 'skipped', reason: 'usage-limit' })),
+      ];
+      const html = renderHtml(status([job()]), aggregate(records, NOW), {}, NOW);
+      expect(html).toContain('41 runs · 3 failed · 2 skipped');
+    });
+
+    it('adds the guard-error count and the cost when both are present', () => {
+      const records = [
+        { ts: at('2026-08-14T10:00:00'), job: 'worker', outcome: 'guard-error', exit: 3 },
+        { ts: at('2026-08-14T11:00:00'), job: 'worker', outcome: 'success', exit: 0, usage: { costUsd: 1.5 } },
+      ];
+      const html = renderHtml(status([job()]), aggregate(records, NOW), {}, NOW);
+      expect(html).toContain('2 runs · 1 guard err · $1.50');
+    });
+
+    it('shows nothing for a job with no runs in the window', () => {
+      const html = page([job()]);
+      expect(html).not.toMatch(/\d+ runs?/);
+    });
+  });
+
+  describe('prompt line', () => {
+    it('shows the prompt trimmed to one line, with the full text behind details', () => {
+      const jobs = [{ id: 'worker', prompt: 'Check the inbox and reply to anything urgent, then summarize the rest.' }];
+      const html = renderHtml(status([job()]), aggregate([], NOW), {}, NOW, jobs, {});
+      expect(html).toContain('<summary>Check the inbox and reply to anything urgent, then summarize the rest.</summary>');
+      expect(html).toContain('<pre>Check the inbox and reply to anything urgent, then summarize the rest.</pre>');
+    });
+
+    it('collapses a multi-line prompt to one line in the summary, keeping the original behind details', () => {
+      const jobs = [{ id: 'worker', prompt: 'line one\nline two\nline three' }];
+      const html = renderHtml(status([job()]), aggregate([], NOW), {}, NOW, jobs, {});
+      expect(html).toContain('<summary>line one line two line three</summary>');
+      expect(html).toContain('<pre>line one\nline two\nline three</pre>');
+    });
+
+    it('trims a long prompt in the summary, but keeps the full text behind details', () => {
+      const long = 'x'.repeat(120);
+      const jobs = [{ id: 'worker', prompt: long }];
+      const html = renderHtml(status([job()]), aggregate([], NOW), {}, NOW, jobs, {});
+      expect(html).toContain(`<summary>${'x'.repeat(79)}…</summary>`);
+      expect(html).toContain(`<pre>${long}</pre>`);
+    });
+
+    it('escapes a prompt that carries markup', () => {
+      const jobs = [{ id: 'worker', prompt: '<script>alert(1)</script>' }];
+      const html = renderHtml(status([job()]), aggregate([], NOW), {}, NOW, jobs, {});
+      expect(html).not.toContain('<script>alert(1)</script>');
+      expect(html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
+    });
+
+    it('shows nothing when the job has no prompt in its metadata', () => {
+      // No `<pre>` anywhere: no prompt block AND no raw-output tail, since there is no
+      // agg data for this job either. Every other card on the page uses <table>/<div>.
+      expect(page([job()])).not.toContain('<pre>');
+    });
+  });
+
+  describe('cwd line', () => {
+    it('shows the job\'s working directory when it sets one', () => {
+      const jobs = [{ id: 'worker', cwd: '/srv/repo' }];
+      const html = renderHtml(status([job()]), aggregate([], NOW), {}, NOW, jobs, {});
+      expect(html).toContain('cwd /srv/repo');
+    });
+
+    it('shows nothing when the job sets no cwd', () => {
+      expect(page([job()])).not.toContain('cwd ');
+    });
+
+    it('escapes a cwd value', () => {
+      const jobs = [{ id: 'worker', cwd: '<b>x</b>' }];
+      const html = renderHtml(status([job()]), aggregate([], NOW), {}, NOW, jobs, {});
+      expect(html).not.toContain('<b>x</b>');
+      expect(html).toContain('&lt;b&gt;x&lt;/b&gt;');
+    });
+  });
+
+  describe('header keeps only task, problem count, window cost and generated-at', () => {
+    it('matches the header sub-line exactly, even while paused with a profile problem', () => {
+      const s = { ...status([job()]), paused: true, pauseReason: 'incident', pauseOrigin: 'deploy', profile: { name: 'turbo', source: 'env', problem: 'unknown-name' } };
+      const html = renderHtml(s, aggregate([], NOW), {}, NOW);
+      expect(html).toMatch(/<div class="sub">generated \d{4}-\d{2}-\d{2} \d{2}:\d{2}<\/div>/);
+    });
+  });
+
+  describe('Scheduler health card', () => {
+    it('shows cron install state, the pause with its reason and origin, and the profile', () => {
+      const s = { ...status([job()]), installed: false, paused: true, pauseReason: 'incident', pauseOrigin: 'deploy', profile: { name: 'eco', source: 'file', file: '/x' } };
+      const html = renderHtml(s, aggregate([], NOW), {}, NOW);
+      expect(html).toContain('<h2>Scheduler health</h2>');
+      expect(html).toContain('cron NOT installed');
+      expect(html).toContain('paused (incident) [deploy]');
+      expect(html).toContain('profile eco');
+    });
+
+    it('shows a plain cron-installed line and no pause line when nothing is wrong', () => {
+      const html = page([job()]);
+      expect(html).toContain('cron installed');
+      expect(html).not.toContain('SCHEDULER PAUSED');
+    });
+  });
+
+  describe('Cost by model card', () => {
+    const modelRecord = (model: string, cost: number, ts = at('2026-08-14T10:00:00')) =>
+      ({ ts, job: 'worker', outcome: 'success', exit: 0, usage: { models: { [model]: { costUsd: cost } } } });
+
+    it('lists models sorted by cost descending', () => {
+      const agg = aggregate([modelRecord('haiku', 0.53), modelRecord('opus', 11.4), modelRecord('sonnet', 4.2)], NOW);
+      const html = renderHtml(status([job()]), agg, {}, NOW);
+      const iOpus = html.indexOf('>opus<');
+      const iSonnet = html.indexOf('>sonnet<');
+      const iHaiku = html.indexOf('>haiku<');
+      expect(iOpus).toBeGreaterThan(-1);
+      expect(iOpus).toBeLessThan(iSonnet);
+      expect(iSonnet).toBeLessThan(iHaiku);
+      expect(html).toContain('$11.40');
+    });
+
+    it('says so when no run carried a parsed model cost', () => {
+      expect(page([job()])).toContain('no model cost recorded');
+    });
+
+    it('escapes a model name', () => {
+      const agg = aggregate([modelRecord('<script>x</script>', 1)], NOW);
+      const html = renderHtml(status([job()]), agg, {}, NOW);
+      expect(html).not.toContain('<script>x</script>');
+      expect(html).toContain('&lt;script&gt;x&lt;/script&gt;');
+    });
+  });
+
+  describe('Quota card', () => {
+    it('breaks skips down by reason and quotes the most recent reset', () => {
+      const records = [
+        { ts: at('2026-08-13T09:00:00'), job: 'worker', outcome: 'skipped', reason: 'usage-limit', resetAt: '3am' },
+        { ts: at('2026-08-14T09:00:00'), job: 'worker', outcome: 'skipped', reason: 'api-overload' },
+        { ts: at('2026-08-14T09:05:00'), job: 'worker', outcome: 'skipped', reason: 'api-overload' },
+      ];
+      const html = renderHtml(status([job()]), aggregate(records, NOW), {}, NOW);
+      expect(html).toContain('1 usage-limit · 2 overload');
+      expect(html).toContain('last reset quoted: “3am”');
+    });
+
+    it('says so when there were no quota skips in the window', () => {
+      expect(page([job()])).toContain('no quota skips in 7d');
+    });
+
+    it('escapes the quoted reset text', () => {
+      const records = [{ ts: at('2026-08-14T09:00:00'), job: 'worker', outcome: 'skipped', reason: 'usage-limit', resetAt: '<script>x</script>' }];
+      const html = renderHtml(status([job()]), aggregate(records, NOW), {}, NOW);
+      expect(html).not.toContain('<script>x</script>');
+      expect(html).toContain('&lt;script&gt;x&lt;/script&gt;');
+    });
+  });
+
+  describe('Slowest runs card', () => {
+    it('lists the longest runs with the job\'s own timeout beside them', () => {
+      const records = [
+        { ts: at('2026-08-14T10:00:00'), job: 'worker', outcome: 'success', exit: 0, durationMs: 890_000 },
+        { ts: at('2026-08-14T11:00:00'), job: 'worker', outcome: 'success', exit: 0, durationMs: 46_000 },
+      ];
+      const jobs = [{ id: 'worker', timeoutSec: 900 }];
+      const html = renderHtml(status([job()]), aggregate(records, NOW), {}, NOW, jobs, {});
+      expect(html).toContain('14m50s');
+      expect(html).toContain('15m00s timeout');
+    });
+
+    it('says so when no run in the window carried a duration', () => {
+      expect(page([job()])).toContain('no runs recorded this window');
+    });
+
+    it('escapes a job id', () => {
+      const records = [{ ts: at('2026-08-14T10:00:00'), job: '<script>x</script>', outcome: 'success', exit: 0, durationMs: 1000 }];
+      const html = renderHtml(status([job()]), aggregate(records, NOW), {}, NOW);
+      expect(html).not.toContain('<script>x</script>');
+      expect(html).toContain('&lt;script&gt;x&lt;/script&gt;');
+    });
+  });
+
+  describe('Tokens card', () => {
+    it('shows token and turn totals for the window', () => {
+      const records = [{ ts: at('2026-08-14T10:00:00'), job: 'worker', outcome: 'success', exit: 0, usage: { in: 12000, out: 3400, cacheRead: 500, cacheCreate: 20, turns: 4 } }];
+      const html = renderHtml(status([job()]), aggregate(records, NOW), {}, NOW);
+      expect(html).toContain('in 12,000');
+      expect(html).toContain('out 3,400');
+      expect(html).toContain('turns 4');
+    });
+
+    it('says so when no run happened in the window', () => {
+      expect(page([job()])).toContain('no token usage recorded this window');
+    });
+  });
+
+  describe('extra-cards feed order', () => {
+    it('lays out header, problems, accumulating, the five new cards, Cost, Runs, healthy, then Recent', () => {
+      const jobs = [
+        job({ id: 'broken', breakerTripped: true }),
+        job({ id: 'climbing', consecutiveFailures: 1 }),
+        job({ id: 'fine' }),
+      ];
+      const html = renderHtml(status(jobs), aggregate([], NOW), {}, NOW, [], {});
+      const marks = [
+        '<strong>broken</strong>', '<strong>climbing</strong>',
+        'Cost by model', 'Quota', 'Slowest runs', 'Tokens', 'Scheduler health',
+        'Cost · 7 days', 'Runs · 7 days',
+        '<strong>fine</strong>', '<h2>Recent</h2>',
+      ].map((m) => html.indexOf(m));
+      expect(marks.every((i) => i >= 0)).toBe(true);
+      for (let i = 1; i < marks.length; i++) expect(marks[i]).toBeGreaterThan(marks[i - 1]);
+    });
+
+    it('has no card for group holds — the tick writes no log row for a skipped-group, so there is nothing to show', () => {
+      expect(page([job()])).not.toContain('Group hold');
+    });
+  });
 });
