@@ -148,7 +148,7 @@ Stage it, and read each stage before paying for the next.
 |---|---|---|---|---|---|
 | 1 | Go | 16 | `go mod download` ×2 | ~$4 | **done** — 6 questions, $7.12 |
 | 2 | TypeScript | 9 | three npm installs | ~$2 | **done** — 9 questions, $6.99 |
-| 3 | Python | 12 | one npm install | ~$2 | server installed, probe not written |
+| 3 | Python | 12 | one npm install | ~$2 | **done** — 12 questions, $8.46 |
 | 4 | C++ | 15 | a whole C++ toolchain | ~$4 | no toolchain on this machine |
 
 The "rough cost" column was too low by a factor of three. An lsp run costs about $0.26 to $0.40, so
@@ -163,6 +163,19 @@ Stage 2 needed three things the plan did not list:
 - **A probe must ask more than once.** On nest the first `definition` request returns nothing and the
   second returns the declaration, because tsserver is still building its program. This is the same
   failure that threw away the first Go pass, in a different server.
+
+Stage 3 needed one more thing, and it is the same lesson again:
+
+- **django writes no relative imports at all.** The probe preferred a relative import and fell back
+  to the file's first import, which in django is `from collections import Counter`. It passed django
+  on a jump into a typeshed stub — proof that pyright found its own bundled stubs, and nothing about
+  the repository. The probe now works out which top-level packages the repository owns (a directory
+  with `__init__.py`, or with a `package.json`) and, when the import is one of those, requires the
+  jump to land inside the repository.
+
+Stage 3 also produced the arm's sharpest single finding, and it needed a flag to prove:
+`--also-open`. pyright's `findReferences` answers from the files that are open, so the same symbol
+gives three different answers depending on where you ask from. See the write-up.
 
 Stage 1 alone answers the question that was actually asked, because Go is where the official LSP
 plugin is already installed and where the user works. If stage 1 says the server wins on Go by a

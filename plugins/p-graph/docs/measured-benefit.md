@@ -1428,8 +1428,9 @@ comparison.
 
 So a third arm was built: the same clones, the same questions, the same model, the official language
 server plugins and the built-in `LSP` tool, and a rule written to the same standard as the p-graph
-rule. Two languages have run so far — six Go questions on caddy and hugo, then nine TypeScript
-questions on nest, got and axios. Three runs a side each.
+rule. Three languages have run so far — six Go questions on caddy and hugo, nine TypeScript questions on
+nest, got and axios, and twelve Python questions on requests, flask, httpx and django. Three runs a
+side each.
 
 | 4 list questions + 1 trap | grep | p-graph | gopls |
 |---|---|---|---|
@@ -1524,11 +1525,82 @@ loses badly.
 
 Three runs a side, so each cell is three times the question's own site count.
 
+### Python: the answer depends on which files are open
+
+Twelve questions on requests, flask, httpx and django — eight list questions plus three
+"what breaks" and one "show the chain" — three runs a side, `pyright-langserver`.
+
+| 8 list questions | grep | p-graph | pyright |
+|---|---|---|---|
+| Call sites found | **243 of 243** | **243 of 243** | 233 of 243 |
+| Call sites invented | 0 | 14 | **0** |
+| Cost per question | **$0.148** | $0.149 | $0.233 |
+| Time per question | 28 s | **22 s** | 49 s |
+| Steps per question | **4.0** | 4.1 | 10.6 |
+| `LSP` calls and greps per question | — | — | 2.6 and 2.9 |
+
+This is the arm's best language for cost per call. On Go a list of N call sites cost about N `LSP`
+calls; on Python one `findReferences` returns the list, and three django runs came in at $0.04 to
+$0.08 in two turns — one call, one complete answer. p-graph's 14 invented rows are the
+`RequestsCookieJar.update` guesses already described above, not a new defect.
+
+The ten missing sites are all the same shape, and it is not a config boundary this time. Every one is
+a single run of three:
+
+| Question | run 1 | run 2 | run 3 |
+|---|---|---|---|
+| `httpx-cookies-set` | 10 of 10 | 10 of 10 | **3 of 10** |
+| `httpx-raise-for-status` | 12 of 12 | 12 of 12 | 10 of 12 |
+| `django-escape-leading-slashes` | 2 of 3 | 3 of 3 | 3 of 3 |
+
+**pyright's `findReferences` answers from the files that are open.** Three requests to the same
+server, same repository, same symbol — `Cookies.set`, whose 10 call sites are 3 in `httpx/_models.py`
+and 7 in `tests/models/test_cookies.py`:
+
+```
+--refs httpx/_models.py:1117:8                     → 3 references, all in _models.py
+--refs tests/models/test_cookies.py:26:17          → 6 references, all in the test file
+--also-open tests/models/test_cookies.py \
+  --refs httpx/_models.py:1117:8                   → 10 references — exactly the truth
+```
+
+An editor keeps many files open, so a person rarely meets this. An agent sees exactly as much as it
+happened to read first: the run that answered 3 of 10 asked once, at the definition, and stopped. The
+two runs that answered 10 of 10 had read more of the repository before asking.
+
+That is the same user-visible failure as the TypeScript one, from a different cause. There the
+program was bounded by `tsconfig.json`; here the reference search is bounded by what is open. Both
+return a short list in the same voice as a complete one.
+
+### Two truth lists were short, and the arms are what showed it
+
+The lsp arm's first score on the follow-the-calls questions read **24 invented sites**. None of them
+was invented. Both fixes are in `measure-agent.mjs`, and both move a published number:
+
+- **`requests-gethost-impact`** — `MockRequest.get_host` is called back by the standard library's
+  `CookieJar` through duck typing. The lsp answers named the whole real chain —
+  `jar.extract_cookies` and `jar.add_cookie_header`, then the seven functions that call those — and
+  said in the same breath that they are not call sites and would only need updating if the method's
+  name or signature changed. That is right. They are real code outside the question's bound, so they
+  now count for neither side. grep's own 6 "invented" on this question were the `@property` line
+  directly above a truth definition — an off-by-one against a decorator.
+- **`django-trace-processrequest-escapeslashes`** — `process_response` reaches
+  `escape_leading_slashes` through the same hop as `process_request`, from a different entry point.
+  `common.py:109` was named by all three grep runs and two of three lsp runs. Five answers of nine
+  against the list is the tell this study has already learned to read: doubt the list.
+
+After both fixes the follow-the-calls invented counts are **grep 0, p-graph 0, lsp 3** — where they
+had read 9, 0 and 24. The three that remain are one each on three questions, and one of them is a
+genuine error: an lsp run put `should_redirect_with_slash` on the chain, and it does not reach the
+target.
+
 **The advice this arm supports:** for Go, reach for the language server first. For TypeScript, look at
 what the project's `tsconfig.json` covers before you trust "who calls this" — a monorepo split into
 per-package projects, or a project that excludes its tests, bounds the answer and does not say so.
-Reach for p-graph for "what breaks if I change X" on a big repository, for any repository that does
-not build, and for any question whose callers live outside the type program.
+For Python the server is the cheapest of the three per call, and its answer is only as wide as the
+files already open, so ask it again after reading more. Reach for p-graph for "what breaks if I
+change X" on a big repository, for any repository that does not build, and for any question whose
+callers live outside the type program.
 
 ### The first pass of this arm was thrown away, and the reason matters
 

@@ -343,7 +343,7 @@ The graph is purely local — there is no remote service, no MCP server, and no 
 [`docs/measured-benefit.md`](./docs/measured-benefit.md) runs the contest: the same structural
 questions put to the same agent twice — once with nothing but `grep` and `Read`, once with p-graph
 installed. **Fourteen public repos, 52 structural questions, 312 runs, three runs a side** — plus a
-third arm on 6 Go and 9 TypeScript questions against a language server, below. Every table here is printed by
+third arm on 6 Go, 9 TypeScript and 12 Python questions against a language server, below. Every table here is printed by
 `measure-agent.mjs --score`, not worked out by hand, so any of it can be regenerated.
 
 ### Every row, per language
@@ -471,7 +471,7 @@ cannot support and this one can.
 
 grep is the floor. The question a user asks next is how the graph compares to the strong alternative,
 so the same questions were put to an agent with the official language server plugins and the built-in
-`LSP` tool — 6 Go questions and 9 TypeScript questions, 3 runs a side, same clones, same model.
+`LSP` tool — 6 Go, 9 TypeScript and 12 Python questions, 3 runs a side, same clones, same model.
 
 | 4 list questions + 1 trap, caddy and hugo | grep | p-graph | gopls |
 |---|---|---|---|
@@ -509,13 +509,32 @@ in `node_modules`, not to the source. `ClassSerializerInterceptor.serialize` has
 tsserver names one: the root `tsconfig.json` excludes `**/*.spec.ts`, so the 12 test callers are
 outside the program. Neither miss came with a warning.
 
-So for Go, reach for the language server first. For TypeScript, look at what the project's
-`tsconfig.json` covers before you trust "who calls this". Reach for p-graph for "what breaks if I
-change X" on a big repository, for any repository that does not build, and for any question whose
-callers live outside the type program.
+**On Python the server is the cheapest of the three per call, and its answer is only as wide as the
+files it has open.** Twelve questions on requests, flask, httpx and django:
 
-Read this arm with its limits in view: 15 questions, two languages, one machine, 3 runs a side — and
-17 of the first 18 runs had to be thrown away because `gopls` was silently answering nothing at all.
+| 8 list questions | grep | p-graph | pyright |
+|---|---|---|---|
+| Call sites found | **243 of 243** | **243 of 243** | 233 of 243 |
+| Invented | 0 | 14 | **0** |
+| Cost per question | **$0.148** | $0.149 | $0.233 |
+| Steps per question | **4.0** | 4.1 | 10.6 |
+
+One `findReferences` returns the whole list here, where Go cost about one call per site — three django
+runs answered in two turns for $0.04 to $0.08. Every one of the ten missing sites is a single run of
+three, and the cause was reproduced from the server: asked at the definition of httpx's `Cookies.set`
+pyright names its 3 same-file callers, asked at a call in the test file it names the 6 others, and
+with both files open it names all 10 — exactly the truth. An editor keeps many files open; an agent
+sees as much as it read first.
+
+So for Go, reach for the language server first. For TypeScript, look at what the project's
+`tsconfig.json` covers before you trust "who calls this". For Python, ask again after reading more.
+Reach for p-graph for "what breaks if I change X" on a big repository, for any repository that does
+not build, and for any question whose callers live outside the type program.
+
+Read this arm with its limits in view: 27 questions, three languages, one machine, 3 runs a side.
+Two of the study's own truth lists turned out to be short, found because this arm named real code they
+were missing. And 17 of the first 18 runs had to be thrown away because `gopls` was silently
+answering nothing at all.
 All of it is written up in
 [the plan](./docs/superpowers/plans/2026-08-14-p-graph-lsp-arm.md).
 

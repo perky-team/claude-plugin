@@ -751,7 +751,32 @@ const QUESTIONS = [
       // get_origin_req_host 57-58, host 110-111, origin_req_host 106-107.
       ...T('src/requests/cookies.py', [[58, 57], [111, 110], [107, 106]]),
     ],
-    neutral: [N('src/requests/cookies.py', 53, 54)],
+    // Everything below is real code that reaches `get_host`, and none of it would
+    // have to be updated, so it counts for neither side. Both extra arms named
+    // some of it, which is the tell this list was short rather than the answers
+    // wrong — read by hand, line by line, in the repository at its pinned commit.
+    neutral: [
+      N('src/requests/cookies.py', 53, 54),
+      // The `@property` line directly above a truth def. grep named it on two
+      // runs of three: an off-by-one against a decorator, not an invention.
+      N('src/requests/cookies.py', 105, 105),
+      N('src/requests/cookies.py', 109, 109),
+      // The standard library's CookieJar calls `get_host()` and `.host` back on
+      // the MockRequest by name, so these two hand-offs really do reach it — and
+      // no static tool can see the hop. `jar.extract_cookies(res, req)` and
+      // `jar.add_cookie_header(r)`.
+      N('src/requests/cookies.py', 150, 150),
+      N('src/requests/cookies.py', 160, 160),
+      // …and the calls to those two functions. The lsp arm named all seven and
+      // said in the same answer that they are not call sites, which is right.
+      N('src/requests/adapters.py', 395, 395),
+      N('src/requests/auth.py', 304, 304),
+      N('src/requests/sessions.py', 267, 267),
+      N('src/requests/sessions.py', 303, 303),
+      N('src/requests/sessions.py', 797, 797),
+      N('src/requests/sessions.py', 799, 799),
+      N('src/requests/models.py', 718, 718),
+    ],
   },
   {
     // The bound is in the question, because the chain does not close: above
@@ -1128,7 +1153,16 @@ const QUESTIONS = [
       ...T('django/middleware/common.py', [[60, 34], [98, 76]]),
       ...T('django/utils/http.py', [[345, 337]]),
     ],
-    neutral: [],
+    // `process_response` reaches `escape_leading_slashes` through the same
+    // `get_full_path_with_slash` hop, just from a different entry point than the
+    // one the question names. Real code, outside the bound, so it counts for
+    // neither side. Line 109 was named by all three grep runs and two of three
+    // lsp runs — five answers of nine — which is the tell that the list was short
+    // and not that five answers were wrong.
+    neutral: [
+      N('django/middleware/common.py', 100, 100),
+      N('django/middleware/common.py', 109, 109),
+    ],
   },
 ];
 
@@ -1286,13 +1320,18 @@ const LSP_WARM = {
   // catches it. Both arms answer questions about the same axios lines either way.
   TypeScript: (dir) => probeViaLsp(dir, 'typescript-language-server', ['--stdio'],
     [['.ts', 'typescript'], ['.js', 'javascript']]),
-  // Not written yet. C++ and Python are not being run, and a probe invented
-  // without being tried is the kind of thing this file has been burned by. When
-  // those stages come up, write the probe first and watch it fail. Note that
-  // lsp-probe.mjs finds its position with an `import … from …` regex, so Python
-  // needs its own import shape added before it can be pointed at pyright.
+  // Python asks the same question through pyright. The probe had to learn
+  // Python's import shape (`from .models import Response` — the name comes after
+  // `import`) and, more importantly, which imports belong to the repository:
+  // django writes no relative imports at all, so the first version passed django
+  // on a jump from `from collections import Counter` into a typeshed stub. That
+  // proves pyright found its own bundled stubs and nothing else.
+  Python: (dir) => probeViaLsp(dir, 'pyright-langserver', ['--stdio'], [['.py', 'python']]),
+  // Not written yet. C++ is not being run — this machine has no compiler at all,
+  // so there is nothing to probe. A probe invented without being tried is the
+  // kind of thing this file has been burned by: write it when clangd is here,
+  // and watch it fail first.
   'C++': null,
-  Python: null,
 };
 
 // Run lsp-probe.mjs and turn its one line into the null-or-message that

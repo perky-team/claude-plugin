@@ -19,7 +19,7 @@
 // `references` result, which a server that failed to load its project cannot
 // produce.
 import { spawn, execFileSync } from 'node:child_process';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -74,6 +74,8 @@ const sourceFiles = () => {
     .split('\n')
     .filter((f) => f && !/(^|\/)(test|tests|__tests__|spec|benchmark|examples?|docs?)\//.test(f))
     .filter((f) => !/\.(test|spec|d)\.[cm]?[jt]sx?$/.test(f))
+    // Python names its tests by prefix or suffix, not by folder alone.
+    .filter((f) => !/(^|\/)(test_[^/]*|[^/]*_test)\.py$/.test(f))
     .filter((f) => existsSync(join(dir, f)));
   const preferred = listed.filter((f) => SOURCE_DIRS.test(f));
   const pool = preferred.length ? preferred : listed;
@@ -99,10 +101,27 @@ const sourceFiles = () => {
 // every question here is about a symbol declared inside the repository. Relative
 // first, bare only as a fallback, and the line says which was used.
 const IMPORT = /^\s*import\s+(?:type\s+)?(?:\{\s*(?<named>[A-Za-z_$][\w$]*)|\*\s+as\s+(?<ns>[A-Za-z_$][\w$]*)|(?<def>[A-Za-z_$][\w$]*))/;
+// Python writes the same idea the other way round: `from .models import Response`.
+// The name to ask about is after `import`, not before `from`, and "relative" is a
+// leading dot on the module rather than on a path string.
+const PY_IMPORT = /^\s*from\s+(?<mod>\.+[\w.]*|[\w.]+)\s+import\s+\(?\s*(?<name>[A-Za-z_]\w*)/;
 const findImports = (text) => {
   const lines = text.split('\n');
   const found = [];
+  const python = language === 'python';
   for (let i = 0; i < Math.min(lines.length, 400); i++) {
+    if (python) {
+      const m = PY_IMPORT.exec(lines[i]);
+      if (!m) continue;
+      const { mod, name } = m.groups;
+      // `from x import *` has no name to point at, and the regex would take the
+      // next line's word if it matched at all — guard it rather than trust it.
+      if (name === '*') continue;
+      const character = lines[i].indexOf(name, lines[i].indexOf(' import ') + 1);
+      if (character < 0) continue;
+      found.push({ name, line: i, character, from: mod, relative: mod.startsWith('.') });
+      continue;
+    }
     const m = IMPORT.exec(lines[i]);
     if (!m) continue;
     const spec = /from\s+['"]([^'"]+)['"]/.exec(lines[i]);
@@ -114,9 +133,36 @@ const findImports = (text) => {
   }
   return found;
 };
-const firstImport = (text) => {
-  const all = findImports(text);
-  return all.find((i) => i.relative) ?? all[0] ?? null;
+// Top-level package names this repository declares, so an absolute import can be
+// told from a third-party one. django writes `from django.core.exceptions import
+// …` and never a relative import, so without this the probe fell back to the
+// file's first import — `from collections import Counter` — and passed django on
+// a jump into a typeshed stub. That proves pyright found its own bundled stubs,
+// which was never in doubt, and says nothing about the repository.
+const ownPackages = () => {
+  const names = new Set();
+  for (const base of ['.', 'src']) {
+    let entries = [];
+    try { entries = readdirSync(join(dir, base), { withFileTypes: true }); } catch { continue; }
+    for (const e of entries) {
+      if (!e.isDirectory()) continue;
+      if (existsSync(join(dir, base, e.name, '__init__.py'))) names.add(e.name);
+      // A JS/TS monorepo package or source folder counts too.
+      if (existsSync(join(dir, base, e.name, 'package.json'))) names.add(e.name);
+    }
+  }
+  return names;
+};
+
+// Ranked, best first: a relative import, then one naming a package this
+// repository owns, then whatever is there. The winner's `own` flag decides how
+// strictly the jump is checked below.
+const bestImport = (text, own) => {
+  const all = findImports(text).map((i) => ({
+    ...i,
+    own: i.relative || own.has(String(i.from).replace(/^\.+/, '').split('.')[0]),
+  }));
+  return all.find((i) => i.relative) ?? all.find((i) => i.own) ?? all[0] ?? null;
 };
 
 // Windows npm shims are .cmd/.ps1, and Node has refused to spawn a .cmd without
@@ -226,6 +272,20 @@ try {
     const [, path, lineStr, charStr] = /^(.*):(\d+):(\d+)$/.exec(String(flag('refs'))) ?? [];
     if (!path) die('--refs wants path:line:character');
     const uri = uriOf(path);
+    // `--also-open a.py,b.py` opens more files before asking. It exists because
+    // pyright's findReferences answers from the files it has open: asked at the
+    // definition of httpx's `Cookies.set` it names 3 callers, asked at a call in
+    // the test file it names 6 others, and with both open it names all of them.
+    // An editor has many files open, so a user rarely sees this; an agent sees
+    // exactly as much as it happened to read first.
+    for (const extra of String(flag('also-open') ?? '').split(',').filter(Boolean)) {
+      notify('textDocument/didOpen', {
+        textDocument: {
+          uri: uriOf(extra), languageId: language, version: 1,
+          text: readFileSync(join(dir, extra), 'utf-8'),
+        },
+      });
+    }
     notify('textDocument/didOpen', {
       textDocument: { uri, languageId: language, version: 1, text: readFileSync(join(dir, path), 'utf-8') },
     });
@@ -256,9 +316,10 @@ try {
   let jumped = null;
   let tried = 0;
   let lastWhy = 'no file with an import';
+  const own = ownPackages();
   for (const cand of candidates) {
     const text = readFileSync(join(dir, cand), 'utf-8');
-    const imp = firstImport(text);
+    const imp = bestImport(text, own);
     if (!imp) continue;
     tried++;
     const uri = uriOf(cand);
@@ -285,7 +346,12 @@ try {
       const locs = Array.isArray(def) ? def : (def && !def.__error ? [def] : []);
       out = locs.find((l) => {
         const u = l.uri ?? l.targetUri;
-        return u && !sameFile(u, uri);
+        if (!u || sameFile(u, uri)) return false;
+        // An import of this repository's own code must land in this repository.
+        // Without that, a jump into a bundled stub or a published copy in
+        // node_modules counts as success and the probe passes a setup that
+        // cannot answer a question about the source.
+        return imp.own ? normUri(u).startsWith(normUri(rootUri)) : true;
       }) ?? null;
       if (verbose) process.stderr.write(`  attempt ${attempt} on ${cand}: ${out ? 'resolved' : 'nothing'}\n`);
     }
