@@ -43,6 +43,9 @@ Three changes, all in `scripts/`:
 | the `lsp` arm — prep, preflight, run, report | `scripts/measure-agent.mjs` |
 | the rule the arm installs as `CLAUDE.md` | `scripts/lsp-arm-rule.md` |
 | the four servers, as a generated plugin | written to `<work>/.lsp-arm-plugin` at run time |
+| a small LSP client, for probing a server by hand | `scripts/lsp-probe.mjs` (added for stage 2) |
+
+`--phase preflight` runs the readiness check on its own and spends nothing. Use it while installing.
 
 The servers are copied from the official marketplace entries — `gopls-lsp`, `clangd-lsp`,
 `pyright-lsp`, `typescript-lsp` — so the arm measures what a user who installs those plugins
@@ -124,8 +127,8 @@ nothing needs re-cloning. What each language needs on top:
 | Language | Server | State on this machine | To make it ready |
 |---|---|---|---|
 | Go | `gopls` | **installed**; gin's deps are cached | `go mod download` in caddy and hugo |
-| TypeScript | `typescript-language-server` | missing | `npm i -g typescript-language-server typescript`, then `npm install` in nest, got, axios |
-| Python | `pyright-langserver` | missing | `npm i -g pyright` |
+| TypeScript | `typescript-language-server` | **installed**, and nest, got, axios have their `node_modules` | done |
+| Python | `pyright-langserver` | **installed** | `lsp-probe.mjs` needs Python's import shape added |
 | C++ | `clangd` | missing, **and no toolchain at all** | install clangd + cmake + a compiler, then configure each repo to emit `compile_commands.json` |
 
 C++ is the expensive one, and that is a finding rather than an inconvenience: `cmake`, `ninja`,
@@ -141,12 +144,25 @@ would show up as "the server lost".
 
 Stage it, and read each stage before paying for the next.
 
-| Stage | What | Questions | Setup | Rough cost |
-|---|---|---|---|---|
-| 1 | Go | 16 | `go mod download` ×2 | ~$4 |
-| 2 | TypeScript | 9 | two npm installs | ~$2 |
-| 3 | Python | 12 | one npm install | ~$2 |
-| 4 | C++ | 15 | a whole C++ toolchain | ~$4 |
+| Stage | What | Questions | Setup | Rough cost | State |
+|---|---|---|---|---|---|
+| 1 | Go | 16 | `go mod download` ×2 | ~$4 | **done** — 6 questions, $7.12 |
+| 2 | TypeScript | 9 | three npm installs | ~$2 | **done** — 9 questions, $6.99 |
+| 3 | Python | 12 | one npm install | ~$2 | server installed, probe not written |
+| 4 | C++ | 15 | a whole C++ toolchain | ~$4 | no toolchain on this machine |
+
+The "rough cost" column was too low by a factor of three. An lsp run costs about $0.26 to $0.40, so
+nine questions three times over is $7, not $2. Read the State column, not the estimate.
+
+Stage 2 needed three things the plan did not list:
+
+- **`npm ci` fails on nest** with an ERESOLVE peer-dependency error. `--legacy-peer-deps` fixes it.
+  Watch the exit code: piping npm through `tail` hides the failure and reports success.
+- **axios is JavaScript.** Its only `.ts` files are under `tests/`, so a `.ts`-only probe finds
+  nothing to look at. `LSP_WARM.TypeScript` tries `.ts` and then `.js`.
+- **A probe must ask more than once.** On nest the first `definition` request returns nothing and the
+  second returns the declaration, because tsserver is still building its program. This is the same
+  failure that threw away the first Go pass, in a different server.
 
 Stage 1 alone answers the question that was actually asked, because Go is where the official LSP
 plugin is already installed and where the user works. If stage 1 says the server wins on Go by a

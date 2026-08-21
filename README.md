@@ -102,7 +102,7 @@ A local code knowledge graph with a bundled `pgraph` CLI. Indexes the project (T
 Why it matters: `impact` returns the whole transitive set in one small answer, including callers that never mention the symbol's name and so are invisible to grep. Ambiguous names stay unresolved rather than linked to a guess, so the graph never invents an edge. Queries refresh the changed files first, so day-to-day freshness needs no manual sync.
 
 **Measured against a grep-only agent: fourteen public repos, 52 structural questions, 312 runs, three
-runs a side** — plus a third arm on 6 Go questions against a language server, below. Every table
+runs a side** — plus a third arm on 6 Go and 9 TypeScript questions against a language server, below. Every table
 here is printed by `measure-agent.mjs --score`, not worked out by hand, so any of it can be
 regenerated.
 
@@ -225,7 +225,8 @@ cannot support and this one can.
 
 **A third arm: p-graph against a language server.** grep is the floor. The question a user asks next
 is how the graph compares to the strong alternative, so the same questions were put to an agent with
-**gopls** and the built-in `LSP` tool — 6 Go questions, 3 runs a side, same clones, same model.
+the official language server plugins and the built-in `LSP` tool — 6 Go questions and 9 TypeScript
+questions, 3 runs a side, same clones, same model.
 
 | 4 list questions + 1 trap, caddy and hugo | grep | p-graph | gopls |
 |---|---|---|---|
@@ -245,12 +246,32 @@ Two things a language server cannot do, and they decide when the graph still win
 project to **build** (resolved modules, `npm install`, a C++ `compile_commands.json`), and it walks a
 call chain one request per hop — 28.7 steps against p-graph's 8.7 on the transitive question.
 
-So for Go and TypeScript, reach for the language server first. Reach for p-graph for "what breaks if
-I change X" on a big repository, and for any repository that does not build.
+**On TypeScript the same arm came last, and that changes the advice.** Nine questions on nest, got
+and axios, `typescript-language-server`:
 
-Read this arm with its limits in view: 6 questions, Go only, one machine, 3 runs a side — and
+| 9 list questions, nest · got · axios | grep | p-graph | tsserver |
+|---|---|---|---|
+| Call sites found | **459 of 459** | 431 of 459 | 413 of 459 |
+| Invented | 0 | 0 | 0 |
+| Cost per question | **$0.166** | $0.170 | $0.259 |
+| Steps per question | 5.8 | **4.4** | 11.4 |
+
+Forty of the 46 missing sites are in nest, and nest's own configuration explains both misses — each
+reproduced from the server directly, with no agent in between. `PipesContextCreator.create` has four
+callers and tsserver names two: nest ships nine per-package `tsconfig.json` files with
+`"include": []`, so a sibling package's import of `@nestjs/core/pipes` resolves to the published copy
+in `node_modules`, not to the source. `ClassSerializerInterceptor.serialize` has 13 callers and
+tsserver names one: the root `tsconfig.json` excludes `**/*.spec.ts`, so the 12 test callers are
+outside the program. Neither miss came with a warning.
+
+So for Go, reach for the language server first. For TypeScript, look at what the project's
+`tsconfig.json` covers before you trust "who calls this". Reach for p-graph for "what breaks if I
+change X" on a big repository, for any repository that does not build, and for any question whose
+callers live outside the type program.
+
+Read this arm with its limits in view: 15 questions, two languages, one machine, 3 runs a side — and
 17 of the first 18 runs had to be thrown away because `gopls` was silently answering nothing at all.
-Both are written up in
+All of it is written up in
 [the plan](./plugins/p-graph/docs/superpowers/plans/2026-08-14-p-graph-lsp-arm.md).
 
 **Three runs a side is not enough to read the accuracy rows closely.** Re-running only the p-graph arm

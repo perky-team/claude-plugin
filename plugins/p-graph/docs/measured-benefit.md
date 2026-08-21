@@ -1426,9 +1426,10 @@ speak to that at all, because the runner switches the machine's Go LSP off in **
 purpose. Without that, `gopls` would have answered the Go questions in the grep arm and voided the
 comparison.
 
-So a third arm was built: the same clones, the same questions, the same model, with `gopls` and the
-built-in `LSP` tool, and a rule written to the same standard as the p-graph rule. Six Go questions on
-caddy and hugo, three runs a side.
+So a third arm was built: the same clones, the same questions, the same model, the official language
+server plugins and the built-in `LSP` tool, and a rule written to the same standard as the p-graph
+rule. Two languages have run so far — six Go questions on caddy and hugo, then nine TypeScript
+questions on nest, got and axios. Three runs a side each.
 
 | 4 list questions + 1 trap | grep | p-graph | gopls |
 |---|---|---|---|
@@ -1458,9 +1459,76 @@ Two things decide when the graph still wins:
 - **It walks a chain one request per hop.** 28.7 steps against p-graph's 8.7 on the transitive
   question, where `impact` answers in one call.
 
-**The advice this arm supports:** for Go and TypeScript, reach for the language server first. Reach
-for p-graph for "what breaks if I change X" on a big repository, and for any repository that does not
-build.
+### TypeScript: the server came last, and the project's own tsconfig says why
+
+Nine questions on nest, got and axios, three runs a side, `typescript-language-server`.
+
+| 9 list questions | grep | p-graph | tsserver |
+|---|---|---|---|
+| Call sites found | **459 of 459** | 431 of 459 | 413 of 459 |
+| Call sites invented | 0 | 0 | 0 |
+| Cost per question | **$0.166** | $0.170 | $0.259 |
+| Time per question | **25 s** | 26 s | 45 s |
+| Steps per question | 5.8 | **4.4** | 11.4 |
+| `LSP` calls and greps per question | — | — | 2.4 and 2.1 |
+
+On Go the server found every call site. On TypeScript it is the worst of the three. This is not a
+broken install: the preflight proved tsserver resolves all three repositories before the first run,
+and both misses below were then reproduced from the server directly, with no agent in between.
+
+Forty of the 46 missing sites are in nest, and nest's own configuration explains them.
+
+**A repository that splits itself into per-package projects hides callers in sibling packages.**
+`PipesContextCreator.create` has four callers. Ask tsserver and it names two:
+
+```
+$ node scripts/lsp-probe.mjs --dir <nest> --command typescript-language-server \
+    --refs packages/core/pipes/pipes-context-creator.ts:21:9 --args --stdio
+2 references
+  packages/core/helpers/external-context-creator.ts:114
+  packages/core/router/router-execution-context.ts:112
+```
+
+The other two callers are in `packages/microservices` and `packages/websockets`. They import
+`PipesContextCreator` from `@nestjs/core/pipes`, and nest ships nine per-package `tsconfig.json`
+files, each with `"include": []` and a project reference. So that import resolves to the published
+copy in `node_modules/@nestjs/core`, which is a different declaration from the source file. Move
+those nine files aside and the same question returns all four — lines 114, 112, 82 and 74. The server
+was right about the program it was given.
+
+**A repository that keeps its tests out of type checking hides every test caller.**
+`ClassSerializerInterceptor.serialize` has 13 callers: one in production code, 12 in a `.spec.ts`
+file. tsserver answers one. nest's root `tsconfig.json` says
+`"exclude": ["node_modules", "**/*.spec.ts"]`, so the spec file is not in the program at all.
+
+Neither miss came with a warning. The server said "2 references" and "1 reference" in the same tone
+it uses for a complete answer. Whether the agent recovers is luck: on `nest-serialize`, two runs of
+three trusted the server and answered 1 of 13, and the third also grepped and answered 13 of 13.
+
+got and axios are the other side of the same rule. got's `tsconfig.json` includes `source`, `test`
+and `benchmark`, so tsserver sees the test callers. axios sets no `include` at all, so the whole tree
+is in the program. Both come back near-perfect — and axios is the one repository here where p-graph
+loses badly.
+
+| Question | grep | p-graph | tsserver |
+|---|---|---|---|
+| `nest-serialize` | 39/39 | 39/39 | **15/39** |
+| `nest-pipescontextcreator-create` | 12/12 | 12/12 | **6/12** |
+| `nest-serializer-serialize` | 60/60 | 60/60 | 60/60 |
+| `nest-extendarraymetadata` | 36/36 | 36/36 | 30/36 |
+| `nest-validateeach` | 30/30 | 30/30 | 26/30 |
+| `got-beforeerror` | 75/75 | 75/75 | 71/75 |
+| `got-options-merge` | 54/54 | 54/54 | 54/54 |
+| `axios-headers-has` | 78/78 | 74/78 | 76/78 |
+| `axios-eject` | 75/75 | **51/75** | 75/75 |
+
+Three runs a side, so each cell is three times the question's own site count.
+
+**The advice this arm supports:** for Go, reach for the language server first. For TypeScript, look at
+what the project's `tsconfig.json` covers before you trust "who calls this" — a monorepo split into
+per-package projects, or a project that excludes its tests, bounds the answer and does not say so.
+Reach for p-graph for "what breaks if I change X" on a big repository, for any repository that does
+not build, and for any question whose callers live outside the type program.
 
 ### The first pass of this arm was thrown away, and the reason matters
 

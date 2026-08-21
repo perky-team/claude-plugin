@@ -43,6 +43,7 @@ const PLUGIN = join(HERE, '..');
 const CLI = join(PLUGIN, 'tools', 'pgraph.mjs');
 const RULE = join(PLUGIN, 'skills', '_shared', 'templates', 'p-graph-rule.template.md');
 const LSP_RULE = join(HERE, 'lsp-arm-rule.md');
+const LSP_PROBE = join(HERE, 'lsp-probe.mjs');
 
 // The user's own machine has p-graph, p-wiki and a Go LSP switched on for every
 // session. Left alone, the BASE arm would quietly have them too and the whole
@@ -1275,13 +1276,40 @@ const LSP_WARM = {
     }
     return last;
   },
-  // Not written yet. C++, Python and TypeScript are not being run, and a probe
-  // invented without being tried is the kind of thing this file has been burned
-  // by. When those stages come up, write the probe first and watch it fail.
+  // typescript-language-server has no CLI, so this one goes out to a small LSP
+  // client — see scripts/lsp-probe.mjs, which can also be run by hand.
+  //
+  // Two extension pairs, in this order, and the order is a finding rather than
+  // caution: got and nest are TypeScript, but **axios ships JavaScript**. Its
+  // `.ts` files are all under tests/, so a `.ts`-only probe reports "no non-test
+  // .ts file to probe" for a repo whose server works perfectly. The `.js` pass
+  // catches it. Both arms answer questions about the same axios lines either way.
+  TypeScript: (dir) => probeViaLsp(dir, 'typescript-language-server', ['--stdio'],
+    [['.ts', 'typescript'], ['.js', 'javascript']]),
+  // Not written yet. C++ and Python are not being run, and a probe invented
+  // without being tried is the kind of thing this file has been burned by. When
+  // those stages come up, write the probe first and watch it fail. Note that
+  // lsp-probe.mjs finds its position with an `import … from …` regex, so Python
+  // needs its own import shape added before it can be pointed at pyright.
   'C++': null,
   Python: null,
-  TypeScript: null,
 };
+
+// Run lsp-probe.mjs and turn its one line into the null-or-message that
+// lspPreflight expects. `--args` swallows what follows it, so it goes last.
+function probeViaLsp(dir, command, args, extPairs) {
+  const failures = [];
+  for (const [ext, language] of extPairs) {
+    const r = spawnSync(process.execPath, [LSP_PROBE,
+      '--dir', dir, '--command', command, '--ext', ext, '--language', language,
+      '--args', ...args], { encoding: 'utf-8', maxBuffer: 1 << 26 });
+    const said = String(r.stdout ?? '').trim().split('\n').filter(Boolean).pop()
+      ?? String(r.stderr ?? '').trim().slice(0, 200);
+    if (r.status === 0) { process.stderr.write(`${said.replace(/^OK /, '')} — `); return null; }
+    failures.push(said || `probe exited ${r.status}`);
+  }
+  return failures.join(' | ');
+}
 
 // A misconfigured server is the worst outcome this arm can have: it answers
 // nothing, the agent falls back to grep, and the row reads as "the language
@@ -2049,16 +2077,25 @@ function toolUse() {
         counts[name] = (counts[name] ?? 0) + 1;
       }
     }
-    const k = `${r.arm}`;
-    if (!per.has(k)) per.set(k, { runs: 0, counts: {}, listCounts: {}, listRuns: 0, tok: { out: 0, cacheRead: 0, cacheWrite: 0, input: 0, msgs: 0 } });
-    const slot = per.get(k);
-    slot.runs++;
-    for (const [n, v] of Object.entries(counts)) slot.counts[n] = (slot.counts[n] ?? 0) + v;
-    if (LIST(r)) {
-      slot.listRuns++;
-      for (const [n, v] of Object.entries(counts)) slot.listCounts[n] = (slot.listCounts[n] ?? 0) + v;
-      for (const key of Object.keys(tok)) slot.tok[key] += tok[key];
-    }
+    const add = (k) => {
+      if (!per.has(k)) per.set(k, { runs: 0, counts: {}, listCounts: {}, listRuns: 0, tok: { out: 0, cacheRead: 0, cacheWrite: 0, input: 0, msgs: 0 } });
+      const slot = per.get(k);
+      slot.runs++;
+      for (const [n, v] of Object.entries(counts)) slot.counts[n] = (slot.counts[n] ?? 0) + v;
+      if (LIST(r)) {
+        slot.listRuns++;
+        for (const [n, v] of Object.entries(counts)) slot.listCounts[n] = (slot.listCounts[n] ?? 0) + v;
+        for (const key of Object.keys(tok)) slot.tok[key] += tok[key];
+      }
+    };
+    add(r.arm);
+    // The lsp arm gets a line per language as well, and that is not decoration.
+    // The write-up quotes "4.1 LSP calls a question and 5.3 greps" for Go. Once
+    // TypeScript rows arrived, the single `lsp` line averaged both languages and
+    // that sentence could no longer be reproduced from a fresh --score run — the
+    // published claim would have been unverifiable rather than wrong. base and
+    // graph keep exactly one line each, so no published number moves.
+    if (r.arm === 'lsp') add(`lsp ${r.lang}`);
   }
   // Both averages, because they are not the same number and the difference is
   // large: the transitive question alone runs about ten times the tools of a
@@ -2092,8 +2129,15 @@ function toolUse() {
 }
 
 if (flag('score')) { doScore(); noise(); followTheCalls(); toolUse(); byLanguage(); boxes(); }
+// The readiness check on its own, spending nothing. `--phase lsp` runs it first
+// anyway, but a stage that needs installs is checked several times before it is
+// paid for once, and running the whole arm to find out is the wrong way round.
+else if (phase === 'preflight') {
+  lspPreflight(QUESTIONS.filter((x) => !only || only.includes(x.id)));
+  console.log('the lsp arm is ready');
+}
 else if (phase === 'base' || phase === 'graph' || phase === 'lsp') { await runArm(String(phase)); }
 else {
-  console.log('use --phase base | --phase graph | --phase lsp | --score');
+  console.log('use --phase base | --phase graph | --phase lsp | --phase preflight | --score');
   process.exit(2);
 }
