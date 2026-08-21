@@ -1,5 +1,4 @@
 const { execSync } = require("child_process");
-const fs = require("fs");
 const os = require("os");
 let data = "";
 process.stdin.on("data", c => data += c);
@@ -52,47 +51,20 @@ process.stdin.on("end", () => {
       return `\x1b[38;5;${RESET_RAMP[idx]}m`;
     };
 
-    // Cache hit %, read from the transcript. The transcript is an append-only
-    // JSONL file that grows unbounded over a session; the latest assistant turn
-    // with usage sits at/near the end. Read only the tail and scan it backwards
-    // — reading and JSON-parsing the whole file on every ~300ms render would be
-    // O(file size) and visibly lag the status line on long sessions.
+    // Cache hit % — how much of the last API call's input came from the prompt
+    // cache. Claude Code hands us those token counts on stdin as
+    // `context_window.current_usage`, so nothing has to be read from disk. An
+    // earlier version of this script tailed 512 KB of the transcript and parsed
+    // JSONL backwards on every ~300ms render to derive the same three numbers.
+    // `current_usage` is null before the first API call of the session, and
+    // again right after /compact until the next call refills it.
     let cachePct = null;
-    const tp = j.transcript_path;
-    if (tp) {
-      try {
-        const TAIL_BYTES = 524288; // 512 KB — comfortably covers the latest turn
-        const fd = fs.openSync(tp, "r");
-        let chunk = "", truncated = false;
-        try {
-          const size = fs.fstatSync(fd).size;
-          const start = size > TAIL_BYTES ? size - TAIL_BYTES : 0;
-          truncated = start > 0;
-          const len = size - start;
-          const buf = Buffer.allocUnsafe(len);
-          const read = fs.readSync(fd, buf, 0, len, start);
-          chunk = buf.toString("utf8", 0, read);
-        } finally {
-          fs.closeSync(fd);
-        }
-        const lines = chunk.split(/\r?\n/);
-        // A truncated read can slice mid-record; drop the partial first line.
-        if (truncated) lines.shift();
-        // Scan from the end for the last assistant message carrying usage.
-        for (let i = lines.length - 1; i >= 0; i--) {
-          if (!lines[i]) continue;
-          let obj;
-          try { obj = JSON.parse(lines[i]); } catch (_) { continue; }
-          if (obj.type === "assistant" && obj.message && obj.message.usage) {
-            const u = obj.message.usage;
-            const cr = u.cache_read_input_tokens || 0;
-            const cc = u.cache_creation_input_tokens || 0;
-            const it = u.input_tokens || 0;
-            if (cr + cc + it > 0) cachePct = (cr / (cr + cc + it)) * 100;
-            break;
-          }
-        }
-      } catch (_) {}
+    const cu = cw.current_usage;
+    if (cu) {
+      const cr = cu.cache_read_input_tokens || 0;
+      const cc = cu.cache_creation_input_tokens || 0;
+      const it = cu.input_tokens || 0;
+      if (cr + cc + it > 0) cachePct = (cr / (cr + cc + it)) * 100;
     }
     // Strip any trailing parenthetical from the display name (e.g. the
     // "(1M context)" suffix Claude Code appends in 1M-context sessions) so
@@ -144,17 +116,16 @@ process.stdin.on("end", () => {
             // segment wrapper (C.reset), since "*" is the last character.
             if (status.trim().length > 0) dirty = "\x1b[1;97m*";
           } catch (_) {}
-          // Linked-worktree marker: in the main working tree --git-dir and
-          // --git-common-dir are identical; in a linked worktree --git-dir
-          // points to .git/worktrees/<name> while --git-common-dir points to
-          // the shared .git. Gray "wt:" prefix, then back to bright magenta
-          // (95m, matching C.git) for the branch name.
-          let worktreeMark = "";
-          try {
-            const dirs = execSync("git rev-parse --git-dir --git-common-dir", { cwd, timeout: 1000, stdio: ["ignore", "pipe", "ignore"] })
-              .toString().trim().split(/\r?\n/);
-            if (dirs.length === 2 && dirs[0] !== dirs[1]) worktreeMark = "\x1b[90mwt:\x1b[95m";
-          } catch (_) {}
+          // Linked-worktree marker. Claude Code reports the worktree name on
+          // stdin as `workspace.git_worktree` and omits the field in the main
+          // working tree, so detecting a worktree costs no git call at all —
+          // this used to compare `git rev-parse --git-dir --git-common-dir`.
+          // Yellow "wt", gray ":", then back to bright magenta (95m, matching
+          // C.git) for the branch name: the marker has to catch the eye,
+          // because it is the one thing saying you are not in the main tree.
+          const worktreeMark = (j.workspace && j.workspace.git_worktree)
+            ? "\x1b[93mwt\x1b[90m:\x1b[95m"
+            : "";
           // Commits ahead/behind the upstream branch, always shown as
           // "↑N↓M". rev-list --left-right --count @{upstream}...HEAD prints
           // "<behind>\t<ahead>"; it fails (caught) with no upstream, leaving
@@ -189,13 +160,18 @@ process.stdin.on("end", () => {
     // NOTE: do NOT query the GET /api/oauth/usage HTTP endpoint instead — it
     // rate-limits (HTTP 429) aggressively and stays stuck for the whole
     // session. The stdin field is the supported, request-free source.
-    // Fixed-width sub-segment: "5h XXX%[XXXXXX]" or padded "5h n/a" — 15
-    // visible chars. Right-align the percentage (max "100") and the countdown
-    // (max "23h59m" in the 7d window between 1h and 24h before reset) so the
-    // visual landmarks ('%', '[', ']') stay in fixed columns.
-    const LIM_SEG_W = 15;
-    const padLim = s => s + " ".repeat(Math.max(0, LIM_SEG_W - s.length));
-    let limitsSeg = `\x1b[90m${padLim("5h n/a")} ${padLim("7d n/a")}\x1b[0m`;
+    // Fixed-width sub-segments: "5h XXX%[XXXXX]" is 14 visible chars,
+    // "7d XXX%[XXXXXX]" is 15, and the "5h n/a" / "7d n/a" placeholders are
+    // padded to the same widths. Right-align the percentage (max "100") and
+    // the countdown so the landmarks ('%', '[', ']') stay in fixed columns.
+    // The two countdown widths differ because the widest value each window can
+    // reach differs: "4h59m" (5) in the 5-hour window, "10h10m" (6) in the
+    // 7-day one during its last day. A 6-wide slot in the 5-hour window would
+    // hold a permanently empty column.
+    const RESET_W = { "5h": 5, "7d": 6 };
+    // Sub-segment width: label(2) + space + pct(3) + "%" + "[" + countdown + "]".
+    const padLim = (label, s) => s + " ".repeat(Math.max(0, 9 + RESET_W[label] - s.length));
+    let limitsSeg = `\x1b[90m${padLim("5h", "5h n/a")} ${padLim("7d", "7d n/a")}\x1b[0m`;
     (() => {
       try {
         const rl = j.rate_limits || {};
@@ -217,8 +193,8 @@ process.stdin.on("end", () => {
           return `${m % 60}m`;
         };
         const seg = (label, p, epoch) => p == null
-          ? `\x1b[90m${padLim(`${label} n/a`)}\x1b[0m`
-          : `\x1b[90m${label} \x1b[0m${limitColor(p)}${String(p).padStart(3)}%\x1b[0m\x1b[90m[\x1b[0m${resetColor(label, epoch)}${fmtReset(epoch).padStart(6)}\x1b[0m\x1b[90m]\x1b[0m`;
+          ? `\x1b[90m${padLim(label, `${label} n/a`)}\x1b[0m`
+          : `\x1b[90m${label} \x1b[0m${limitColor(p)}${String(p).padStart(3)}%\x1b[0m\x1b[90m[\x1b[0m${resetColor(label, epoch)}${fmtReset(epoch).padStart(RESET_W[label])}\x1b[0m\x1b[90m]\x1b[0m`;
         limitsSeg = `${seg("5h", fiveHr, fh && fh.resets_at)} ${seg("7d", sevenDay, sd && sd.resets_at)}`;
       } catch (_) {}
     })();
@@ -252,7 +228,12 @@ process.stdin.on("end", () => {
       if (used != null) ctxBits.push(`${gradColor(pct != null ? pct : 0)}${fmtK(used)}${C.reset}`);
       seg1Left = ctxBits.join(" ");
       // Cache hit % — always dim gray: it is informational, not a warning.
-      if (cachePct != null) cacheBit = `${C.sep}c${Math.round(cachePct)}%${C.reset}`;
+      // A dim "c-" stands in when the figure is not known yet (right after
+      // /compact, until the next API call), so the segment keeps its shape
+      // instead of silently losing a field.
+      cacheBit = cachePct != null
+        ? `${C.sep}c${Math.round(cachePct)}%${C.reset}`
+        : `${C.sep}c-${C.reset}`;
     }
     if (seg1Left || cacheBit) {
       parts.push(seg1Left + (seg1Left && cacheBit ? " " : "") + cacheBit);
@@ -320,6 +301,19 @@ process.stdin.on("end", () => {
     if (dirDisplay)  line2.push(`${C.dir}${dirDisplay}${C.reset}`);
     if (ramSeg)      line2.push(ramSeg);
     if (line2.length) out += "\n" + line2.join(SEP);
+
+    // Line 3: the session name — the one set with --name or /rename, or else
+    // the title Claude Code writes from the first prompt. The field is absent
+    // at session start until that title exists, and again right after /clear;
+    // print a dim "-" then, so the bar keeps three rows instead of flipping
+    // between two and three. Trim to the terminal width, which arrives in
+    // COLUMNS — Claude Code captures our stdout, so the script cannot measure
+    // the terminal itself.
+    const sessionName = typeof j.session_name === "string" ? j.session_name.trim() : "";
+    const cols = parseInt(process.env.COLUMNS, 10) || 0;
+    let line3 = sessionName || "-";
+    if (cols > 1 && line3.length > cols) line3 = line3.slice(0, cols - 1) + "…";
+    out += "\n" + C.sep + line3 + C.reset;
 
     process.stdout.write(out);
   } catch (e) {}

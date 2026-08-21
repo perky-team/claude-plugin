@@ -7,10 +7,16 @@ import { join, resolve } from 'node:path';
 const SCRIPT = resolve(__dirname, '..', 'plugins', 'p-statusline', 'statusline', 'statusline.cjs');
 
 // Run statusline.cjs with `input` piped to stdin; return stdout.
-function run(input: object): string {
+// COLUMNS is dropped from the inherited environment: the script trims line 3
+// to it, and a value set by whatever launched the test run would truncate the
+// session name in tests that are not about width. Tests that care pass it in.
+function run(input: object, env?: Record<string, string>): string {
+  const inherited = { ...process.env };
+  delete inherited.COLUMNS;
   return execFileSync(process.execPath, [SCRIPT], {
     input: JSON.stringify(input),
     encoding: 'utf-8',
+    env: { ...inherited, ...(env ?? {}) },
   });
 }
 
@@ -130,54 +136,133 @@ describe('p-statusline statusline.cjs', () => {
     expect(typeof out).toBe('string');
   });
 
-  // Write a JSONL transcript in a throwaway dir and return its path.
-  function writeTranscript(lines: string[]): string {
-    const d = mkdtempSync(join(tmpdir(), 'p-sl-tx-'));
-    tempDirs.push(d);
-    const p = join(d, 'transcript.jsonl');
-    writeFileSync(p, lines.join('\n') + '\n');
-    return p;
-  }
+  // Cache hit % comes from stdin. `current_usage` carries the same three token
+  // counts the script used to dig out of the transcript file.
+  const ctx = (current_usage: object | null) => ({
+    used_percentage: 8, context_window_size: 200000, total_input_tokens: 80000, current_usage,
+  });
+  const usage = (cr: number, cc: number, it: number) =>
+    ({ input_tokens: it, output_tokens: 0, cache_creation_input_tokens: cc, cache_read_input_tokens: cr });
 
-  const assistantUsage = (cr: number, cc: number, it: number) =>
-    JSON.stringify({ type: 'assistant', message: { usage: { cache_read_input_tokens: cr, cache_creation_input_tokens: cc, input_tokens: it } } });
-
-  it('renders cache hit % from the last assistant usage in the transcript', () => {
-    const tp = writeTranscript([
-      assistantUsage(100, 100, 800),   // older turn — should be ignored
-      JSON.stringify({ type: 'user', message: { content: 'hi' } }),
-      assistantUsage(990, 0, 10),      // latest turn → 990/1000 = 99%
-    ]);
+  it('renders cache hit % from context_window.current_usage', () => {
     const out = plain(run({
-      context_window: { used_percentage: 8, context_window_size: 200000, total_input_tokens: 80000 },
-      transcript_path: tp,
+      context_window: ctx(usage(990, 0, 10)),   // 990 / 1000 = 99%
       workspace: { current_dir: nonGit, project_dir: nonGit },
     }));
     expect(out).toContain('c99%');
   });
 
-  it('reads the latest usage even when the transcript is larger than the tail window', () => {
-    // >512 KB of leading filler so the read is truncated; the final usage line
-    // must still be found (proves the tail-read scans the end, not the start).
-    const filler = Array.from({ length: 9000 }, (_, i) =>
-      JSON.stringify({ type: 'user', message: { content: 'x'.repeat(80), n: i } }));
-    const tp = writeTranscript([...filler, assistantUsage(750, 0, 250)]); // 75%
+  it('takes cache % from stdin, not from the transcript file', () => {
+    // transcript_path names a file that is not there, while stdin says 75%. An
+    // implementation that went back to reading the transcript would show no
+    // figure at all here.
     const out = plain(run({
-      context_window: { used_percentage: 8, context_window_size: 200000, total_input_tokens: 80000 },
-      transcript_path: tp,
+      context_window: ctx(usage(750, 0, 250)),
+      transcript_path: join(tmpdir(), 'p-sl-no-such-transcript.jsonl'),
       workspace: { current_dir: nonGit, project_dir: nonGit },
     }));
     expect(out).toContain('c75%');
   });
 
-  it('omits the cache segment when the transcript has no assistant usage', () => {
-    const tp = writeTranscript([JSON.stringify({ type: 'user', message: { content: 'hi' } })]);
+  it('shows a dim "c-" when current_usage is null, as it is right after /compact', () => {
     const out = plain(run({
-      context_window: { used_percentage: 8, context_window_size: 200000, total_input_tokens: 80000 },
-      transcript_path: tp,
+      context_window: ctx(null),
       workspace: { current_dir: nonGit, project_dir: nonGit },
     }));
+    expect(out).toContain('c-');
     expect(out).not.toMatch(/c\d+%/);
+  });
+
+  // Guard the reason the transcript read was dropped: it re-read up to 512 KB
+  // and parsed JSONL backwards on every render for data stdin already carries.
+  it('does not read any file — no fs, no transcript_path', () => {
+    const src = readFileSync(SCRIPT, 'utf-8');
+    expect(src).not.toMatch(/require\(\s*["']fs["']\s*\)/);
+    expect(src).not.toContain('transcript_path');
+  });
+
+  it('marks a linked worktree from workspace.git_worktree', () => {
+    const repo = makeGitRepo();
+    const out = plain(run({
+      workspace: { current_dir: repo, project_dir: repo, git_worktree: 'feature-x' },
+    }));
+    expect(out).toContain('wt:work');
+  }, 15000);
+
+  it('omits the worktree marker in the main working tree', () => {
+    const repo = makeGitRepo();
+    const out = plain(run({ workspace: { current_dir: repo, project_dir: repo } }));
+    expect(out).not.toContain('wt:');
+  }, 15000);
+
+  // The marker is the one thing on the bar saying "you are not in the main
+  // tree", so it must not be dim: yellow "wt", gray ":", branch back to magenta.
+  it('colours the worktree marker yellow "wt" then gray ":"', () => {
+    const repo = makeGitRepo();
+    const out = run({
+      workspace: { current_dir: repo, project_dir: repo, git_worktree: 'feature-x' },
+    });
+    expect(out).toContain('\x1b[93mwt\x1b[90m:\x1b[95m');
+  }, 15000);
+
+  // Countdown columns are 5 wide for the 5-hour window and 6 for the 7-day one
+  // — the widest value each can reach ("4h59m" vs "10h10m" in its last day).
+  // A 6-wide slot in the 5-hour window would be a column that never fills.
+  const limitsBlock = (out: string) => plain(out).split('\n')[0].split(' | ')[1];
+
+  it('keeps the limits block 30 columns wide in every state', () => {
+    const now = Math.floor(Date.now() / 1000);
+    const cases = [
+      { five: now + 4 * 3600 + 59 * 60, seven: now + 6 * 86400 + 21 * 3600 }, // widest of each
+      { five: now + 2 * 3600,           seven: now + 10 * 3600 + 41 * 60 },   // 7d last day: "10h41m"
+      { five: now + 3 * 60,             seven: now + 45 * 60 },               // minutes only
+    ];
+    for (const c of cases) {
+      const block = limitsBlock(run({
+        rate_limits: {
+          five_hour: { used_percentage: 100, resets_at: c.five },
+          seven_day: { used_percentage: 100, resets_at: c.seven },
+        },
+        workspace: { current_dir: nonGit, project_dir: nonGit },
+      }));
+      expect(block, `block: "${block}"`).toHaveLength(30);
+    }
+  });
+
+  it('pads the "n/a" placeholders to the same 30 columns', () => {
+    const block = limitsBlock(run({ workspace: { current_dir: nonGit, project_dir: nonGit } }));
+    expect(block).toHaveLength(30);
+  });
+
+  it('renders the session name on line 3', () => {
+    const out = plain(run({
+      session_name: 'auth-refactor',
+      workspace: { current_dir: nonGit, project_dir: nonGit },
+    }));
+    expect(out.split('\n')[2]).toBe('auth-refactor');
+  });
+
+  // session_name is absent at session start until Claude Code has written a
+  // title, and again right after /clear. Printing "-" keeps the bar three rows
+  // tall instead of flipping between two and three.
+  it('renders "-" on line 3 when session_name is absent', () => {
+    const out = plain(run({ workspace: { current_dir: nonGit, project_dir: nonGit } }));
+    expect(out.split('\n')[2]).toBe('-');
+  });
+
+  it('always prints exactly three lines', () => {
+    const out = plain(run({ workspace: { current_dir: nonGit, project_dir: nonGit } }));
+    expect(out.split('\n')).toHaveLength(3);
+  });
+
+  it('trims a long session name to the terminal width given in COLUMNS', () => {
+    const out = plain(run(
+      { session_name: 'x'.repeat(80), workspace: { current_dir: nonGit, project_dir: nonGit } },
+      { COLUMNS: '20' },
+    ));
+    const line3 = out.split('\n')[2];
+    expect(line3).toHaveLength(20);
+    expect(line3.endsWith('…')).toBe(true);
   });
 
   // The status line re-renders ~every 300ms; a hung git must not freeze it.

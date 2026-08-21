@@ -16,6 +16,10 @@ import { join, resolve } from 'node:path';
 const PLUGIN_ROOT = resolve(__dirname, '..', 'plugins', 'p-statusline');
 // SKILL.md Step 2 resolves the node binary; the test fixes it to the runner's.
 const NODE = process.execPath;
+// SKILL.md Step 6 writes this alongside the command. Without it the bar only
+// re-renders on events, so the rate-limit countdowns and the RAM figure freeze
+// while the session is idle.
+const REFRESH_INTERVAL = 10;
 
 interface InstallResult {
   created: boolean;
@@ -80,7 +84,7 @@ function runInstall(home: string): InstallResult {
   }
 
   // Step 6 — write settings.json.
-  settings.statusLine = { type: 'command', command };
+  settings.statusLine = { type: 'command', command, refreshInterval: REFRESH_INTERVAL };
   writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n', 'utf-8');
 
   return { created, backedUp, alreadyInstalled };
@@ -99,6 +103,23 @@ describe('p-statusline install E2E', () => {
     expect(s.statusLine.type).toBe('command');
     expect(s.statusLine.command).toContain('statusline.cjs');
     expect(s.statusLine.command).toMatch(/^".+" ".+statusline\.cjs"$/);
+    expect(s.statusLine.refreshInterval).toBe(REFRESH_INTERVAL);
+  });
+
+  // Re-running install over an older p-statusline entry has to add the key, or
+  // the countdowns stay frozen for everyone who installed before it existed.
+  it('adds refreshInterval to an existing p-statusline entry that lacks it', () => {
+    runInstall(home);
+    const settingsPath = join(home, '.claude', 'settings.json');
+    const s0 = JSON.parse(readFileSync(settingsPath, 'utf-8'));
+    delete s0.statusLine.refreshInterval;
+    writeFileSync(settingsPath, JSON.stringify(s0, null, 2) + '\n', 'utf-8');
+
+    const r = runInstall(home);
+    expect(r.alreadyInstalled).toBe(true);
+    expect(r.backedUp).toBe(false);
+    const s = JSON.parse(readFileSync(settingsPath, 'utf-8'));
+    expect(s.statusLine.refreshInterval).toBe(REFRESH_INTERVAL);
   });
 
   it('copies statusline.cjs into ~/.claude/p-statusline/', () => {
@@ -196,5 +217,21 @@ describe('p-statusline install SKILL.md — Step 1 home resolution', () => {
 
   it('does not instruct `echo "$HOME"` (POSIX path on Git-Bash-for-Windows)', () => {
     expect(runCmd).not.toMatch(/echo\b/);
+  });
+});
+
+// The re-implementation above writes refreshInterval because SKILL.md says to.
+// Keep the two in step: if the skill drops the key, this test fails rather than
+// the suite quietly passing against a spec that no longer asks for it.
+describe('p-statusline install SKILL.md — Step 6 refreshInterval', () => {
+  const skill = readFileSync(join(PLUGIN_ROOT, 'skills', 'install', 'SKILL.md'), 'utf-8');
+  const step6 = skill.slice(skill.indexOf('## Step 6'), skill.indexOf('## Step 7'));
+
+  it('instructs writing refreshInterval in the statusLine object', () => {
+    expect(step6).toMatch(new RegExp(`"refreshInterval":\\s*${REFRESH_INTERVAL}`));
+  });
+
+  it('says why the key is needed, not just that it is', () => {
+    expect(step6).toMatch(/idle|freeze|frozen/i);
   });
 });

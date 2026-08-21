@@ -79,8 +79,16 @@ Inspect the existing `statusLine` key:
 Set the `statusLine` key to:
 
 ```json
-{ "type": "command", "command": "<target command from Step 5>" }
+{ "type": "command", "command": "<target command from Step 5>", "refreshInterval": 10 }
 ```
+
+`refreshInterval` is required, not optional. Without it Claude Code runs the
+script only on events — a new assistant message, `/compact`, a permission-mode
+change, a vim-mode toggle. Two things on this bar are clocks: the countdowns to
+the rate-limit resets and the RAM figure. While the session sits idle they would
+freeze and keep showing the time left as of the last reply, which is exactly the
+moment you look at them. Re-running every 10 seconds keeps them true and costs
+nothing — the status line runs locally and uses no API tokens.
 
 Leave every other key in the settings object untouched. Write the whole
 object back to `<home>/.claude/settings.json` with 2-space indentation and a

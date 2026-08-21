@@ -72,21 +72,26 @@ Skills: `init`, `add`, `set`, `next`, `list`, `summary`, `sync`.
 
 ### [`p-statusline`](./plugins/p-statusline/)
 
-A custom Claude Code status line — the two-line bar at the bottom of the terminal. Activated via the `install` skill, which copies the renderer script to `~/.claude/p-statusline/` and wires `statusLine` in `~/.claude/settings.json`.
+A custom Claude Code status line — the three-line bar at the bottom of the terminal. Activated via the `install` skill, which copies the renderer script to `~/.claude/p-statusline/` and wires `statusLine` in `~/.claude/settings.json` with `"refreshInterval": 10`, so the countdowns and the RAM figure keep ticking while the session is idle instead of freezing at the last reply.
 
 The status line shows:
 
 **Line 1 — `context | rate limits | git`**
-- **Context window** — usage `%`, consumed tokens (e.g. `64k`), and cache-hit `%`. The percentage and token count share a green → red ramp that warms as the window fills. Shows a dim `-%` placeholder before the first API response.
-- **Rate limits** — `5h` and `7d` usage windows side-by-side, each as `XXX%[countdown]` with reset countdown (e.g. `5h  25%[ 3h12m]`). Fixed 31-character width: percentages right-aligned, countdowns padded so the `%`, `[`, `]` landmarks line up. `n/a` (padded) until Claude Code reports data.
-- **Git** — branch name (magenta), `*` for uncommitted changes, `wt:` marker inside a linked worktree, and `↑N↓M` commits ahead-of / behind upstream.
+- **Context window** — usage `%`, consumed tokens (e.g. `64k`), and cache-hit `%`. The percentage and token count share a green → red ramp that warms as the window fills. Shows a dim `-%` placeholder before the first API response, and `c-` for the cache figure right after `/compact`, until the next response.
+- **Rate limits** — `5h` and `7d` usage windows side-by-side, each as `XXX%[countdown]` with reset countdown (e.g. `5h  25%[3h12m]`). Fixed 30-character width: percentages right-aligned, countdowns padded so the `%`, `[`, `]` landmarks line up. The two countdown columns differ — 5 wide for `5h`, 6 for `7d` — because that is the widest value each window can reach (`4h59m` against `10h41m` in the 7-day window's last day); a 6-wide column in the 5-hour window could never fill. `n/a` (padded) until Claude Code reports data.
+- **Git** — branch name (magenta), `*` for uncommitted changes, a `wt:` marker inside a linked worktree (yellow `wt`, gray `:`), and `↑N↓M` commits ahead-of / behind upstream.
 
 **Line 2 — `model | path | RAM`**
 - **Model + effort** — bare model display name with effort level (`Opus 4.7 xhigh`).
 - **Project path** — the project's launch directory. Capped at the limits-section width: if longer, truncated from the start with a `...` prefix so the folder name (end of the path) stays visible, and the second `|` separator vertically aligns with line 1.
 - **RAM** — system memory usage with the same green → red ramp as the rate-limit %.
 
-The leading segments of both lines (context / model+effort) are padded so the first `|` separator vertically aligns.
+**Line 3 — session name**
+- The name set with `--name` or `/rename`, or else the title Claude Code writes from the first prompt. Shows `-` until that title exists and again right after `/clear`, so the bar keeps three rows instead of flipping between two and three. Cut to the terminal width from `COLUMNS`.
+
+The leading segments of lines 1 and 2 (context / model+effort) are padded so the first `|` separator vertically aligns.
+
+Everything on the bar comes from the JSON Claude Code pipes in on stdin — including the cache-hit figure and the worktree marker, which earlier versions dug out of the transcript file and a `git rev-parse` call. A render now costs four short git calls and no file reads.
 
 Skills: `install`, `help`.
 
