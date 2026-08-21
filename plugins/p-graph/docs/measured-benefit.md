@@ -1428,9 +1428,9 @@ comparison.
 
 So a third arm was built: the same clones, the same questions, the same model, the official language
 server plugins and the built-in `LSP` tool, and a rule written to the same standard as the p-graph
-rule. Three languages have run so far — six Go questions on caddy and hugo, nine TypeScript questions on
-nest, got and axios, and twelve Python questions on requests, flask, httpx and django. Three runs a
-side each.
+rule. All four languages have now run — six Go questions on caddy and hugo, nine TypeScript questions on
+nest, got and axios, twelve Python questions on requests, flask, httpx and django, and fifteen C++
+questions on leveldb, re2, spdlog and rocksdb. Three runs a side each.
 
 | 4 list questions + 1 trap | grep | p-graph | gopls |
 |---|---|---|---|
@@ -1572,6 +1572,82 @@ That is the same user-visible failure as the TypeScript one, from a different ca
 program was bounded by `tsconfig.json`; here the reference search is bounded by what is open. Both
 return a short list in the same voice as a complete one.
 
+### C++: the compile database is a ceiling, and a virtual method splits its callers
+
+Fifteen questions on leveldb, re2, spdlog and rocksdb — twelve list questions plus two "what breaks"
+and one "show the chain" — three runs a side, `clangd`.
+
+| 12 list questions | grep | p-graph | clangd |
+|---|---|---|---|
+| Call sites found | 590 of 594 | **591 of 594** | 517 of 594 |
+| Call sites invented | 0 | 0 | 0 |
+| Cost per question | $0.257 | **$0.261** | $0.288 |
+| Time per question | 45 s | **40 s** | 57 s |
+| Steps per question | 8.3 | **7.0** | 13.5 |
+| `LSP` calls and greps per question | — | — | 3.0 and 2.3 |
+
+This is the language the server was expected to win, and it is its worst. Two mechanisms account for
+the 77 missing sites, and both were reproduced from the server directly.
+
+**A file that is in no build target does not exist.** clangd answers from `compile_commands.json`, so
+a source file no target compiles is invisible whatever the flags are. Counted before the run, 200 of
+the 211 truth sites sit inside a compile database — and the misses are the same in all three runs,
+which is what a structural limit looks like next to run-to-run noise:
+
+| Missing | Why | Sites |
+|---|---|---|
+| `db/fault_injection_test.cc`, `issues/issue178_test.cc`, `issues/issue320_test.cc` | commented out in leveldb's own `CMakeLists.txt` | 5 |
+| `app/_re2.cc` | a Python extension, not a CMake target | 1 |
+| `java/rocksjni/write_batch_test.cc` | JNI, and `WITH_JNI` needs a JDK | 1 |
+
+**A virtual method splits its callers between the declaration and each override.** This is the big
+one — 52 of the 77, from one question. `spdlog::sinks::sink::log` is pure virtual and has 29 call
+sites. Ask clangd at the declaration and at the override:
+
+```
+--refs include/spdlog/sinks/sink.h:15:17        →  3 references
+--refs include/spdlog/sinks/base_sink.h:31:9    → 30 references, all in tests/
+```
+
+Neither answer is the answer to "who calls this method". A call written on a `base_sink` is a
+reference to the override, not to the declaration the question names. One run of three asked about
+the overrides too and scored 29 of 29; the other two answered the 3 and stopped. p-graph, which
+matches on the name, returned 87 of 87 — the same name matching that produces its guesses elsewhere,
+paying off here.
+
+### The C++ setup was the hard part, and the 8.3 path struck a third time
+
+Nothing about this arm was as expensive as making clangd answer at all. Written down because every
+step of it was a wrong number first:
+
+- **A short Windows path in the compile database stops the index before it starts.** `cmake` was run
+  through `%TEMP%`, which on this machine is `C:\Users\ANDREY~1.SUK\…`, so every `file` and
+  `directory` in `compile_commands.json` was in 8.3 form. clangd loaded the database, parsed a single
+  file correctly, and **enqueued nothing**: twenty minutes of waiting, zero index shards, not one log
+  line about indexing. Re-running `cmake` from the canonical long path gave 230 shards and a working
+  index. This is the third time the 8.3 path has broken this study — it killed 17 of 18 runs in the
+  first gopls pass, and neither grep nor p-graph has ever noticed, because neither cares how a path
+  is spelled.
+- **A settled index is not the first plateau.** leveldb's shard count sat at 128 long enough to look
+  finished, then climbed to 151, then to 230. clangd's answer for `Status::ToString` grew with it:
+
+  | Index shards | clangd's answer | A text search finds |
+  |---|---|---|
+  | 0 (short paths) | the index never starts | 42 |
+  | 128 | 6 | 42 |
+  | 151 | 20 | 42 |
+  | 230 (settled) | **45** | 42 |
+
+  At no point did clangd say its index was incomplete. The probe now waits for five unchanged polls
+  of the shard directory before it believes any count.
+- **What it took, and what it did not.** No admin rights: Visual Studio 18 Insiders already had MSVC,
+  CMake and Ninja, and `clangd` is a zip unpacked into a user folder. What cost real time was the
+  dependencies — abseil and googletest built from source for re2, Catch2 fetched by spdlog — and
+  rocksdb's own rule that **tests are excluded from Release builds**, which quietly left 411 entries
+  in its database where a Debug configure gives 1005.
+- One number to read with care: clangd's `--limit-references` defaults to 1000, and a warm-up probe
+  came back with exactly 999. No question here comes near it, but a bigger one would.
+
 ### Two truth lists were short, and the arms are what showed it
 
 The lsp arm's first score on the follow-the-calls questions read **24 invented sites**. None of them
@@ -1594,13 +1670,18 @@ had read 9, 0 and 24. The three that remain are one each on three questions, and
 genuine error: an lsp run put `should_redirect_with_slash` on the chain, and it does not reach the
 target.
 
-**The advice this arm supports:** for Go, reach for the language server first. For TypeScript, look at
-what the project's `tsconfig.json` covers before you trust "who calls this" — a monorepo split into
-per-package projects, or a project that excludes its tests, bounds the answer and does not say so.
-For Python the server is the cheapest of the three per call, and its answer is only as wide as the
-files already open, so ask it again after reading more. Reach for p-graph for "what breaks if I
-change X" on a big repository, for any repository that does not build, and for any question whose
-callers live outside the type program.
+**The advice this arm supports, now that all four languages have run:** for Go, reach for the
+language server first — it answered every call site of every question. Everywhere else, know what
+bounds its answer before you trust it. TypeScript is bounded by what `tsconfig.json` covers: a
+monorepo split into per-package projects, or a project that excludes its tests, is short and does not
+say so. Python is bounded by which files are open, so ask again after reading more; per call it is
+the cheapest of the three. C++ is bounded twice over — by the compile database, and by the fact that
+a virtual method's callers are split between the declaration and each override, so "who calls this"
+needs one question per override.
+
+Reach for p-graph for "what breaks if I change X" on a big repository, for any repository that does
+not build, for any question whose callers live outside the type program, and for a virtual or
+duck-typed call, where matching on the name beats resolving the type.
 
 ### The first pass of this arm was thrown away, and the reason matters
 

@@ -343,7 +343,7 @@ The graph is purely local — there is no remote service, no MCP server, and no 
 [`docs/measured-benefit.md`](./docs/measured-benefit.md) runs the contest: the same structural
 questions put to the same agent twice — once with nothing but `grep` and `Read`, once with p-graph
 installed. **Fourteen public repos, 52 structural questions, 312 runs, three runs a side** — plus a
-third arm on 6 Go, 9 TypeScript and 12 Python questions against a language server, below. Every table here is printed by
+third arm on 6 Go, 9 TypeScript, 12 Python and 15 C++ questions against a language server, below. Every table here is printed by
 `measure-agent.mjs --score`, not worked out by hand, so any of it can be regenerated.
 
 ### Every row, per language
@@ -471,7 +471,8 @@ cannot support and this one can.
 
 grep is the floor. The question a user asks next is how the graph compares to the strong alternative,
 so the same questions were put to an agent with the official language server plugins and the built-in
-`LSP` tool — 6 Go, 9 TypeScript and 12 Python questions, 3 runs a side, same clones, same model.
+`LSP` tool — 6 Go, 9 TypeScript, 12 Python and 15 C++ questions, 3 runs a side, same clones, same
+model.
 
 | 4 list questions + 1 trap, caddy and hugo | grep | p-graph | gopls |
 |---|---|---|---|
@@ -526,12 +527,38 @@ pyright names its 3 same-file callers, asked at a call in the test file it names
 with both files open it names all 10 — exactly the truth. An editor keeps many files open; an agent
 sees as much as it read first.
 
-So for Go, reach for the language server first. For TypeScript, look at what the project's
-`tsconfig.json` covers before you trust "who calls this". For Python, ask again after reading more.
-Reach for p-graph for "what breaks if I change X" on a big repository, for any repository that does
-not build, and for any question whose callers live outside the type program.
+**On C++ it is the worst of the three, and this was the language it was expected to win.** Fifteen
+questions on leveldb, re2, spdlog and rocksdb:
 
-Read this arm with its limits in view: 27 questions, three languages, one machine, 3 runs a side.
+| 12 list questions | grep | p-graph | clangd |
+|---|---|---|---|
+| Call sites found | 590 of 594 | **591 of 594** | 517 of 594 |
+| Invented | 0 | 0 | 0 |
+| Cost per question | $0.257 | **$0.261** | $0.288 |
+| Steps per question | 8.3 | **7.0** | 13.5 |
+
+Two mechanisms, both reproduced from the server. A file in no build target does not exist to clangd:
+three leveldb test files are commented out in leveldb's own `CMakeLists.txt`, re2's `app/_re2.cc` is
+a Python extension, and rocksdb's JNI test needs a JDK — 7 sites, the same in every run. And a
+virtual method splits its callers: `spdlog::sinks::sink::log` has 29 call sites, where the base
+declaration answers 3 references and the `base_sink` override answers 30. Neither is the answer to
+"who calls this method". p-graph, matching on the name, returned 87 of 87.
+
+Getting clangd to answer at all was the expensive part. A short Windows path in
+`compile_commands.json` stopped its background index before it started — twenty minutes, zero shards,
+no log line — and that is the third time the 8.3 path has broken this study. Even with long paths, the
+first plateau is not the finish: at 128 index shards clangd named 6 callers of `Status::ToString`, at
+151 it named 20, at 230 it named 45, and a text search finds 42. It never said the index was
+incomplete.
+
+So for Go, reach for the language server first. Everywhere else, know what bounds its answer:
+TypeScript by what `tsconfig.json` covers, Python by which files are open, C++ by the compile database
+and by one question per override for a virtual method. Reach for p-graph for "what breaks if I change
+X" on a big repository, for any repository that does not build, for any question whose callers live
+outside the type program, and for a virtual or duck-typed call, where matching on the name beats
+resolving the type.
+
+Read this arm with its limits in view: 42 questions, four languages, one machine, 3 runs a side.
 Two of the study's own truth lists turned out to be short, found because this arm named real code they
 were missing. And 17 of the first 18 runs had to be thrown away because `gopls` was silently
 answering nothing at all.

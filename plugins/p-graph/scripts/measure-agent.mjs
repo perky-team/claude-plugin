@@ -1200,8 +1200,18 @@ const repos = [...new Set(QUESTIONS.map((q) => q.repo))];
 
 // --- arms -------------------------------------------------------------------
 
+// What every arm keeps out of `git status`. A dirty tree is a hint one arm gets
+// and another does not, and the point is one difference between arms, not two.
+// `compile_commands.json` is on the list because the four C++ clones carry one at
+// their root for the lsp arm — clangd cannot type-check a file without it — and
+// it must not read as a change to the repository in any arm.
+// `.cache/` is clangd's own index, written into the repository it indexes.
+const EXCLUDES = '.pgraph/\nCLAUDE.md\n.claude/\ncompile_commands.json\n.cache/\n';
+
 function prepBase(repo) {
   const dir = join(work, repo);
+  mkdirSync(join(dir, '.git', 'info'), { recursive: true });
+  writeFileSync(join(dir, '.git', 'info', 'exclude'), EXCLUDES);
   rmSync(join(dir, '.pgraph'), { recursive: true, force: true });
   rmSync(join(dir, 'CLAUDE.md'), { force: true });
   rmSync(join(dir, '.claude'), { recursive: true, force: true });
@@ -1210,10 +1220,10 @@ function prepBase(repo) {
 
 function prepGraph(repo) {
   const dir = join(work, repo);
-  // Keep the two extra files out of `git status` — a dirty tree is a hint the
+  // Keep the extra files out of `git status` — a dirty tree is a hint the
   // base arm does not get, and the point is one difference, not two.
   mkdirSync(join(dir, '.git', 'info'), { recursive: true });
-  writeFileSync(join(dir, '.git', 'info', 'exclude'), '.pgraph/\nCLAUDE.md\n.claude/\n');
+  writeFileSync(join(dir, '.git', 'info', 'exclude'), EXCLUDES);
   mkdirSync(join(dir, '.pgraph'), { recursive: true });
   writeFileSync(join(dir, '.pgraph', 'config.json'), '{"destination":"local"}\n');
   // The rule as /p-graph:init installs it, with ${CLAUDE_PLUGIN_ROOT} spelled
@@ -1327,11 +1337,14 @@ const LSP_WARM = {
   // on a jump from `from collections import Counter` into a typeshed stub. That
   // proves pyright found its own bundled stubs and nothing else.
   Python: (dir) => probeViaLsp(dir, 'pyright-langserver', ['--stdio'], [['.py', 'python']]),
-  // Not written yet. C++ is not being run — this machine has no compiler at all,
-  // so there is nothing to probe. A probe invented without being tried is the
-  // kind of thing this file has been burned by: write it when clangd is here,
-  // and watch it fail first.
-  'C++': null,
+  // C++ has no imported name to point at, so the probe asks clangd to resolve an
+  // `#include` and requires the answer to be one of the repository's own headers.
+  // That is exactly what a wrong compile database breaks.
+  //
+  // Two extensions again, and again it is a fact about the repositories rather
+  // than caution: leveldb, re2 and rocksdb write `.cc`, spdlog writes `.cpp`.
+  'C++': (dir) => probeViaLsp(dir, 'clangd', ['--background-index'],
+    [['.cc', 'cpp'], ['.cpp', 'cpp']]),
 };
 
 // Run lsp-probe.mjs and turn its one line into the null-or-message that
@@ -1397,11 +1410,11 @@ function lspPreflight(asked) {
 
 function prepLsp(repo) {
   const dir = join(work, repo);
-  // Same two exclusions as the graph arm, for the same reason: the rule file is
+  // Same exclusions as the graph arm, for the same reason: the rule file is
   // the one difference between the arms, and a dirty `git status` would be a
   // second one.
   mkdirSync(join(dir, '.git', 'info'), { recursive: true });
-  writeFileSync(join(dir, '.git', 'info', 'exclude'), '.pgraph/\nCLAUDE.md\n.claude/\n');
+  writeFileSync(join(dir, '.git', 'info', 'exclude'), EXCLUDES);
   rmSync(join(dir, '.pgraph'), { recursive: true, force: true });
   rmSync(join(dir, '.claude'), { recursive: true, force: true });
   writeFileSync(join(dir, 'CLAUDE.md'), readFileSync(LSP_RULE, 'utf-8'));

@@ -149,7 +149,7 @@ Stage it, and read each stage before paying for the next.
 | 1 | Go | 16 | `go mod download` ×2 | ~$4 | **done** — 6 questions, $7.12 |
 | 2 | TypeScript | 9 | three npm installs | ~$2 | **done** — 9 questions, $6.99 |
 | 3 | Python | 12 | one npm install | ~$2 | **done** — 12 questions, $8.46 |
-| 4 | C++ | 15 | a whole C++ toolchain | ~$4 | no toolchain on this machine |
+| 4 | C++ | 15 | a whole C++ toolchain | ~$4 | **done** — 15 questions, $13.76 |
 
 The "rough cost" column was too low by a factor of three. An lsp run costs about $0.26 to $0.40, so
 nine questions three times over is $7, not $2. Read the State column, not the estimate.
@@ -176,6 +176,22 @@ Stage 3 needed one more thing, and it is the same lesson again:
 Stage 3 also produced the arm's sharpest single finding, and it needed a flag to prove:
 `--also-open`. pyright's `findReferences` answers from the files that are open, so the same symbol
 gives three different answers depending on where you ask from. See the write-up.
+
+Stage 4 needed no admin rights and no MSVC install — Visual Studio 18 Insiders already had MSVC,
+CMake and Ninja, and `clangd` is a zip unpacked into `%LOCALAPPDATA%`. What it did need:
+
+- **abseil and googletest built from source** for re2, and a Debug configure for rocksdb, because
+  rocksdb excludes tests from Release builds (411 database entries against 1005).
+- **The canonical long Windows path.** `cmake` run through `%TEMP%` writes 8.3 paths into
+  `compile_commands.json`, and clangd then enqueues nothing at all to index. Third time this study
+  has been broken by the 8.3 path.
+- **A settle loop for the index.** clangd's shard count plateaus before it is finished, and its
+  answer grows with the shard count. See the write-up's table.
+- **A cross-file check that excludes the file the probe opened.** clangd answers from the open file's
+  AST as well as the index, so the first version passed leveldb with an empty index.
+
+`--phase preflight` is now also the warm-up: it waits for each C++ repository's index to settle
+before the first paid run.
 
 Stage 1 alone answers the question that was actually asked, because Go is where the official LSP
 plugin is already installed and where the user works. If stage 1 says the server wins on Go by a

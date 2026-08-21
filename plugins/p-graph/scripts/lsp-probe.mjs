@@ -21,7 +21,7 @@
 import { spawn, execFileSync } from 'node:child_process';
 import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { pathToFileURL, fileURLToPath } from 'node:url';
 
 const argv = process.argv.slice(2);
 const flag = (name, fallback = null) => {
@@ -51,12 +51,31 @@ const timeoutMs = Number(flag('timeout', 300000));
 const attempts = Number(flag('attempts', 8));
 const waitMs = Number(flag('wait', 4000));
 const verbose = argv.includes('--verbose');
+// clangd builds its cross-file index in the background, and answers "0 callers"
+// for a well-formed question until it is done. These control how long the C++
+// check waits for that index — long, because rocksdb is 1005 translation units.
+const indexRounds = Number(flag('index-rounds', 20));
+const indexWaitMs = Number(flag('index-wait', 15000));
 if (!dir || !command) {
   console.error('usage: lsp-probe.mjs --dir <repo> --command <server> [--args ...] [--ext .ts] [--language typescript]');
   process.exit(2);
 }
 
 const die = (msg) => { console.log(`FAILED ${msg}`); process.exit(1); };
+
+// Every path this repository tracks, for asking "is this header ours?" — see the
+// C++ include rule below.
+const slash = (s) => String(s).split('\\').join('/').toLowerCase();
+let trackedSet = null;
+const tracked = (relPath) => {
+  if (!trackedSet) {
+    trackedSet = new Set(execFileSync('git', ['ls-files'], { cwd: dir, encoding: 'utf-8', maxBuffer: 1 << 26 })
+      .split('\n').filter(Boolean).map(slash));
+  }
+  const want = slash(relPath);
+  for (const f of trackedSet) if (f === want || f.endsWith(`/${want}`)) return true;
+  return false;
+};
 
 // A tracked source file with the wanted extension, biggest first: a big file is
 // the one most likely to hold a symbol other files reference, and this probe
@@ -77,6 +96,24 @@ const sourceFiles = () => {
     // Python names its tests by prefix or suffix, not by folder alone.
     .filter((f) => !/(^|\/)(test_[^/]*|[^/]*_test)\.py$/.test(f))
     .filter((f) => existsSync(join(dir, f)));
+  // With a compile database, only a file that is IN it gets the project's real
+  // flags — clangd guesses for anything else, and a guess is what this probe
+  // exists to rule out. So when the database is there, it decides the pool.
+  const db = join(dir, 'compile_commands.json');
+  if (existsSync(db)) {
+    const inDb = new Set(JSON.parse(readFileSync(db, 'utf-8'))
+      .map((e) => String(e.file).split('\\').join('/').toLowerCase()));
+    const covered = listed.filter((f) => {
+      const want = `/${f.toLowerCase()}`;
+      for (const d of inDb) if (d.endsWith(want)) return true;
+      return false;
+    });
+    if (covered.length) {
+      const sized = covered.map((f) => ({ f, size: readFileSync(join(dir, f)).length }));
+      sized.sort((a, b) => b.size - a.size);
+      return sized.map((s) => s.f);
+    }
+  }
   const preferred = listed.filter((f) => SOURCE_DIRS.test(f));
   const pool = preferred.length ? preferred : listed;
   const sized = pool.map((f) => ({ f, size: readFileSync(join(dir, f)).length }));
@@ -105,11 +142,32 @@ const IMPORT = /^\s*import\s+(?:type\s+)?(?:\{\s*(?<named>[A-Za-z_$][\w$]*)|\*\s
 // The name to ask about is after `import`, not before `from`, and "relative" is a
 // leading dot on the module rather than on a path string.
 const PY_IMPORT = /^\s*from\s+(?<mod>\.+[\w.]*|[\w.]+)\s+import\s+\(?\s*(?<name>[A-Za-z_]\w*)/;
+// C++ has no imported name to point at, so the probe points at the include
+// itself: clangd answers `definition` on an `#include` with the header it
+// resolved to. A quoted include is the project's own header and must land inside
+// the repository; an angled one is a system header and may land anywhere. This
+// tests exactly what a wrong compile database breaks — the include path.
+const CXX_INCLUDE = /^\s*#\s*include\s+(?<q>["<])(?<path>[^">]+)[">]/;
 const findImports = (text) => {
   const lines = text.split('\n');
   const found = [];
   const python = language === 'python';
+  const cxx = ['c', 'cpp'].includes(language);
   for (let i = 0; i < Math.min(lines.length, 400); i++) {
+    if (cxx) {
+      const m = CXX_INCLUDE.exec(lines[i]);
+      if (!m) continue;
+      const { q, path } = m.groups;
+      const character = lines[i].indexOf(path);
+      if (character < 0) continue;
+      // Quotes do not tell you whose header it is. spdlog includes its own
+      // headers with angle brackets, so the first version passed spdlog on
+      // `#include <mutex>` resolving into the MSVC standard library — the same
+      // hole as django and its typeshed stub. Ask the repository instead: a
+      // header it tracks is its own, whatever the brackets say.
+      found.push({ name: path, line: i, character, from: path, relative: q === '"' || tracked(path) });
+      continue;
+    }
     if (python) {
       const m = PY_IMPORT.exec(lines[i]);
       if (!m) continue;
@@ -372,6 +430,9 @@ try {
       name: imp.name,
       from: imp.from,
       target: decodeURIComponent(target).split(/[/\\]/).slice(-2).join('/'),
+      targetUri: target,
+      // The C++ check below opens the header, so it needs a real path.
+      targetPath: fileURLToPath(target),
       inNodeModules: /node_modules/.test(target),
       refs: Array.isArray(refs) ? refs.length : 0,
     };
@@ -384,6 +445,103 @@ try {
     : '';
 
   if (!jumped) die(`${lastWhy} — ${tried} file(s) tried${hint}`);
+
+  // C++ needs a SECOND proof, and it was measured the hard way. clangd resolves
+  // an `#include` straight from the compile database, so the check above passes
+  // the moment the flags are right — while `incomingCalls` still answers "0" for
+  // a method with 104 call sites, because the background index has not been
+  // built. That is the dead arm the gopls pass already paid for once: a server
+  // that answers nothing, in the voice of a server that found nothing.
+  //
+  // So ask for real cross-file references, on a symbol declared in the header the
+  // include resolved to, and keep asking while the index builds. This both proves
+  // the index and warms it — clangd stores it under .cache/clangd/index, so the
+  // runs that follow start warm, the same allowance gopls gets.
+  if (['c', 'cpp'].includes(language)) {
+    const headerUri = jumped.targetUri;
+    notify('textDocument/didOpen', {
+      textDocument: {
+        uri: headerUri, languageId: language, version: 1,
+        text: readFileSync(jumped.targetPath, 'utf-8'),
+      },
+    });
+    const symbols = await withTimeout(request('textDocument/documentSymbol', {
+      textDocument: { uri: headerUri },
+    }), 'documentSymbol on the header');
+    const flat = [];
+    const walk = (list) => { for (const s of list ?? []) { flat.push(s); walk(s.children); } };
+    walk(Array.isArray(symbols) ? symbols : []);
+    if (!flat.length) die(`no symbols in ${jumped.target}, so the index cannot be checked`);
+
+    // Wait for the index to stop growing before believing any count. clangd
+    // writes one shard per file under .cache/clangd/index, so the shard count is
+    // a progress bar the protocol does not give us. Stopping at the first
+    // cross-file hit would accept a half-built index, which is the same "0
+    // callers, said calmly" failure in a smaller size.
+    //
+    // Five unchanged polls, not three. Measured: leveldb's shard count sat at
+    // 128 long enough to look finished, then climbed to 151. Between those two
+    // numbers clangd answered 6 call sites for `Status::ToString` where a text
+    // search finds at least 42 — a wrong answer, delivered calmly, from a
+    // half-built index.
+    const shardDir = join(dir, '.cache', 'clangd', 'index');
+    let last = -1;
+    let still = 0;
+    for (let poll = 1; poll <= indexRounds && still < 5; poll++) {
+      let n = 0;
+      try { n = readdirSync(shardDir).length; } catch { n = 0; }
+      still = n === last ? still + 1 : 0;
+      if (verbose) process.stderr.write(`  index shards: ${n}${n === last ? ` (unchanged ${still})` : ''}\n`);
+      last = n;
+      if (still < 5) await new Promise((r) => { setTimeout(r, indexWaitMs); });
+    }
+    if (verbose) process.stderr.write(`  index settled at ${last} shards\n`);
+
+    let indexed = null;
+    for (let round = 1; round <= indexRounds && !indexed; round++) {
+      for (const sym of flat.slice(0, 30)) {
+        const pos = (sym.selectionRange ?? sym.range ?? sym.location?.range)?.start;
+        if (!pos) continue;
+        const refs = await withTimeout(request('textDocument/references', {
+          textDocument: { uri: headerUri },
+          position: pos,
+          context: { includeDeclaration: false },
+        }), `references on ${sym.name}`);
+        if (!Array.isArray(refs)) continue;
+        // A THIRD file, not the header and not the translation unit this probe
+        // opened. clangd answers from the open file's AST as well as from the
+        // index, so a hit inside the opened `.cc` proves nothing: the first
+        // version of this check passed leveldb on a reference in the very file it
+        // had just opened, while `incomingCalls` on `Status::ToString` — 104 call
+        // sites — was still answering 0.
+        const out = refs.find((r) => r.uri
+          && !sameFile(r.uri, headerUri)
+          && !sameFile(r.uri, uriOf(jumped.file)));
+        if (out) {
+          indexed = { sym: sym.name, count: refs.length, where: decodeURIComponent(out.uri).split('/').slice(-2).join('/') };
+          break;
+        }
+      }
+      if (!indexed && round < indexRounds) {
+        if (verbose) process.stderr.write(`  index round ${round}: nothing cross-file yet, waiting ${indexWaitMs / 1000}s\n`);
+        await new Promise((r) => { setTimeout(r, indexWaitMs); });
+      }
+    }
+    if (!indexed) {
+      // The server's own words about indexing, because "no cross-file references"
+      // has several causes and clangd logs which one it hit.
+      const said = stderr.split('\n')
+        .filter((l) => /index|background|slow|Enqueue|ASTWorker/i.test(l))
+        .slice(-6).join('\n      ');
+      die(`${jumped.file} compiles, but no cross-file references after ${indexRounds} rounds — `
+        + 'clangd\'s background index is not built, and it will answer 0 callers without saying so'
+        + (said ? `\n      ${said}` : `\n      (clangd logged nothing about indexing; ${stderr.split('\n').length} stderr lines)`));
+    }
+    console.log(`OK ${jumped.file}: \`${jumped.name}\` resolves to ${jumped.target}`
+      + `; index answers ${indexed.count} references on \`${indexed.sym}\`, one in ${indexed.where}${hint}`);
+    child.kill();
+    process.exit(0);
+  }
   console.log(`OK ${jumped.file}: \`${jumped.name}\` from '${jumped.from}' resolves to ${jumped.target}`
     + `, ${jumped.refs} references${hint}`);
   child.kill();
