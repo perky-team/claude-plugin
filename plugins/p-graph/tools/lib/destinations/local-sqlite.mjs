@@ -63,7 +63,15 @@ function loadDatabaseSync() {
 // concrete implementation reports those calls under the interface instead of as
 // gaps. Reading the two side by side on a half-migrated graph would be worse than
 // rebuilding it.
-export const SCHEMA_VERSION = 11;
+// 12: every method a Go interface declares is a node, not just the first one, and
+// an interface method's `signature` is now its own source line instead of the
+// interface's. Both change what an answer says: a call written on a multi-method
+// interface used to land on nothing, and the method set used to decide "does this
+// type implement that interface" was short — one name where the interface declares
+// five, which made the interface-reach group over-report. An incremental reindex
+// would hold the new rows for the files it reparsed and the old ones everywhere
+// else, so the two would be read side by side. Rebuild whole.
+export const SCHEMA_VERSION = 12;
 
 const META_DDL = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
