@@ -75,7 +75,15 @@ export function sigShape(signature, name) {
     const stops = [rest.indexOf('{'), rest.indexOf('}'), rest.indexOf(';')].filter((i) => i !== -1);
     if (stops.length) rest = rest.slice(0, Math.min(...stops));
     rest = rest.trim();
-    return { params: countParams(params.inner), hasResult: rest.length > 0 };
+    // A rest/variadic parameter — Go's `args ...any`, TS/JS's `...rest: T[]` —
+    // means "any number more", not "at most this many". Callers that compare
+    // parameter counts need to know this so a count check can be skipped
+    // instead of wrongly refusing a longer, legal implementation.
+    return {
+      params: countParams(params.inner),
+      hasResult: rest.length > 0,
+      variadic: /\.\.\./.test(params.inner),
+    };
   }
   return null;
 }

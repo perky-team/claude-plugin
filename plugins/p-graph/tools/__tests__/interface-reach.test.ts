@@ -197,6 +197,37 @@ export function run(h: Hooks) {
     store.close();
   }, 30000);
 
+  // An interface whose ONLY member is optional has nothing left to demand once
+  // the optional filter runs: `need` comes back empty, and `[].every(...)` is
+  // always true. Before this fix, implementationReach read that as "every
+  // same-named method anywhere implements this interface" — the real fixture
+  // this came from, nest's `CreateDecoratorOptions` (sole member `transform?`),
+  // wrongly reported 72 rows in 9 groups naming unrelated pipe classes.
+  // interfaceReach already guarded this case (`!need.length`); the fix adds
+  // the same guard to implementationReach so the two directions agree.
+  it('reports nothing for an all-optional interface, in either direction', async () => {
+    write('src/a.ts', `export interface Options {
+  transform?(value: string): string;
+}
+export class Unrelated {
+  transform(value: string): string { return value; }
+}
+export function run(o: Options, u: Unrelated) {
+  o.transform('x');
+  return u.transform('y');
+}
+`);
+    const store = await indexed();
+
+    // Asked from the interface side: Unrelated's own call must not be
+    // attributed to it as "an implementation of Options".
+    expect(store.gapsFor('Options.transform')).toEqual([]);
+    // Asked from the unrelated class's side: the call written through
+    // Options must not be attributed to it either.
+    expect(store.gapsFor('Unrelated.transform')).toEqual([]);
+    store.close();
+  }, 30000);
+
   // An empty interface is satisfied by everything, so it can never say anything
   // useful about which type runs.
   it('ignores an interface with no methods', async () => {
@@ -293,6 +324,33 @@ export function run(s: OnModuleInit) {
     expect(store.gapsFor('Service.onModuleInit')).toEqual([{
       file: 'src/a.ts', line: 8, dst_name: 'onModuleInit', src_qname: 'run',
       reason: 'interface', reachable: 1, via: 'OnModuleInit.onModuleInit',
+    }]);
+    store.close();
+  }, 30000);
+
+  // A rest parameter on the interface side means "any number more", not "at
+  // most this many": `error(message, ...optionalParams)` (2 params) is
+  // legally implemented by `error(message, trace?, context?)` (3 params) —
+  // exactly what NestJS's own docs tell you to write for a custom logger. The
+  // old `implShape.params <= ifaceShape.params` rule refused this (3 > 2) and
+  // left `CustomLogger.error` reading complete for a method a real call
+  // reaches.
+  it('does not refuse an implementation with MORE parameters when the interface member is variadic', async () => {
+    write('src/a.ts', `export interface LoggerService {
+  error(message: any, ...optionalParams: any[]): any;
+}
+export class CustomLogger implements LoggerService {
+  error(message: any, trace?: string, context?: string) { return null; }
+}
+export function run(l: LoggerService) {
+  return l.error('x', 'y', 'z');
+}
+`);
+    const store = await indexed();
+
+    expect(store.gapsFor('CustomLogger.error')).toEqual([{
+      file: 'src/a.ts', line: 8, dst_name: 'error', src_qname: 'run',
+      reason: 'interface', reachable: 1, via: 'LoggerService.error',
     }]);
     store.close();
   }, 30000);

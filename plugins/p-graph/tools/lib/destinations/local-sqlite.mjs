@@ -1869,9 +1869,25 @@ function attachReadHelpers(store, db, hasFts) {
   const shapeSatisfies = (lang, ifaceShape, implShape) => {
     if (!ifaceShape || !implShape) return true; // unreadable: fall back to name-only
     if (lang === 'go') {
+      // Untouched: a Go implementation must repeat the `...` itself, so a
+      // variadic member already compares correctly under plain equality —
+      // `Printf(format string, args ...any)` reads as the same params/result
+      // shape on both the interface and the implementing method.
       return ifaceShape.params === implShape.params && ifaceShape.hasResult === implShape.hasResult;
     }
-    return implShape.params <= ifaceShape.params; // TS/JS: fewer params is fine, a result annotation is optional
+    // TS/JS: fewer params is fine, a result annotation is optional. A rest
+    // parameter on the INTERFACE side (`...optionalParams: any[]`) means "any
+    // number more", not "at most this many", so the count check does not
+    // apply at all once the interface member is variadic. Measured on nest:
+    // `LoggerService.error(message, ...optionalParams)` (2 params) is
+    // implemented by `CustomLogger.error(message, trace?, context?)` (3
+    // params) — exactly what NestJS's own docs tell you to write for a
+    // custom logger — and the old `implShape.params <= ifaceShape.params`
+    // rule refused it. Of the 44 refusals left after that fix, 6 have a rest
+    // parameter on the interface side, 5 of those carry calls, and together
+    // they were dropping 20 `ℹ` rows.
+    if (ifaceShape.variadic) return true;
+    return implShape.params <= ifaceShape.params;
   };
 
   const interfaceReach = (node) => {
@@ -1954,14 +1970,22 @@ function attachReadHelpers(store, db, hasFts) {
     // `null` — an unreadable interface shape no longer means "refuse every
     // candidate"; shapeSatisfies falls back to name-only for it below.
     const ifaceShape = sigShape(node.signature, node.name);
-    // `need` always holds at least `node.name`, because `node.container_id`
-    // is `iface.id` — node is one of the rows this query selects. An optional
-    // member does not have to be there, so it is not demanded — a type may
-    // legally implement the interface without it.
+    // Before the optional filter below, `need` always held at least
+    // `node.name`, because `node.container_id` is `iface.id` — node is one
+    // of the rows this query selects. That stopped being true the moment
+    // optional members started being filtered out: when `node` itself is
+    // the interface's ONLY member and it is optional, `need` comes back
+    // empty. An empty `need` must never mean "every candidate implements" —
+    // `[].every(...)` is always true, so without the check right below,
+    // every same-named method anywhere would pass the name-set gate. The
+    // guard mirrors interfaceReach's own `!need.length` check, for the same
+    // reason. An optional member does not have to be there, so it is not
+    // demanded — a type may legally implement the interface without it.
     const need = db.prepare('SELECT name, signature FROM nodes WHERE container_id = ?')
       .all(iface.id)
       .filter((m) => !isOptionalMember(m))
       .map((m) => m.name);
+    if (!need.length) return [];
     const rowsFor = db.prepare(`
       SELECT e.file, e.line, e.dst_name, s.qname AS src_qname
       FROM edges e LEFT JOIN nodes s ON s.id = e.src_id

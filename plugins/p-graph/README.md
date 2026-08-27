@@ -139,7 +139,9 @@ Each symbol carries a bare `name` (used for search) and a qualified `qname`. A c
   `tools/lib/sig-shape.mjs`). The shape rule is not the same for every language: Go needs an exact
   match, same parameter count and same "does it return something", because that is what Go's own
   compiler demands. TypeScript only needs the implementation to take no more parameters than the
-  interface, and does not compare a return type at all, because TypeScript itself allows both. When
+  interface — or any number more, when the interface's member ends in a rest parameter
+  (`...args: any[]`) — and does not compare a return type at all, because TypeScript itself allows
+  both. When
   a signature line cannot be read at all — a generic method, a callback-typed member, a declaration
   whose parameter list wraps onto the next line — the shape check is skipped and the name match
   stands on its own. Parameter *types* are not compared either, so two same-named, same-shaped
