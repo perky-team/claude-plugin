@@ -111,8 +111,21 @@ describe('unresolved call-site reporting', () => {
     expect(rows[0].src_qname).toBe('api.Server.HandleList');
     expect(rows[0].dst_name).toBe('ListGroups');
     expect(rows[0].via).toBe('store.Store.ListGroups');
-    // The bare name works too — that is what a user usually types.
-    expect(store.gapsFor('ListGroups')).toHaveLength(3);
+    // The bare name works too — that is what a user usually types. It also merges
+    // the interface's own method into the query, alongside Postgres and Memory,
+    // so each matched target still contributes its own gap rows (see the comment
+    // on targetsFor). Lines 8 and 12 are plain calls on Postgres, already listed
+    // as Postgres's own callers — and now ALSO reported here as calls that run
+    // Postgres's implementation of Store, the same double duty lines 7 and 9
+    // already carry as `interface` rows attributed to Postgres/Memory.
+    const bare = store.gapsFor('ListGroups');
+    expect(bare.map((r) => `${r.file}:${r.line} ${r.reason}`)).toEqual([
+      'internal/api/server.go:7 interface',
+      'internal/api/server.go:8 implementation',
+      'internal/api/server.go:9 interface',
+      'internal/api/server.go:12 implementation',
+      'internal/logs/logs.go:4 library',
+    ]);
     // A symbol nothing calls ambiguously reports nothing.
     expect(store.gapsFor('api.Serve')).toEqual([]);
 

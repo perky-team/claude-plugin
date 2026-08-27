@@ -1,6 +1,7 @@
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { OWNER_KINDS_SQL } from '../owner-kinds.mjs';
+import { sigShape } from '../sig-shape.mjs';
 const require = createRequire(import.meta.url);
 function loadDatabaseSync() {
   try { return require('node:sqlite').DatabaseSync; }
@@ -1803,19 +1804,74 @@ function attachReadHelpers(store, db, hasFts) {
     return out;
   };
 
+  // The mirror of interfaceReach. Asked about a method an INTERFACE declares,
+  // find the types that implement the interface and report the calls that land on
+  // their method. Those calls resolve certainly — the receiver's type is written
+  // at the call site — so they are knowledge the reader would otherwise have to
+  // grep for.
+  //
+  // Measured on caddy: `callers caddyhttp.Handler.ServeHTTP` named 1 of the 18
+  // calls in modules/caddyhttp/metrics_test.go. The other 17 resolve to
+  // `metricsInstrumentedRoute.ServeHTTP`, which is the right answer to "which
+  // method runs" and the wrong answer to the question that was asked.
+  //
+  // Satisfaction is the method set, the way Go decides it, PLUS the shape of the
+  // method being asked about. The set alone is not enough here: caddy holds 34
+  // methods named `ServeHTTP` in three shapes, and a question about the
+  // two-parameter form that returns an error is not a question about the
+  // three-parameter middleware form or about the standard library's form that
+  // returns nothing.
+  const implementationReach = (node) => {
+    if (!node?.name || !node.container_id) return [];
+    const iface = db.prepare('SELECT id, qname, kind FROM nodes WHERE id = ?').get(node.container_id);
+    if (!iface || iface.kind !== 'interface') return [];
+    const need = db.prepare('SELECT name FROM nodes WHERE container_id = ?').all(iface.id)
+      .map((r) => r.name);
+    if (!need.length) return []; // an empty interface is satisfied by everything
+    const want = sigShape(node.signature, node.name);
+    const rowsFor = db.prepare(`
+      SELECT e.file, e.line, e.dst_name, s.qname AS src_qname
+      FROM edges e LEFT JOIN nodes s ON s.id = e.src_id
+      WHERE e.kind = 'call' AND e.dst_id = ? ORDER BY e.file, e.line`);
+    const out = [];
+    for (const cand of db.prepare(`
+      SELECT id, qname, signature, name, lang, container_id FROM nodes
+      WHERE name = ? AND lang = ? AND kind IN ('function','method') AND id <> ?`)
+      .all(node.name, node.lang, node.id)) {
+      const owner = ownerOf(cand);
+      if (!owner || owner.kind === 'interface') continue;
+      const ownNames = new Set(owner.names);
+      if (!need.every((n) => ownNames.has(n))) continue;
+      // Compared only when both sides state a shape. An interface method whose
+      // signature could not be read must not silently widen the match.
+      const got = sigShape(cand.signature, cand.name);
+      if (!want || !got) continue;
+      if (want.params !== got.params || want.hasResult !== got.hasResult) continue;
+      for (const r of rowsFor.all(cand.id)) {
+        out.push({ file: r.file, line: r.line, dst_name: r.dst_name, src_qname: r.src_qname,
+          reason: 'implementation', reachable: 1, via: cand.qname });
+      }
+    }
+    return out;
+  };
+
   store.gapsFor = (name) => {
     if (!hasBare) return [];
     const targets = targetsFor(name);
     if (!targets.length) return collectGaps([symbolOf(name, null)], []);
     const rows = collectGaps(targets.map((t) => symbolOf(name, t)), targets.map((t) => t.id));
     const seen = new Set(rows.map((r) => `${r.file}|${r.line}`));
-    for (const t of targets) {
-      for (const r of interfaceReach(t)) {
+    const addOnce = (extra) => {
+      for (const r of extra) {
         const key = `${r.file}|${r.line}`;
         if (seen.has(key)) continue;
         seen.add(key);
         rows.push(r);
       }
+    };
+    for (const t of targets) {
+      addOnce(interfaceReach(t));
+      addOnce(implementationReach(t));
     }
     return rows.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
   };

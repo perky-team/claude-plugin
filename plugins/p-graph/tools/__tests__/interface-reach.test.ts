@@ -85,10 +85,17 @@ type Wide interface {
 	Missing()
 }
 `);
+    // A call written THROUGH Wide itself. Without this, the test would pass even
+    // if Postgres were wrongly treated as satisfying Wide: there would be no edge
+    // on Wide's method to surface either way. With it, a wrong "Postgres
+    // implements Wide" call would show up as a second `via` here.
+    write('store/callwide.go', `package store
+func CallWide(w Wide) []string { return w.ListGroups() }
+`);
     const store = await indexed();
 
     // Postgres has ListGroups but not Missing, so it does not implement Wide —
-    // and nothing calls Wide.ListGroups anyway.
+    // the call through Wide must not be attributed to it.
     expect(store.gapsFor('store.Postgres.ListGroups').map((r) => r.via))
       .toEqual(['store.Store.ListGroups']);
     store.close();

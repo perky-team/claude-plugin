@@ -175,8 +175,9 @@ export async function runCommand(ctx) {
   // still print a count, because a refused call must never disappear.
   const gapCounts = (rows) => ({
     viaInterface: rows.filter((r) => r.reason === 'interface'),
+    viaImplementation: rows.filter((r) => r.reason === 'implementation'),
     listed: rows.filter((r) => r.reason !== 'external' && r.reason !== 'interface'
-      && r.reason !== 'library' && r.reachable !== 0),
+      && r.reason !== 'implementation' && r.reason !== 'library' && r.reachable !== 0),
     unrelated: rows.filter((r) => r.reason === 'ambiguous' && r.reachable === 0).length,
     library: rows.filter((r) => r.reason === 'library').length,
     external: rows.filter((r) => r.reason === 'external').length,
@@ -216,7 +217,7 @@ export async function runCommand(ctx) {
   const allGuessed = (rows) => rows.length > 0 && rows.every((r) => r.guess);
 
   const emitGaps = (rows, complete = false, line = COMPLETE) => {
-    const { viaInterface, listed, unrelated, library, external } = gapCounts(rows);
+    const { viaInterface, viaImplementation, listed, unrelated, library, external } = gapCounts(rows);
     // Printed before everything else, and grouped by the interface that carries
     // the calls. This is knowledge, not a gap: which implementation runs is decided
     // at run time, and naming the interface is the part a text search cannot do.
@@ -228,6 +229,24 @@ export async function runCommand(ctx) {
       }
       for (const [via, rs] of byIface) {
         out(`ℹ ${rs.length} call site${rs.length === 1 ? '' : 's'} reach this method through ${via} — which implementation runs is decided at run time:`);
+        for (const r of rs.slice(0, GAP_LIMIT)) {
+          out(`    ${r.file}:${r.line}  ${r.src_qname ?? 'file scope'} -> ${r.dst_name}`);
+        }
+        if (rs.length > GAP_LIMIT) out(`    … and ${rs.length - GAP_LIMIT} more`);
+      }
+    }
+    // The opposite direction, and it says something different: here the receiver's
+    // type IS written at the call site, so the graph knows exactly which method
+    // runs. Grouped by the implementing method so the reader can see which type
+    // each call belongs to.
+    if (viaImplementation.length) {
+      const byImpl = new Map();
+      for (const r of viaImplementation) {
+        if (!byImpl.has(r.via)) byImpl.set(r.via, []);
+        byImpl.get(r.via).push(r);
+      }
+      for (const [via, rs] of byImpl) {
+        out(`ℹ ${rs.length} call site${rs.length === 1 ? '' : 's'} run an implementation of this method — ${via}:`);
         for (const r of rs.slice(0, GAP_LIMIT)) {
           out(`    ${r.file}:${r.line}  ${r.src_qname ?? 'file scope'} -> ${r.dst_name}`);
         }
