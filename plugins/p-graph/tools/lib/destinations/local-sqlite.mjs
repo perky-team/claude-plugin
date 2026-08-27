@@ -72,7 +72,13 @@ function loadDatabaseSync() {
 // five, which made the interface-reach group over-report. An incremental reindex
 // would hold the new rows for the files it reparsed and the old ones everywhere
 // else, so the two would be read side by side. Rebuild whole.
-export const SCHEMA_VERSION = 12;
+// 13: same fix as 12, for TypeScript. An interface declaring `serialize`,
+// `deserialize` and `reset` recorded one member, and the signature handed to it
+// was `export interface Serializer {` — the interface's own declaration line, not
+// the method's. New nodes appear and existing ones change their `signature`, so
+// an incremental reindex would answer differently from a full rebuild depending on
+// which files it happened to reparse. Rebuild whole.
+export const SCHEMA_VERSION = 13;
 
 const META_DDL = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
@@ -1742,10 +1748,19 @@ function attachReadHelpers(store, db, hasFts) {
   // missing, go and grep"; it now NAMES the interface the calls go through, which
   // is something a text search cannot work out at all.
   //
-  // "Implements" is decided by the method set, the way Go itself decides it: the
-  // type carries every name the interface declares. Structural, so it works for
-  // TypeScript too, `implements` clause or not. An interface with no methods is
-  // satisfied by everything and says nothing, so it is skipped.
+  // "Implements" here is two checks, not one. First: the type must have a method
+  // of every name the interface declares — structural, so it works for
+  // TypeScript too, `implements` clause or not. Second (in interfaceReach and
+  // implementationReach below): the one method the question is about must also
+  // match the interface's shape for that method — see sigShape.
+  //
+  // Known gap: this misses methods an interface gains by embedding another
+  // interface (`type X interface { Reader; Foo() }`). `go.scm` makes a node
+  // only for a plain method line (a `method_spec`); an embedded name is a
+  // different tree shape (a `constraint_elem`) and is not read. So `need` for
+  // `X` above is just `['Foo']`, and a type with only `Foo` reads as
+  // implementing `X` even though `X` also needs everything `Reader` promises.
+  // Embedding is common in Go. Reading it is future work, not done here.
   // A method's owning type, and every method name that type carries. Two shapes,
   // because Go states the owner in the qname while every other language nests it:
   //   nested   `Json.serialize`  -> container_id points at the class
@@ -1781,6 +1796,8 @@ function attachReadHelpers(store, db, hasFts) {
     const owner = ownerOf(node);
     if (!owner || owner.kind === 'interface') return [];
     const ownNames = new Set(owner.names);
+    const want = sigShape(node.signature, node.name);
+    if (!want) return []; // no shape to compare against; refuse rather than widen
     // Only interfaces that declare a method of this name can be relevant.
     const ifaces = db.prepare(`
       SELECT o.id, o.qname FROM nodes n JOIN nodes o ON n.container_id = o.id
@@ -1788,9 +1805,18 @@ function attachReadHelpers(store, db, hasFts) {
       .all(node.lang, node.name, owner.id);
     const out = [];
     for (const iface of ifaces) {
-      const need = db.prepare('SELECT name FROM nodes WHERE container_id = ?').all(iface.id)
-        .map((r) => r.name);
+      const members = db.prepare('SELECT name, signature FROM nodes WHERE container_id = ?')
+        .all(iface.id);
+      const need = members.map((m) => m.name);
       if (!need.length || !need.every((n) => ownNames.has(n))) continue;
+      // Compared only when both sides state a shape — same conservative rule
+      // implementationReach uses below: an interface method whose signature
+      // could not be read must not silently widen the match. Without this, a
+      // one-parameter `Cache.ListGroups(reset bool)` read as satisfying a
+      // zero-parameter `Store.ListGroups() []string`, on name alone.
+      const ifaceMethod = members.find((m) => m.name === node.name);
+      const got = ifaceMethod ? sigShape(ifaceMethod.signature, ifaceMethod.name) : null;
+      if (!got || want.params !== got.params || want.hasResult !== got.hasResult) continue;
       for (const r of db.prepare(`
         SELECT e.file, e.line, e.dst_name, s.qname AS src_qname, n.qname AS via
         FROM edges e JOIN nodes n ON n.id = e.dst_id
@@ -1815,8 +1841,10 @@ function attachReadHelpers(store, db, hasFts) {
   // `metricsInstrumentedRoute.ServeHTTP`, which is the right answer to "which
   // method runs" and the wrong answer to the question that was asked.
   //
-  // Satisfaction is the method set, the way Go decides it, PLUS the shape of the
-  // method being asked about. The set alone is not enough here: caddy holds 34
+  // Satisfaction is checked two ways: the type must carry every method name the
+  // interface declares (the comment above ownerOf says what this misses with an
+  // embedded interface), PLUS the one method being asked about must match the
+  // interface's shape for it. The name alone is not enough here: caddy holds 34
   // methods named `ServeHTTP` in three shapes, and a question about the
   // two-parameter form that returns an error is not a question about the
   // three-parameter middleware form or about the standard library's form that
@@ -1825,18 +1853,28 @@ function attachReadHelpers(store, db, hasFts) {
     if (!node?.name || !node.container_id) return [];
     const iface = db.prepare('SELECT id, qname, kind FROM nodes WHERE id = ?').get(node.container_id);
     if (!iface || iface.kind !== 'interface') return [];
+    // Loop-invariant, so read and checked once, before the candidate scan runs:
+    // an interface method whose own signature cannot be read has nothing to
+    // compare against, and there is no point scanning every same-named
+    // candidate in the repo just to refuse each one in turn.
+    const want = sigShape(node.signature, node.name);
+    if (!want) return []; // no shape to compare against; refuse rather than widen
+    // `need` always holds at least `node.name`, because `node.container_id`
+    // is `iface.id` — node is one of the rows this query selects.
     const need = db.prepare('SELECT name FROM nodes WHERE container_id = ?').all(iface.id)
       .map((r) => r.name);
-    if (!need.length) return []; // an empty interface is satisfied by everything
-    const want = sigShape(node.signature, node.name);
     const rowsFor = db.prepare(`
       SELECT e.file, e.line, e.dst_name, s.qname AS src_qname
       FROM edges e LEFT JOIN nodes s ON s.id = e.src_id
       WHERE e.kind = 'call' AND e.dst_id = ? ORDER BY e.file, e.line`);
     const out = [];
+    // ORDER BY qname: candidates decide which row wins a dedup key shared with
+    // another candidate's row on the same file:line (see addOnce), and that
+    // choice must not depend on SQLite's unordered row delivery.
     for (const cand of db.prepare(`
       SELECT id, qname, signature, name, lang, container_id FROM nodes
-      WHERE name = ? AND lang = ? AND kind IN ('function','method') AND id <> ?`)
+      WHERE name = ? AND lang = ? AND kind IN ('function','method') AND id <> ?
+      ORDER BY qname`)
       .all(node.name, node.lang, node.id)) {
       const owner = ownerOf(cand);
       if (!owner || owner.kind === 'interface') continue;
@@ -1845,7 +1883,7 @@ function attachReadHelpers(store, db, hasFts) {
       // Compared only when both sides state a shape. An interface method whose
       // signature could not be read must not silently widen the match.
       const got = sigShape(cand.signature, cand.name);
-      if (!want || !got) continue;
+      if (!got) continue;
       if (want.params !== got.params || want.hasResult !== got.hasResult) continue;
       for (const r of rowsFor.all(cand.id)) {
         out.push({ file: r.file, line: r.line, dst_name: r.dst_name, src_qname: r.src_qname,
@@ -1855,23 +1893,38 @@ function attachReadHelpers(store, db, hasFts) {
     return out;
   };
 
+  // Adds each row of `extra` to `rows`, at most once, sharing the `seen` set
+  // with the caller. `seen` starts out holding the file:line of every row
+  // `collectGaps` already reported, so a reach row for a line already listed
+  // as a plain gap is dropped — the two would say the same thing twice, in
+  // different words.
+  //
+  // Keyed on `file|line|reason|via`, not `file|line` alone, once a row is
+  // added here: two implementations can be called on the SAME line —
+  // `append(p.ListGroups(), m.ListGroups()...)` names both `p` and `m` on one
+  // line — and that is two different facts, each with its own `via`. A
+  // `file|line` key would keep only whichever row the database happened to
+  // return first and silently drop the other. Shared by store.gapsFor and
+  // store.gapsAround so the rule lives in one place.
+  const addOnce = (rows, seen, extra) => {
+    for (const r of extra) {
+      const shortKey = `${r.file}|${r.line}`;
+      const fullKey = `${shortKey}|${r.reason}|${r.via}`;
+      if (seen.has(shortKey) || seen.has(fullKey)) continue;
+      seen.add(fullKey);
+      rows.push(r);
+    }
+  };
+
   store.gapsFor = (name) => {
     if (!hasBare) return [];
     const targets = targetsFor(name);
     if (!targets.length) return collectGaps([symbolOf(name, null)], []);
     const rows = collectGaps(targets.map((t) => symbolOf(name, t)), targets.map((t) => t.id));
     const seen = new Set(rows.map((r) => `${r.file}|${r.line}`));
-    const addOnce = (extra) => {
-      for (const r of extra) {
-        const key = `${r.file}|${r.line}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        rows.push(r);
-      }
-    };
     for (const t of targets) {
-      addOnce(interfaceReach(t));
-      addOnce(implementationReach(t));
+      addOnce(rows, seen, interfaceReach(t));
+      addOnce(rows, seen, implementationReach(t));
     }
     return rows.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
   };
@@ -1923,12 +1976,7 @@ function attachReadHelpers(store, db, hasFts) {
     // at a concrete method has to say what reaches it, or the set reads as closed.
     const seen = new Set(rows.map((r) => `${r.file}|${r.line}`));
     for (const t of targets) {
-      for (const r of interfaceReach(t)) {
-        const key = `${r.file}|${r.line}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        rows.push(r);
-      }
+      addOnce(rows, seen, interfaceReach(t));
     }
     return rows.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
   };

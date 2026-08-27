@@ -118,13 +118,16 @@ describe('unresolved call-site reporting', () => {
     // as Postgres's own callers — and now ALSO reported here as calls that run
     // Postgres's implementation of Store, the same double duty lines 7 and 9
     // already carry as `interface` rows attributed to Postgres/Memory.
+    // `via` is included here, not just `reason`: it is the field that goes wrong
+    // when two implementations are called on one line and a dedup key without it
+    // keeps only one of them (see store-two-implementations-one-line above).
     const bare = store.gapsFor('ListGroups');
-    expect(bare.map((r) => `${r.file}:${r.line} ${r.reason}`)).toEqual([
-      'internal/api/server.go:7 interface',
-      'internal/api/server.go:8 implementation',
-      'internal/api/server.go:9 interface',
-      'internal/api/server.go:12 implementation',
-      'internal/logs/logs.go:4 library',
+    expect(bare.map((r) => `${r.file}:${r.line} ${r.reason} ${r.via ?? ''}`)).toEqual([
+      'internal/api/server.go:7 interface store.Store.ListGroups',
+      'internal/api/server.go:8 implementation store.Postgres.ListGroups',
+      'internal/api/server.go:9 interface store.Store.ListGroups',
+      'internal/api/server.go:12 implementation store.Postgres.ListGroups',
+      'internal/logs/logs.go:4 library ',
     ]);
     // A symbol nothing calls ambiguously reports nothing.
     expect(store.gapsFor('api.Serve')).toEqual([]);
