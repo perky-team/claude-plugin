@@ -1812,12 +1812,30 @@ function attachReadHelpers(store, db, hasFts) {
     return { ...o[0], names };
   };
 
-  // True for a TypeScript interface member written with `?` — `after?(): void`
-  // or `after?: () => void`. The stored `signature` is the raw source line,
-  // name first, so a `?` right after the name means "optional": a type may
-  // leave the member out and still legally implement the interface. Testing
-  // that one character is simpler, and safer, than re-parsing the line.
-  const isOptionalMember = (member) => member.signature?.[member.name.length] === '?';
+  // True for a TypeScript interface member written with `?` — `after?(): void`,
+  // `after?: () => void`, `after?<T>(v: T): void`, or with a space before the
+  // `?` (`after ?(): void`, which TypeScript also allows). A type may leave
+  // an optional member out and still legally implement the interface.
+  //
+  // The stored `signature` is the raw source line, but the name does not
+  // always start it — `readonly after?: () => void` keeps `readonly` in
+  // front, and the old code, which just read the character at `name.length`,
+  // read `readonly`'s own `n` there and missed the `?` entirely. So the name
+  // is located the same boundary-checked way `sigShape` finds it (the
+  // character before it must not continue an identifier, and neither must
+  // the character after), not assumed to sit at a fixed offset. Once found,
+  // only the text right after it is checked for a `?`, allowing whitespace.
+  const isOptionalMember = (member) => {
+    const { signature, name } = member;
+    if (typeof signature !== 'string' || !name) return false;
+    for (let at = signature.indexOf(name); at !== -1; at = signature.indexOf(name, at + 1)) {
+      const after = at + name.length;
+      if (/[\w$]/.test(signature[after] ?? '')) continue; // a longer identifier, not this name
+      if (/[\w$.]/.test(signature[at - 1] ?? '')) continue; // part of a longer identifier
+      return /^\s*\?/.test(signature.slice(after));
+    }
+    return false;
+  };
 
   const interfaceReach = (node) => {
     if (!node?.name) return [];
@@ -1831,7 +1849,7 @@ function attachReadHelpers(store, db, hasFts) {
     // this decides which one's "ℹ" group is reported first, and that must
     // not depend on SQLite's unordered row delivery.
     const ifaces = db.prepare(`
-      SELECT o.id, o.qname FROM nodes n JOIN nodes o ON n.container_id = o.id
+      SELECT DISTINCT o.id, o.qname FROM nodes n JOIN nodes o ON n.container_id = o.id
       WHERE o.kind = 'interface' AND o.lang = ? AND n.name = ? AND o.id <> ?
       ORDER BY o.qname`)
       .all(node.lang, node.name, owner.id);

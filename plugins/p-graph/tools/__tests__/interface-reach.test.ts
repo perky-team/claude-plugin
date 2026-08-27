@@ -147,6 +147,56 @@ export function run(h: Hooks) {
     store.close();
   }, 30000);
 
+  // The name does not always start the signature line. `readonly` sits in front
+  // of an optional property, and a detector that just reads the character at
+  // `name.length` reads `readonly`'s own `n` there and misses the `?` — the
+  // member then stays demanded, `Only` reads as not implementing `Hooks`, and
+  // the true interface-reach row for `before` disappears.
+  it('does not demand an optional member written with `readonly` in front', async () => {
+    write('src/a.ts', `export interface Hooks {
+  before(v: string): string;
+  readonly after?: () => void;
+}
+export class Only implements Hooks {
+  before(v: string): string { return v; }
+}
+export function run(h: Hooks) {
+  return h.before('x');
+}
+`);
+    const store = await indexed();
+
+    expect(store.gapsFor('Only.before')).toEqual([{
+      file: 'src/a.ts', line: 9, dst_name: 'before', src_qname: 'run',
+      reason: 'interface', reachable: 1, via: 'Hooks.before',
+    }]);
+    store.close();
+  }, 30000);
+
+  // TypeScript also allows whitespace between the name and the `?`. Same
+  // failure mode as `readonly` above: the character read at `name.length` is
+  // the space, not the `?`, so the member stays demanded.
+  it('does not demand an optional member with a space before the `?`', async () => {
+    write('src/a.ts', `export interface Hooks {
+  before(v: string): string;
+  after ?(): void;
+}
+export class Only implements Hooks {
+  before(v: string): string { return v; }
+}
+export function run(h: Hooks) {
+  return h.before('x');
+}
+`);
+    const store = await indexed();
+
+    expect(store.gapsFor('Only.before')).toEqual([{
+      file: 'src/a.ts', line: 9, dst_name: 'before', src_qname: 'run',
+      reason: 'interface', reachable: 1, via: 'Hooks.before',
+    }]);
+    store.close();
+  }, 30000);
+
   // An empty interface is satisfied by everything, so it can never say anything
   // useful about which type runs.
   it('ignores an interface with no methods', async () => {
