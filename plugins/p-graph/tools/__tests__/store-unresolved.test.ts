@@ -179,6 +179,29 @@ describe('unresolved call-site reporting', () => {
 
     store.close();
   }, 30000);
+
+  // `callers` calls gapsFor, `impact` calls gapsAround. Before this fix,
+  // gapsAround only added interfaceReach, never implementationReach, so
+  // asked about an INTERFACE method directly, `impact` silently dropped the
+  // two lines that call Postgres.ListGroups directly (the 'implementation'
+  // rows) — it printed `(no impact)` and `✓ complete` for a method two real
+  // calls reach, while `callers` on the same method named them.
+  it('gapsAround reports the same implementation rows gapsFor does, on an interface method target', async () => {
+    writeAmbiguousFixture();
+    const store = openStore(':memory:');
+    await indexFull({ root: dir, store, ignorePatterns: [] });
+
+    const forRows = store.gapsFor('store.Store.ListGroups');
+    const aroundRows = store.gapsAround('store.Store.ListGroups');
+    expect(aroundRows).toEqual(forRows);
+    expect(forRows.map((r) => `${r.file}:${r.line} ${r.reason} ${r.via ?? ''}`)).toEqual([
+      'internal/api/server.go:8 implementation store.Postgres.ListGroups',
+      'internal/api/server.go:12 implementation store.Postgres.ListGroups',
+      'internal/logs/logs.go:4 library ',
+    ]);
+
+    store.close();
+  }, 30000);
 });
 
 // Fixture with the shapes that hide from a name-keyed report: a failed

@@ -212,6 +212,158 @@ func (t *T) Do() {}
   }, 30000);
 });
 
+// Go's compiler demands an exact signature, so the exact comparison
+// (shapeSatisfies in local-sqlite.mjs) is right for Go — but TypeScript is
+// structurally typed and looser in two ways an exact match gets wrong. These
+// three fixtures are the ones a reviewer found reading `✓ complete` at head
+// (they printed the `ℹ` row correctly at the merge base, before the shape
+// check existed): a member whose parameter list wraps onto the next line, an
+// implementation that legally declares fewer parameters than the interface,
+// and an implementation that legally drops the interface's return annotation.
+describe("TypeScript's looser shape rule", () => {
+  // `signature` is only the FIRST LINE of a declaration (see driver.mjs). A
+  // member whose parameter list continues on the next line — common in nest,
+  // e.g. `canActivate(` — leaves `sigShape` nothing to read: `group()` never
+  // finds the closing paren on that one line, so it returns null. Before this
+  // fix, a null shape on EITHER side made the whole method refuse; now it
+  // falls back to the name-only rule instead.
+  it('does not refuse a member whose parameter list wraps onto the next line', async () => {
+    write('src/a.ts', `export interface CanActivate {
+  canActivate(
+    context: string,
+  ): boolean;
+}
+export class Guard implements CanActivate {
+  canActivate(context: string): boolean { return true; }
+}
+export function run(g: CanActivate) {
+  return g.canActivate('x');
+}
+`);
+    const store = await indexed();
+
+    expect(store.gapsFor('Guard.canActivate')).toEqual([{
+      file: 'src/a.ts', line: 10, dst_name: 'canActivate', src_qname: 'run',
+      reason: 'interface', reachable: 1, via: 'CanActivate.canActivate',
+    }]);
+    store.close();
+  }, 30000);
+
+  // `transform(value)` legally implements `transform(value, metadata)` — a
+  // NestJS pipe is free to ignore the metadata argument. The old exact rule
+  // refused this (1 param vs 2); the new rule only demands the implementation
+  // take no MORE parameters than the interface.
+  it('does not refuse an implementation with fewer parameters than the interface', async () => {
+    write('src/a.ts', `export interface PipeTransform {
+  transform(value: string, metadata: string): string;
+}
+export class Trim implements PipeTransform {
+  transform(value) { return value; }
+}
+export function run(p: PipeTransform) {
+  return p.transform('x', 'y');
+}
+`);
+    const store = await indexed();
+
+    expect(store.gapsFor('Trim.transform')).toEqual([{
+      file: 'src/a.ts', line: 8, dst_name: 'transform', src_qname: 'run',
+      reason: 'interface', reachable: 1, via: 'PipeTransform.transform',
+    }]);
+    store.close();
+  }, 30000);
+
+  // `onModuleInit() {` legally implements `onModuleInit(): any;` — a return
+  // annotation is optional on the class side in TypeScript. The old exact
+  // rule compared `hasResult` and refused (true vs false); the new rule does
+  // not compare it at all for TypeScript.
+  it('does not refuse an implementation that drops the return annotation', async () => {
+    write('src/a.ts', `export interface OnModuleInit {
+  onModuleInit(): any;
+}
+export class Service implements OnModuleInit {
+  onModuleInit() { }
+}
+export function run(s: OnModuleInit) {
+  return s.onModuleInit();
+}
+`);
+    const store = await indexed();
+
+    expect(store.gapsFor('Service.onModuleInit')).toEqual([{
+      file: 'src/a.ts', line: 8, dst_name: 'onModuleInit', src_qname: 'run',
+      reason: 'interface', reachable: 1, via: 'OnModuleInit.onModuleInit',
+    }]);
+    store.close();
+  }, 30000);
+});
+
+// The pair the study measured this on: caddy's three-parameter
+// `MiddlewareHandler` form of `ServeHTTP` against the two-parameter interface
+// method. Go must still refuse it — TypeScript's looser rule (previous
+// describe block) is only for TypeScript. Checked from the interface side
+// (implementationReach), the mirror of the interfaceReach checks above.
+describe("Go's exact shape rule, still enforced", () => {
+  it('refuses a three-parameter Go method against a two-parameter interface method', async () => {
+    write('store/handler.go', `package store
+type Handler interface {
+	ServeHTTP(w string, r string) error
+}
+`);
+    write('store/chain.go', `package store
+type Chain struct{}
+func (c *Chain) ServeHTTP(w string, r string, next Handler) error { return nil }
+`);
+    write('api/api.go', `package api
+import "x/store"
+func Serve(c *store.Chain, h store.Handler) error {
+	c.ServeHTTP("w", "r", h)
+	return h.ServeHTTP("w", "r")
+}
+`);
+    const store = await indexed();
+
+    // Chain's three-parameter ServeHTTP must not be reported as an
+    // implementation of Handler's two-parameter one, even though it has a
+    // direct call site of its own (line 4) that a wrongly-accepted match
+    // would surface here.
+    expect(store.gapsFor('store.Handler.ServeHTTP')).toEqual([]);
+    store.close();
+  }, 30000);
+
+  // caddy's other correct refusal: the standard library's void `ServeHTTP(w,
+  // r) {` form, same param count as the interface but no result. A pair like
+  // this is the one that actually tells "Go kept its own rule" apart from "Go
+  // quietly started sharing TypeScript's rule": both forms have the same
+  // param count, so the permissive TS rule (which ignores hasResult) would
+  // wrongly accept this pair too — only a real hasResult comparison refuses
+  // it. The three-parameter test above does not: a bigger param count is
+  // refused by the permissive rule as well, so that test alone could not
+  // catch Go silently losing its own branch.
+  it('refuses a same-arity Go method whose result differs from the interface', async () => {
+    write('store/handler.go', `package store
+type Handler interface {
+	ServeHTTP(w string, r string) error
+}
+`);
+    write('store/plain.go', `package store
+type Plain struct{}
+func (p *Plain) ServeHTTP(w string, r string) {}
+`);
+    write('api/api.go', `package api
+import "x/store"
+func Serve(p *store.Plain, h store.Handler) error {
+	p.ServeHTTP("w", "r")
+	return h.ServeHTTP("w", "r")
+}
+`);
+    const store = await indexed();
+
+    expect(store.gapsFor('store.Handler.ServeHTTP')).toEqual([]);
+    store.close();
+  }, 30000);
+});
+
 // Store-level, not source-level like every test above — deliberately, not out of
 // laziness. `interface Codec { encode(v: string): string; encode(v: string, pad:
 // number): string; }` is everyday TypeScript (overloads), and both members are

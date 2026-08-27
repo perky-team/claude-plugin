@@ -1837,13 +1837,49 @@ function attachReadHelpers(store, db, hasFts) {
     return false;
   };
 
+  // Does an implementation's shape for one method satisfy the interface's shape
+  // for the same method? `lang` picks the rule; `ifaceShape` and `implShape` are
+  // whatever `sigShape` returned for the interface's member and the candidate
+  // method — either may be `null`.
+  //
+  // Go's compiler demands an exact signature, so an exact comparison is right
+  // there: measured on caddy (701 name-set pairs at schema 13), it is the rule
+  // that keeps the three-parameter `MiddlewareHandler` form and the void
+  // standard-library form OUT of `ServeHTTP`'s answer — both real distinctions
+  // this study depends on.
+  //
+  // TypeScript is structurally typed and looser in two ways an exact match gets
+  // wrong: an implementation may declare FEWER parameters than the interface
+  // (`transform(value)` legally implements `transform(value, metadata)`), and a
+  // return annotation is optional on the class side (`catch(exception, host) {`
+  // legally implements `catch(exception: T, host: ArgumentsHost): any;`).
+  // Measured on nest (660 pairs, same schema): the exact rule refuses 597 of
+  // them, and 217 of those refusals are calls that really run through the
+  // interface — dropping the `ℹ` row that says so and printing `✓ complete`
+  // for a method a call really reaches.
+  //
+  // A shape that could not be read must never mean "refuse". `sigShape` returns
+  // `null` for a generic method, a callback-typed member, an optional member,
+  // or a declaration whose parameter list wraps onto the next line — 144 of
+  // nest's 283 interface members (51%) have no readable shape at all. Falling
+  // back to the name-only rule here costs nothing: the `ℹ` row this produces
+  // can never be mistaken for a certain caller, so there is no false claim to
+  // make by letting it through. Refusing it instead would manufacture a false
+  // `✓ complete`, which is the one claim this file must never make by mistake.
+  const shapeSatisfies = (lang, ifaceShape, implShape) => {
+    if (!ifaceShape || !implShape) return true; // unreadable: fall back to name-only
+    if (lang === 'go') {
+      return ifaceShape.params === implShape.params && ifaceShape.hasResult === implShape.hasResult;
+    }
+    return implShape.params <= ifaceShape.params; // TS/JS: fewer params is fine, a result annotation is optional
+  };
+
   const interfaceReach = (node) => {
     if (!node?.name) return [];
     const owner = ownerOf(node);
     if (!owner || owner.kind === 'interface') return [];
     const ownNames = new Set(owner.names);
-    const want = sigShape(node.signature, node.name);
-    if (!want) return []; // no shape to compare against; refuse rather than widen
+    const implShape = sigShape(node.signature, node.name);
     // Only interfaces that declare a method of this name can be relevant.
     // ORDER BY o.qname: when two interfaces both carry a method of this name,
     // this decides which one's "ℹ" group is reported first, and that must
@@ -1863,11 +1899,11 @@ function attachReadHelpers(store, db, hasFts) {
       // An optional member does not have to be there, so it is not demanded.
       const need = members.filter((m) => !isOptionalMember(m)).map((m) => m.name);
       if (!need.length || !need.every((n) => ownNames.has(n))) continue;
-      // Compared only when both sides state a shape — same conservative rule
-      // implementationReach uses below: an interface method whose signature
-      // could not be read must not silently widen the match. Without this, a
-      // one-parameter `Cache.ListGroups(reset bool)` read as satisfying a
-      // zero-parameter `Store.ListGroups() []string`, on name alone.
+      // Compared with shapeSatisfies — see its comment for the Go/TypeScript
+      // split and why an unreadable shape falls back to name-only instead of
+      // refusing. Without some shape check at all, a one-parameter
+      // `Cache.ListGroups(reset bool)` read as satisfying a zero-parameter
+      // `Store.ListGroups() []string`, on name alone.
       //
       // A TypeScript interface can declare one name more than once — overloads.
       // A type that implements ANY of the declared shapes satisfies the
@@ -1876,10 +1912,7 @@ function attachReadHelpers(store, db, hasFts) {
       // implemented the second overload, and then reported "no callers,
       // complete" for a method that every call reaches.
       const candidates = members.filter((m) => m.name === node.name);
-      const matches = candidates.some((m) => {
-        const got = sigShape(m.signature, m.name);
-        return got && want.params === got.params && want.hasResult === got.hasResult;
-      });
+      const matches = candidates.some((m) => shapeSatisfies(node.lang, sigShape(m.signature, m.name), implShape));
       if (!matches) continue;
       for (const r of db.prepare(`
         SELECT e.file, e.line, e.dst_name, s.qname AS src_qname, n.qname AS via
@@ -1917,12 +1950,10 @@ function attachReadHelpers(store, db, hasFts) {
     if (!node?.name || !node.container_id) return [];
     const iface = db.prepare('SELECT id, qname, kind FROM nodes WHERE id = ?').get(node.container_id);
     if (!iface || iface.kind !== 'interface') return [];
-    // Loop-invariant, so read and checked once, before the candidate scan runs:
-    // an interface method whose own signature cannot be read has nothing to
-    // compare against, and there is no point scanning every same-named
-    // candidate in the repo just to refuse each one in turn.
-    const want = sigShape(node.signature, node.name);
-    if (!want) return []; // no shape to compare against; refuse rather than widen
+    // Loop-invariant, so read once before the candidate scan runs. May be
+    // `null` — an unreadable interface shape no longer means "refuse every
+    // candidate"; shapeSatisfies falls back to name-only for it below.
+    const ifaceShape = sigShape(node.signature, node.name);
     // `need` always holds at least `node.name`, because `node.container_id`
     // is `iface.id` — node is one of the rows this query selects. An optional
     // member does not have to be there, so it is not demanded — a type may
@@ -1948,11 +1979,9 @@ function attachReadHelpers(store, db, hasFts) {
       if (!owner || owner.kind === 'interface') continue;
       const ownNames = new Set(owner.names);
       if (!need.every((n) => ownNames.has(n))) continue;
-      // Compared only when both sides state a shape. An interface method whose
-      // signature could not be read must not silently widen the match.
-      const got = sigShape(cand.signature, cand.name);
-      if (!got) continue;
-      if (want.params !== got.params || want.hasResult !== got.hasResult) continue;
+      // See shapeSatisfies above interfaceReach for the Go/TypeScript split
+      // and why a shape that could not be read falls back to name-only.
+      if (!shapeSatisfies(node.lang, ifaceShape, sigShape(cand.signature, cand.name))) continue;
       for (const r of rowsFor.all(cand.id)) {
         out.push({ file: r.file, line: r.line, dst_name: r.dst_name, src_qname: r.src_qname,
           reason: 'implementation', reachable: 1, via: cand.qname });
@@ -2040,11 +2069,14 @@ function attachReadHelpers(store, db, hasFts) {
     const symbols = [...targets.map((t) => symbolOf(name, t)), ...reached.map((n) => symbolOf(n.qname, n))];
     const callerCheckIds = [...targets.map((t) => t.id), ...reached.map((n) => n.id)];
     const rows = collectGaps(symbols, callerCheckIds);
-    // The same interface line the direct question gets. An impact walk that stops
-    // at a concrete method has to say what reaches it, or the set reads as closed.
+    // The same interface and implementation lines the direct question gets. An
+    // impact walk that stops at a concrete method — or that asks about an
+    // interface method directly — has to say what reaches it, or the set reads
+    // as closed.
     const seen = new Set(rows.map((r) => `${r.file}|${r.line}`));
     for (const t of targets) {
       addOnce(rows, seen, interfaceReach(t));
+      addOnce(rows, seen, implementationReach(t));
     }
     return rows.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
   };
