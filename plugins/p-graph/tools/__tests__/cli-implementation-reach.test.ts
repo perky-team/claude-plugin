@@ -38,9 +38,13 @@ describe('callers on an interface method', () => {
     run(['index', '--full']);
 
     const out = run(['callers', 'store.Store.ListGroups']);
-    // Substring only, not the full heading: it must survive both the singular
-    // and plural verb form ("call site runs" / "call sites run").
-    expect(out).toContain('an implementation of this method');
+    // Substring only, not the full heading: it must survive the singular vs
+    // plural noun ("call site" / "call sites"). The heading must say these
+    // ARE call sites of the method (not read as an aside about some other,
+    // adjacent thing) — that is what distinguishes it from the interface-reach
+    // heading, which says the opposite: no call names this method directly.
+    expect(out).toContain('of this method — on');
+    expect(out).toContain('which implements it');
     expect(out).toContain('store.Postgres.ListGroups');
     expect(out).toContain('api/api.go:5');
     expect(out).not.toContain('missing from this answer');

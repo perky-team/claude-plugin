@@ -248,10 +248,18 @@ export async function runCommand(ctx) {
       + ' — which implementation runs is decided at run time:');
     // The opposite direction, and it says something different: here the receiver's
     // type IS written at the call site, so the graph knows exactly which method
-    // runs. Grouped by the implementing method so the reader can see which type
-    // each call belongs to.
+    // runs. These rows ARE call sites of the method that was asked about — the
+    // heading must say so up front, not as an aside, or a reader files them
+    // under "adjacent, not the answer" and drops them. Grouped by the
+    // implementing method so the reader can also see which type each call
+    // belongs to.
+    // Measured on caddy: the old heading ("run an implementation of this
+    // method — I") is true but reads as a category next to the answer. An
+    // agent given it invented its own heading ("not the interface value
+    // itself") for all 17 rows, and the extractor then counted 1 of 18 instead
+    // of 18 — the same graph data, scored wrong because of the wording alone.
     emitReachGroup(viaImplementation, (n, via) =>
-      `ℹ ${n} ${n === 1 ? 'call site runs' : 'call sites run'} an implementation of this method — ${via}:`);
+      `ℹ ${n} ${n === 1 ? 'call site' : 'call sites'} of this method — on ${via}, which implements it:`);
     if (!listed.length && !unrelated && !library && !external) return complete ? out(line) : undefined;
     if (listed.length) {
       out(`⚠ ${listed.length} call site${listed.length === 1 ? '' : 's'} missing from this answer:`);
