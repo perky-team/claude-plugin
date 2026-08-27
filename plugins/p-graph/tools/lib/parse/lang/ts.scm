@@ -18,10 +18,16 @@
 ;; "no symbol named Serializer.serialize".
 ;; Two shapes declare a method: `serialize(v: T): O;` and `handle: (x) => void`. A
 ;; property of any other type is data, not a method, so it stays out.
-(interface_body (method_signature name: (property_identifier) @name)) @definition.method
+;; The definition is anchored on the METHOD_SIGNATURE / PROPERTY_SIGNATURE, not on
+;; the interface_body around it — the same fix go.scm:37 needed, for the same
+;; reason. Anchoring outside was measured wrong twice over: an interface declaring
+;; `serialize`, `deserialize` and `reset` recorded ONE member, and the signature
+;; handed to it was `export interface Serializer {`, the interface's own
+;; declaration line, not the method's.
+(interface_body (method_signature name: (property_identifier) @name) @definition.method)
 (interface_body (property_signature
   name: (property_identifier) @name
-  type: (type_annotation (function_type)))) @definition.method
+  type: (type_annotation (function_type))) @definition.method)
 (lexical_declaration (variable_declarator name: (identifier) @name (arrow_function))) @definition.function
 
 ;; A namespace owns its members, so index it as a definition — otherwise every

@@ -84,3 +84,61 @@ export function run(s: Serializer) {
     store.close();
   }, 30000);
 });
+
+// The definition used to be anchored on the interface_body around the method,
+// not the method itself — the same mistake go.scm made for Go's method_spec,
+// fixed the same way (see the comment above the two ts.scm rules). Anchoring
+// outside was wrong twice over, both measured: an interface declaring
+// `serialize`, `deserialize` and `reset` recorded ONE member, and the signature
+// handed to it was `export interface Serializer {`, the interface's own
+// declaration line, not the method's.
+describe('a multi-method interface', () => {
+  const SRC = `export interface Serializer {
+  serialize(v: string): string;
+  deserialize(v: string): string;
+  reset(): void;
+}
+`;
+
+  it('records every method the interface declares, not only the first', async () => {
+    write('src/a.ts', SRC);
+    const store = await indexed();
+
+    const members = store.db.prepare(
+      `SELECT n.name FROM nodes n JOIN nodes o ON n.container_id = o.id
+       WHERE o.name = 'Serializer' ORDER BY n.name`).all().map((r) => r.name);
+    expect(members).toEqual(['deserialize', 'reset', 'serialize']);
+    store.close();
+  }, 30000);
+
+  it('gives each one its own line and its own signature', async () => {
+    write('src/a.ts', SRC);
+    const store = await indexed();
+
+    expect(store.node('Serializer.serialize').start_line).toBe(2);
+    expect(store.node('Serializer.deserialize').start_line).toBe(3);
+    expect(store.node('Serializer.reset').start_line).toBe(4);
+    expect(store.node('Serializer.serialize').signature).toBe('serialize(v: string): string;');
+    expect(store.node('Serializer.deserialize').signature).toBe('deserialize(v: string): string;');
+    // The interface's own line must no longer be handed to every method on it.
+    expect(store.node('Serializer.reset').signature).not.toContain('interface {');
+    store.close();
+  }, 30000);
+
+  // The function-typed-property shape (`handle: (x) => void`) is a second query
+  // rule and was anchored the same wrong way. It needs the same proof.
+  it('gives the function-typed-property shape its own line too', async () => {
+    write('src/a.ts', `export interface Hooks {
+  before: () => void;
+  after: () => void;
+}
+`);
+    const store = await indexed();
+
+    expect(store.node('Hooks.before').start_line).toBe(2);
+    expect(store.node('Hooks.after').start_line).toBe(3);
+    expect(store.node('Hooks.before').signature).toBe('before: () => void;');
+    expect(store.node('Hooks.after').signature).toBe('after: () => void;');
+    store.close();
+  }, 30000);
+});
