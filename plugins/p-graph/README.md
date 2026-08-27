@@ -135,10 +135,19 @@ Each symbol carries a bare `name` (used for search) and a qualified `qname`. A c
   the calls that run a type which implements it — `ℹ N call sites run an implementation of this
   method — config.Postgres.Set`, one such line per implementing type. "Implements" takes two checks,
   not one: the type must carry a method of every name the interface declares, and — for the one
-  method asked about — that method's shape must match the interface's: same parameter count, same
-  "does it return something" (`sigShape` in `tools/lib/sig-shape.mjs`). Parameter *types* are not
-  compared, so two same-named, same-shaped methods can still be different contracts; that is a known,
-  bounded source of over-report, not a certain row. TypeScript interfaces work the same way.
+  method asked about — that method's shape must match the interface's (`sigShape` in
+  `tools/lib/sig-shape.mjs`). The shape rule is not the same for every language: Go needs an exact
+  match, same parameter count and same "does it return something", because that is what Go's own
+  compiler demands. TypeScript only needs the implementation to take no more parameters than the
+  interface, and does not compare a return type at all, because TypeScript itself allows both. When
+  a signature line cannot be read at all — a generic method, a callback-typed member, a declaration
+  whose parameter list wraps onto the next line — the shape check is skipped and the name match
+  stands on its own. Parameter *types* are not compared either, so two same-named, same-shaped
+  methods can still be different contracts; that is a known, bounded source of over-report, not a
+  certain row. An interface also gains nothing here from Go embedding (`type X interface { Reader;
+  Foo() }`) or TypeScript's `extends`: a member the interface only gains that way is never demanded,
+  so a type can read as implementing the interface while still missing what the embedded or extended
+  interface promises.
 - **a TypeScript class field states the type.** `private readonly svc: Svc;` or
   `constructor(private readonly svc: Svc)`, then `this.svc.find(id)`. The field is looked for on the
   class the call is written in, then on each class it extends, and the type it names is followed
