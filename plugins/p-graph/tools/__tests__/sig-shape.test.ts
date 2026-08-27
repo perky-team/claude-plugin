@@ -46,4 +46,37 @@ describe('sigShape', () => {
     expect(sigShape('', 'ServeHTTP')).toBeNull();
     expect(sigShape(null, 'ServeHTTP')).toBeNull();
   });
+
+  // A one-line Go method body reads as "no result" even when it has
+  // statements inside it. The body is not a result type.
+  it('treats a one-line method body as no result, not as a result', () => {
+    expect(sigShape('func (c *Cache) Close() {}', 'Close'))
+      .toEqual({ params: 0, hasResult: false });
+    expect(sigShape(
+      'func (w *Wrapper) ServeHTTP(rw http.ResponseWriter, r *http.Request) { w.Inner.ServeHTTP(rw, r) }',
+      'ServeHTTP',
+    )).toEqual({ params: 2, hasResult: false });
+  });
+
+  it('strips a trailing "//" comment before deciding there is no result', () => {
+    expect(sigShape('Reset() // resets internal state', 'Reset'))
+      .toEqual({ params: 0, hasResult: false });
+  });
+
+  // The comment must be stripped before the brace is cut, not after.
+  // Cutting the brace first would leave "// uses ", which is not empty
+  // and would wrongly read as a result.
+  it('strips the comment first, even when the comment mentions a brace', () => {
+    expect(sigShape('Reset() // uses {}', 'Reset'))
+      .toEqual({ params: 0, hasResult: false });
+  });
+
+  // A real result type can itself contain a brace. Cutting at the first
+  // "{" must not eat into these — there is text left before the brace.
+  it('still reads a struct result type that contains a brace', () => {
+    expect(sigShape('func f() struct{ A int } {', 'f'))
+      .toEqual({ params: 0, hasResult: true });
+    expect(sigShape('func f() map[string]struct{} {', 'f'))
+      .toEqual({ params: 0, hasResult: true });
+  });
 });

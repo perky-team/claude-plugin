@@ -53,7 +53,18 @@ export function sigShape(signature, name) {
     if (/[\w$.]/.test(line[at - 1] ?? '')) continue;
     const params = group(line, after);
     if (!params) continue;
-    const rest = line.slice(params.end + 1).replace(/\{\s*$/, '').trim();
+    // The text after the parameter list is not always just a result type.
+    // A Go one-line method can carry a body ("Close() {}") or a trailing
+    // "//" comment ("Reset() // resets internal state"), and both are
+    // ordinary source, not something the parser stripped out first.
+    // Strip the comment before cutting at the brace, not after: on
+    // "Reset() // uses {}" cutting the brace first leaves "// uses ",
+    // which is not empty and would wrongly read as a result.
+    const rest = line
+      .slice(params.end + 1)
+      .replace(/\/\/.*$/, '')
+      .replace(/\{.*$/, '')
+      .trim();
     return { params: countParams(params.inner), hasResult: rest.length > 0 };
   }
   return null;
