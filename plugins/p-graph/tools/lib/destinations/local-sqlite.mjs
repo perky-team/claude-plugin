@@ -78,6 +78,13 @@ function loadDatabaseSync() {
 // the method's. New nodes appear and existing ones change their `signature`, so
 // an incremental reindex would answer differently from a full rebuild depending on
 // which files it happened to reparse. Rebuild whole.
+//
+// Same consequence as 12, running the other way. There, a short method set —
+// one name where the interface declares five — made the interface-reach group
+// over-report: almost any type looked like it implemented the interface. Here
+// the method set grows, from one name to several, so a type now has to carry
+// every one of them. A type the old, short method set called an
+// implementation can now get refused.
 export const SCHEMA_VERSION = 13;
 
 const META_DDL = `
@@ -1755,12 +1762,26 @@ function attachReadHelpers(store, db, hasFts) {
   // match the interface's shape for that method — see sigShape.
   //
   // Known gap: this misses methods an interface gains by embedding another
-  // interface (`type X interface { Reader; Foo() }`). `go.scm` makes a node
-  // only for a plain method line (a `method_spec`); an embedded name is a
-  // different tree shape (a `constraint_elem`) and is not read. So `need` for
-  // `X` above is just `['Foo']`, and a type with only `Foo` reads as
-  // implementing `X` even though `X` also needs everything `Reader` promises.
-  // Embedding is common in Go. Reading it is future work, not done here.
+  // interface. Go: `type X interface { Reader; Foo() }` — `go.scm` makes a
+  // node only for a plain method line (a `method_spec`); an embedded name is
+  // a different tree shape (a `constraint_elem`) and is not read. TypeScript
+  // has the same gap: `interface X extends Y { foo(): void }` — `ts.scm`
+  // reads no member off an `extends` clause either. So `need` for `X` above
+  // is just `['Foo']` (or `['foo']` in TypeScript), and a type with only that
+  // one method reads as implementing `X` even though `X` also needs
+  // everything the embedded or extended interface promises. Both are common.
+  // Reading either is future work, not done here.
+  //
+  // Known gap, part two, TypeScript only: an optional member (`after?(): void`)
+  // is correctly left out of `need` below — a type may skip it and still
+  // implement the interface. But `sigShape` reads the `?` as "no parameter
+  // list here" and returns null for that member's OWN shape (see
+  // sig-shape.mjs; fixing that is out of scope). So a call reaching the
+  // optional method itself, through the interface, is never confirmed — not
+  // `callers Hooks.after` (asked on the interface) and not `callers
+  // Impl.after` (asked on a type that implements it). Both read as "no
+  // interface reach" for that one method, even when the interface truly
+  // declares it and the type truly implements it.
   // A method's owning type, and every method name that type carries. Two shapes,
   // because Go states the owner in the qname while every other language nests it:
   //   nested   `Json.serialize`  -> container_id points at the class
@@ -1791,6 +1812,13 @@ function attachReadHelpers(store, db, hasFts) {
     return { ...o[0], names };
   };
 
+  // True for a TypeScript interface member written with `?` — `after?(): void`
+  // or `after?: () => void`. The stored `signature` is the raw source line,
+  // name first, so a `?` right after the name means "optional": a type may
+  // leave the member out and still legally implement the interface. Testing
+  // that one character is simpler, and safer, than re-parsing the line.
+  const isOptionalMember = (member) => member.signature?.[member.name.length] === '?';
+
   const interfaceReach = (node) => {
     if (!node?.name) return [];
     const owner = ownerOf(node);
@@ -1799,24 +1827,42 @@ function attachReadHelpers(store, db, hasFts) {
     const want = sigShape(node.signature, node.name);
     if (!want) return []; // no shape to compare against; refuse rather than widen
     // Only interfaces that declare a method of this name can be relevant.
+    // ORDER BY o.qname: when two interfaces both carry a method of this name,
+    // this decides which one's "ℹ" group is reported first, and that must
+    // not depend on SQLite's unordered row delivery.
     const ifaces = db.prepare(`
       SELECT o.id, o.qname FROM nodes n JOIN nodes o ON n.container_id = o.id
-      WHERE o.kind = 'interface' AND o.lang = ? AND n.name = ? AND o.id <> ?`)
+      WHERE o.kind = 'interface' AND o.lang = ? AND n.name = ? AND o.id <> ?
+      ORDER BY o.qname`)
       .all(node.lang, node.name, owner.id);
     const out = [];
     for (const iface of ifaces) {
-      const members = db.prepare('SELECT name, signature FROM nodes WHERE container_id = ?')
+      // ORDER BY start_line: a stable order for the members of one interface,
+      // and the same order the overload scan below relies on being stable.
+      const members = db.prepare(
+        'SELECT name, signature FROM nodes WHERE container_id = ? ORDER BY start_line')
         .all(iface.id);
-      const need = members.map((m) => m.name);
+      // An optional member does not have to be there, so it is not demanded.
+      const need = members.filter((m) => !isOptionalMember(m)).map((m) => m.name);
       if (!need.length || !need.every((n) => ownNames.has(n))) continue;
       // Compared only when both sides state a shape — same conservative rule
       // implementationReach uses below: an interface method whose signature
       // could not be read must not silently widen the match. Without this, a
       // one-parameter `Cache.ListGroups(reset bool)` read as satisfying a
       // zero-parameter `Store.ListGroups() []string`, on name alone.
-      const ifaceMethod = members.find((m) => m.name === node.name);
-      const got = ifaceMethod ? sigShape(ifaceMethod.signature, ifaceMethod.name) : null;
-      if (!got || want.params !== got.params || want.hasResult !== got.hasResult) continue;
+      //
+      // A TypeScript interface can declare one name more than once — overloads.
+      // A type that implements ANY of the declared shapes satisfies the
+      // interface, so compare against every same-named member and stop at the
+      // first that agrees. Taking only the first member refused a class that
+      // implemented the second overload, and then reported "no callers,
+      // complete" for a method that every call reaches.
+      const candidates = members.filter((m) => m.name === node.name);
+      const matches = candidates.some((m) => {
+        const got = sigShape(m.signature, m.name);
+        return got && want.params === got.params && want.hasResult === got.hasResult;
+      });
+      if (!matches) continue;
       for (const r of db.prepare(`
         SELECT e.file, e.line, e.dst_name, s.qname AS src_qname, n.qname AS via
         FROM edges e JOIN nodes n ON n.id = e.dst_id
@@ -1860,9 +1906,13 @@ function attachReadHelpers(store, db, hasFts) {
     const want = sigShape(node.signature, node.name);
     if (!want) return []; // no shape to compare against; refuse rather than widen
     // `need` always holds at least `node.name`, because `node.container_id`
-    // is `iface.id` — node is one of the rows this query selects.
-    const need = db.prepare('SELECT name FROM nodes WHERE container_id = ?').all(iface.id)
-      .map((r) => r.name);
+    // is `iface.id` — node is one of the rows this query selects. An optional
+    // member does not have to be there, so it is not demanded — a type may
+    // legally implement the interface without it.
+    const need = db.prepare('SELECT name, signature FROM nodes WHERE container_id = ?')
+      .all(iface.id)
+      .filter((m) => !isOptionalMember(m))
+      .map((m) => m.name);
     const rowsFor = db.prepare(`
       SELECT e.file, e.line, e.dst_name, s.qname AS src_qname
       FROM edges e LEFT JOIN nodes s ON s.id = e.src_id

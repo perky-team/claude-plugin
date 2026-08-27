@@ -120,6 +120,33 @@ export function run(s: Serializer) {
     store.close();
   }, 30000);
 
+  // A TypeScript interface member written `after?(): void` is optional: a class
+  // may leave it out and still legally implement the interface. Before this
+  // fix, `need` demanded every member's name, optional or not, so `Only` read
+  // as NOT implementing `Hooks` — one missing name was enough to refuse the
+  // whole interface — and the call to `before` through `Hooks` silently
+  // dropped out of `Only.before`'s answer.
+  it('does not demand an optional member the interface declares', async () => {
+    write('src/a.ts', `export interface Hooks {
+  before(v: string): string;
+  after?(): void;
+}
+export class Only implements Hooks {
+  before(v: string): string { return v; }
+}
+export function run(h: Hooks) {
+  return h.before('x');
+}
+`);
+    const store = await indexed();
+
+    expect(store.gapsFor('Only.before')).toEqual([{
+      file: 'src/a.ts', line: 9, dst_name: 'before', src_qname: 'run',
+      reason: 'interface', reachable: 1, via: 'Hooks.before',
+    }]);
+    store.close();
+  }, 30000);
+
   // An empty interface is satisfied by everything, so it can never say anything
   // useful about which type runs.
   it('ignores an interface with no methods', async () => {

@@ -56,6 +56,6 @@ describe('callers on a method an interface reaches', () => {
     const out = run(['callers', 'store.Store.ListGroups']);
     expect(out).toContain('api/api.go:3');
     expect(out).toContain('✓ complete');
-    expect(out).not.toContain('reach this method through');
+    expect(out).not.toContain('this method through');
   }, 30000);
 });

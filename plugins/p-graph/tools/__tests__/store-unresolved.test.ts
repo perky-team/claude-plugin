@@ -120,7 +120,8 @@ describe('unresolved call-site reporting', () => {
     // already carry as `interface` rows attributed to Postgres/Memory.
     // `via` is included here, not just `reason`: it is the field that goes wrong
     // when two implementations are called on one line and a dedup key without it
-    // keeps only one of them (see store-two-implementations-one-line above).
+    // keeps only one of them (see "two implementations called on one line" in
+    // cli-implementation-reach.test.ts).
     const bare = store.gapsFor('ListGroups');
     expect(bare.map((r) => `${r.file}:${r.line} ${r.reason} ${r.via ?? ''}`)).toEqual([
       'internal/api/server.go:7 interface store.Store.ListGroups',
