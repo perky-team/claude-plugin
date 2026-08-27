@@ -161,3 +161,68 @@ func (t *T) Do() {}
     store.close();
   }, 30000);
 });
+
+// Store-level, not source-level like every test above — deliberately, not out of
+// laziness. `interface Codec { encode(v: string): string; encode(v: string, pad:
+// number): string; }` is everyday TypeScript (overloads), and both members are
+// nodes on the same qname, `Codec.encode`. A call written through a Codec-typed
+// value CANNOT get a `dst_id` today: every resolver pass that links a call to a
+// qualified name (local-sqlite.mjs's Pass F, Pass B, and TS's own field-type pass)
+// requires exactly one node to answer to that qname, and two overloads means two.
+// That is a real, separate bug in the call resolver, upstream of interfaceReach,
+// and out of scope here (confirmed: identical CLI output before and after the fix
+// below, and on the commit before this task's changes too).
+//
+// So the graph is built by hand instead, the same way store-fieldtypes.test.ts and
+// store-read.test.ts do — inserting nodes and a call edge whose `dst_id` is set
+// exactly as a resolver that COULD handle overloads would set it. That isolates
+// the one thing interfaceReach's satisfaction check controls (does a same-named
+// member's shape match) from the resolver problem that sits in front of it.
+describe('a class satisfying one TypeScript overload out of several (store-level)', () => {
+  it('reports the call when the class matches a LATER overload, not the first', () => {
+    const store = openStore(':memory:');
+    const nodes = [
+      { id: 'iface1', name: 'Codec', qname: 'Codec', kind: 'interface', lang: 'ts',
+        file: 'a.ts', start_line: 1, end_line: 4, signature: 'export interface Codec {',
+        doc: '', container_id: null },
+      // Two overloads of one name, at different lines, different shapes — what the
+      // earlier ts.scm fix now records for a real interface.
+      { id: 'm1', name: 'encode', qname: 'Codec.encode', kind: 'method', lang: 'ts',
+        file: 'a.ts', start_line: 2, end_line: 2, signature: 'encode(v: string): string;',
+        doc: '', container_id: 'iface1' },
+      { id: 'm2', name: 'encode', qname: 'Codec.encode', kind: 'method', lang: 'ts',
+        file: 'a.ts', start_line: 3, end_line: 3,
+        signature: 'encode(v: string, pad: number): string;', doc: '', container_id: 'iface1' },
+      { id: 'cls1', name: 'Impl', qname: 'Impl', kind: 'class', lang: 'ts',
+        file: 'a.ts', start_line: 5, end_line: 7,
+        signature: 'export class Impl implements Codec {', doc: '', container_id: null },
+      // Impl implements the SECOND overload's shape (two params) — not the first.
+      { id: 'im1', name: 'encode', qname: 'Impl.encode', kind: 'method', lang: 'ts',
+        file: 'a.ts', start_line: 6, end_line: 6,
+        signature: 'encode(v: string, pad: number): string { return v; }', doc: '',
+        container_id: 'cls1' },
+      { id: 'fn1', name: 'run', qname: 'run', kind: 'function', lang: 'ts',
+        file: 'a.ts', start_line: 8, end_line: 10,
+        signature: 'export function run(c: Codec) {', doc: '', container_id: null },
+    ];
+    // The call `c.encode('x', 1)`. `dst_id` points at `m2`, the SECOND overload —
+    // the one whose shape (two params) matches what was actually called, exactly
+    // as a resolver able to tell overloads apart would have set it.
+    const edges = [
+      { src_id: 'fn1', dst_id: 'm2', dst_name: 'encode', kind: 'call', file: 'a.ts',
+        line: 9, field_key: null, method: 'encode', dst_bare: 'encode', lang: 'ts',
+        external: 0, member: 1 },
+    ];
+    store.replaceFileSymbols('a.ts', nodes, edges);
+
+    // Before the fix, interfaceReach compared Impl.encode only against `m1` (the
+    // first same-named member `find()` returned) and refused: `m1`'s one-param
+    // shape does not match Impl.encode's two params. The call is real and
+    // resolved, but the old code would still call this method complete.
+    expect(store.gapsFor('Impl.encode')).toEqual([{
+      file: 'a.ts', line: 9, dst_name: 'encode', src_qname: 'run',
+      reason: 'interface', reachable: 1, via: 'Codec.encode',
+    }]);
+    store.close();
+  }, 30000);
+});
