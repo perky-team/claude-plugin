@@ -27,10 +27,16 @@ says what it missed   no                           yes — the gap banner
 languages here        one server per language      four languages, one index
 ```
 
-The p-graph page already names the limits on its own side: a receiver typed by a method call
-(7 of 34 sites on `caddyhttp.Handler.ServeHTTP`), a method promoted through embedding (dropped,
+The p-graph page already names the limits on its own side: a receiver typed by a method call on a
+value that is not typed yet, a method promoted through embedding (dropped,
 51 edges), two packages sharing a name (188 hugo calls refused). A language server has none of
 those limits. So on accuracy the honest expectation is that the server wins.
+
+One entry in that list was later found to be misattributed. `caddyhttp.Handler.ServeHTTP` was not a
+receiver-typing miss: the graph reads `ih := newMetricsInstrumentedRoute(…)` correctly and resolves
+all 18 calls in `metrics_test.go` certainly, to `metricsInstrumentedRoute.ServeHTTP`. What was missing
+was the question's shape — asked about the interface method, the graph had no way to report the calls
+that run an implementation. See `2026-08-24-go-interface-method-set.md`.
 
 The interesting columns are the other ones: cost, time, steps, and what the setup costs.
 

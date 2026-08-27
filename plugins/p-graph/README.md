@@ -129,8 +129,16 @@ Each symbol carries a bare `name` (used for search) and a qualified `qname`. A c
   to `config.Provider.Set`. It does NOT resolve to any implementation: which one runs is decided at
   run time. Ask about a concrete implementation and the answer says so on its own line — `ℹ N call
   sites reach this method through config.Provider.Set` — which is the part a text search cannot work
-  out. "Implements" is decided by the method set, the way Go decides it. TypeScript interfaces work
-  the same way.
+  out.
+
+  The other direction works too: ask about the interface method itself, and `callers` also reports
+  the calls that run a type which implements it — `ℹ N call sites run an implementation of this
+  method — config.Postgres.Set`, one such line per implementing type. "Implements" takes two checks,
+  not one: the type must carry a method of every name the interface declares, and — for the one
+  method asked about — that method's shape must match the interface's: same parameter count, same
+  "does it return something" (`sigShape` in `tools/lib/sig-shape.mjs`). Parameter *types* are not
+  compared, so two same-named, same-shaped methods can still be different contracts; that is a known,
+  bounded source of over-report, not a certain row. TypeScript interfaces work the same way.
 - **a TypeScript class field states the type.** `private readonly svc: Svc;` or
   `constructor(private readonly svc: Svc)`, then `this.svc.find(id)`. The field is looked for on the
   class the call is written in, then on each class it extends, and the type it names is followed
@@ -239,7 +247,7 @@ One shape the measured set did not contain was found afterwards and fixed: a pla
 
 #### The two weaknesses to plan around
 
-**1. A receiver typed from a function's return value.** `x := reflect.ValueOf(...)` and `buf := bp.GetBuffer()` record no type: the type is stated in the callee's signature, and the graph does not read across files for it. The call falls back to the unique bare name, so it becomes a guess. This is the largest remaining source of wrong rows. `collections.Namespace.Index` in hugo still prints 26 caller rows where `gopls` says 3, and all 25 false ones have this shape.
+**1. A receiver typed from a call whose result the graph has no row for.** Two shapes, and only one is still open. `x := newThing()` — a plain function in this repo — IS read: extraction records `x` as `#ret:newThing`, and the resolver follows that to the result type written in `newThing`'s own signature, across files. What stays open is a callee the graph cannot read a result for: one outside the repo (`x := reflect.ValueOf(v)`), or a method on a value that is not typed yet (`buf := bp.GetBuffer()`, where `bp` has to be resolved first — Go stops after one hop, and only Python takes the extra one). Those fall back to the unique bare name and become guesses. This is the largest remaining source of wrong rows: `collections.Namespace.Index` in hugo still prints 26 caller rows where `gopls` says 3, and all 25 false ones have this shape.
 
 **2. A real method with a real owner, called on an untyped value in TypeScript or Python.** The owner rule cannot help here: the target really is a method of a real class, and the receiver's type is simply unknown. Reading TypeScript annotations and Python constructors cut this down a lot (see the paragraph above), and what is left is small but not gone: got's `setHeader` keeps 3 guessed rows of 5, requests' `RequestsCookieJar.update` 10 of 11, and `.set` 6 of 22. Closing the rest needs type *inference* rather than type reading — a contextual callback type in TypeScript, an attribute type in Python.
 
