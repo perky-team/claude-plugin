@@ -79,4 +79,20 @@ describe('sigShape', () => {
     expect(sigShape('func f() map[string]struct{} {', 'f'))
       .toEqual({ params: 0, hasResult: true });
   });
+
+  // A one-line Go interface leaves its own closing "}" right after the last
+  // method's parameter list. That "}" is not a result — it belongs to the
+  // interface, not to Close — so this must read the same as the multi-line
+  // form does.
+  it('does not read a one-line interface\'s own closing brace as a result', () => {
+    expect(sigShape('type Closer interface { Close() }', 'Close'))
+      .toEqual({ params: 0, hasResult: false });
+  });
+
+  // Same idea, but the next member's leading ";" is what survives into
+  // `rest` when two methods share one line.
+  it('does not read the next member\'s ";" as a result', () => {
+    expect(sigShape('type X interface { A(); B() }', 'A'))
+      .toEqual({ params: 0, hasResult: false });
+  });
 });

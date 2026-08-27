@@ -60,11 +60,21 @@ export function sigShape(signature, name) {
     // Strip the comment before cutting at the brace, not after: on
     // "Reset() // uses {}" cutting the brace first leaves "// uses ",
     // which is not empty and would wrongly read as a result.
-    const rest = line
+    let rest = line
       .slice(params.end + 1)
-      .replace(/\/\/.*$/, '')
-      .replace(/\{.*$/, '')
-      .trim();
+      .replace(/\/\/.*$/, '');
+    // A one-line interface leaves its OWN closing brace, or the next member's
+    // leading ";", sitting right after this method's parameter list — that is
+    // not a result type either. `type Closer interface { Close() }` has to cut
+    // at the "}" so "Close" reads as no-result, and `type X interface { A();
+    // B() }` has to cut at the ";" so "A" does the same. Both chars can only
+    // mean this when they show up before this method's own "{" (its body, or
+    // an anonymous-struct result) — so it is enough to stop at whichever of
+    // "{", "}", ";" comes first; a "}" or ";" that shows up after a "{" is
+    // already dropped by that cut.
+    const stops = [rest.indexOf('{'), rest.indexOf('}'), rest.indexOf(';')].filter((i) => i !== -1);
+    if (stops.length) rest = rest.slice(0, Math.min(...stops));
+    rest = rest.trim();
     return { params: countParams(params.inner), hasResult: rest.length > 0 };
   }
   return null;
