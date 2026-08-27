@@ -1772,16 +1772,18 @@ function attachReadHelpers(store, db, hasFts) {
   // everything the embedded or extended interface promises. Both are common.
   // Reading either is future work, not done here.
   //
-  // Known gap, part two, TypeScript only: an optional member (`after?(): void`)
-  // is correctly left out of `need` below — a type may skip it and still
-  // implement the interface. But `sigShape` reads the `?` as "no parameter
-  // list here" and returns null for that member's OWN shape (see
-  // sig-shape.mjs; fixing that is out of scope). So a call reaching the
-  // optional method itself, through the interface, is never confirmed — not
-  // `callers Hooks.after` (asked on the interface) and not `callers
-  // Impl.after` (asked on a type that implements it). Both read as "no
-  // interface reach" for that one method, even when the interface truly
-  // declares it and the type truly implements it.
+  // Optional members, TypeScript only: an optional member (`after?(): void`)
+  // is left out of `need` below, because a type may skip it and still
+  // implement the interface.
+  //
+  // `sigShape` still returns null for such a member's OWN shape — it reads the
+  // `?` as "no parameter list here" — but that no longer costs the answer
+  // anything. An unreadable shape falls back to the name-only rule rather than
+  // refusing, so a call reaching the optional method IS confirmed: on
+  // `Hooks { before(v): string; after?(): void }` with a `class Impl`,
+  // `callers Impl.after` reports `reaches this method through Hooks.after`.
+  // This paragraph used to say the opposite, and it was read as a limitation
+  // worth defending. It was not one.
   // A method's owning type, and every method name that type carries. Two shapes,
   // because Go states the owner in the qname while every other language nests it:
   //   nested   `Json.serialize`  -> container_id points at the class
@@ -1973,9 +1975,11 @@ function attachReadHelpers(store, db, hasFts) {
     // Before the optional filter below, `need` always held at least
     // `node.name`, because `node.container_id` is `iface.id` — node is one
     // of the rows this query selects. That stopped being true the moment
-    // optional members started being filtered out: when `node` itself is
-    // the interface's ONLY member and it is optional, `need` comes back
-    // empty. An empty `need` must never mean "every candidate implements" —
+    // optional members started being filtered out: `need` comes back empty
+    // whenever EVERY member is optional. The common case is `node` being the
+    // interface's only member, but nest has 28 all-optional interfaces
+    // carrying 36 members between them, so some of them declare several.
+    // An empty `need` must never mean "every candidate implements" —
     // `[].every(...)` is always true, so without the check right below,
     // every same-named method anywhere would pass the name-set gate. The
     // guard mirrors interfaceReach's own `!need.length` check, for the same
