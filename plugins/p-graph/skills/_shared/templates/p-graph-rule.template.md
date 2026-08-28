@@ -20,6 +20,7 @@ endings mean opposite things:
 | `⚠ N call sites missing from this answer` | the graph knows it is short | grep to close the gap, then report both |
 | `no symbol named X in the graph` | nothing carries that name | check the spelling with `pgraph search X` — this is **not** "nothing calls it" |
 | `ℹ N call sites reach this method through I` | the calls are written on an interface, so no call names this method | **do not grep.** Report both: this method has no direct callers, and N calls reach it through `I`. Which implementation runs is a run-time decision |
+| `ℹ N call sites of this method — on I, which implements it` | these ARE call sites of the method you asked about — `I` is the concrete type the graph resolved each one to | **do not grep.** Put them in your main list of call sites, and name `I` as the implementing type. Nothing here is missing or needs a text search |
 | neither line | the graph is too old to build the report | treat it as short, and grep |
 
 With `--json` the same thing is the `complete` field, and `all_guessed` is the

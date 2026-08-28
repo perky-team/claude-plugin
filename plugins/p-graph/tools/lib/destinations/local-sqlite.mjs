@@ -1,6 +1,7 @@
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { OWNER_KINDS_SQL } from '../owner-kinds.mjs';
+import { sigShape } from '../sig-shape.mjs';
 const require = createRequire(import.meta.url);
 function loadDatabaseSync() {
   try { return require('node:sqlite').DatabaseSync; }
@@ -63,7 +64,28 @@ function loadDatabaseSync() {
 // concrete implementation reports those calls under the interface instead of as
 // gaps. Reading the two side by side on a half-migrated graph would be worse than
 // rebuilding it.
-export const SCHEMA_VERSION = 11;
+// 12: every method a Go interface declares is a node, not just the first one, and
+// an interface method's `signature` is now its own source line instead of the
+// interface's. Both change what an answer says: a call written on a multi-method
+// interface used to land on nothing, and the method set used to decide "does this
+// type implement that interface" was short — one name where the interface declares
+// five, which made the interface-reach group over-report. An incremental reindex
+// would hold the new rows for the files it reparsed and the old ones everywhere
+// else, so the two would be read side by side. Rebuild whole.
+// 13: same fix as 12, for TypeScript. An interface declaring `serialize`,
+// `deserialize` and `reset` recorded one member, and the signature handed to it
+// was `export interface Serializer {` — the interface's own declaration line, not
+// the method's. New nodes appear and existing ones change their `signature`, so
+// an incremental reindex would answer differently from a full rebuild depending on
+// which files it happened to reparse. Rebuild whole.
+//
+// Same consequence as 12, running the other way. There, a short method set —
+// one name where the interface declares five — made the interface-reach group
+// over-report: almost any type looked like it implemented the interface. Here
+// the method set grows, from one name to several, so a type now has to carry
+// every one of them. A type the old, short method set called an
+// implementation can now get refused.
+export const SCHEMA_VERSION = 13;
 
 const META_DDL = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
@@ -1733,10 +1755,35 @@ function attachReadHelpers(store, db, hasFts) {
   // missing, go and grep"; it now NAMES the interface the calls go through, which
   // is something a text search cannot work out at all.
   //
-  // "Implements" is decided by the method set, the way Go itself decides it: the
-  // type carries every name the interface declares. Structural, so it works for
-  // TypeScript too, `implements` clause or not. An interface with no methods is
-  // satisfied by everything and says nothing, so it is skipped.
+  // "Implements" here is two checks, not one. First: the type must have a method
+  // of every name the interface declares — structural, so it works for
+  // TypeScript too, `implements` clause or not. Second (in interfaceReach and
+  // implementationReach below): the one method the question is about must also
+  // match the interface's shape for that method — see sigShape.
+  //
+  // Known gap: this misses methods an interface gains by embedding another
+  // interface. Go: `type X interface { Reader; Foo() }` — `go.scm` makes a
+  // node only for a plain method line (a `method_spec`); an embedded name is
+  // a different tree shape (a `constraint_elem`) and is not read. TypeScript
+  // has the same gap: `interface X extends Y { foo(): void }` — `ts.scm`
+  // reads no member off an `extends` clause either. So `need` for `X` above
+  // is just `['Foo']` (or `['foo']` in TypeScript), and a type with only that
+  // one method reads as implementing `X` even though `X` also needs
+  // everything the embedded or extended interface promises. Both are common.
+  // Reading either is future work, not done here.
+  //
+  // Optional members, TypeScript only: an optional member (`after?(): void`)
+  // is left out of `need` below, because a type may skip it and still
+  // implement the interface.
+  //
+  // `sigShape` still returns null for such a member's OWN shape — it reads the
+  // `?` as "no parameter list here" — but that no longer costs the answer
+  // anything. An unreadable shape falls back to the name-only rule rather than
+  // refusing, so a call reaching the optional method IS confirmed: on
+  // `Hooks { before(v): string; after?(): void }` with a `class Impl`,
+  // `callers Impl.after` reports `reaches this method through Hooks.after`.
+  // This paragraph used to say the opposite, and it was read as a limitation
+  // worth defending. It was not one.
   // A method's owning type, and every method name that type carries. Two shapes,
   // because Go states the owner in the qname while every other language nests it:
   //   nested   `Json.serialize`  -> container_id points at the class
@@ -1767,21 +1814,124 @@ function attachReadHelpers(store, db, hasFts) {
     return { ...o[0], names };
   };
 
+  // True for a TypeScript interface member written with `?` — `after?(): void`,
+  // `after?: () => void`, `after?<T>(v: T): void`, or with a space before the
+  // `?` (`after ?(): void`, which TypeScript also allows). A type may leave
+  // an optional member out and still legally implement the interface.
+  //
+  // The stored `signature` is the raw source line, but the name does not
+  // always start it — `readonly after?: () => void` keeps `readonly` in
+  // front, and the old code, which just read the character at `name.length`,
+  // read `readonly`'s own `n` there and missed the `?` entirely. So the name
+  // is located the same boundary-checked way `sigShape` finds it (the
+  // character before it must not continue an identifier, and neither must
+  // the character after), not assumed to sit at a fixed offset. Once found,
+  // only the text right after it is checked for a `?`, allowing whitespace.
+  const isOptionalMember = (member) => {
+    const { signature, name } = member;
+    if (typeof signature !== 'string' || !name) return false;
+    for (let at = signature.indexOf(name); at !== -1; at = signature.indexOf(name, at + 1)) {
+      const after = at + name.length;
+      if (/[\w$]/.test(signature[after] ?? '')) continue; // a longer identifier, not this name
+      if (/[\w$.]/.test(signature[at - 1] ?? '')) continue; // part of a longer identifier
+      return /^\s*\?/.test(signature.slice(after));
+    }
+    return false;
+  };
+
+  // Does an implementation's shape for one method satisfy the interface's shape
+  // for the same method? `lang` picks the rule; `ifaceShape` and `implShape` are
+  // whatever `sigShape` returned for the interface's member and the candidate
+  // method — either may be `null`.
+  //
+  // Go's compiler demands an exact signature, so an exact comparison is right
+  // there: measured on caddy (701 name-set pairs at schema 13), it is the rule
+  // that keeps the three-parameter `MiddlewareHandler` form and the void
+  // standard-library form OUT of `ServeHTTP`'s answer — both real distinctions
+  // this study depends on.
+  //
+  // TypeScript is structurally typed and looser in two ways an exact match gets
+  // wrong: an implementation may declare FEWER parameters than the interface
+  // (`transform(value)` legally implements `transform(value, metadata)`), and a
+  // return annotation is optional on the class side (`catch(exception, host) {`
+  // legally implements `catch(exception: T, host: ArgumentsHost): any;`).
+  // Measured on nest (660 pairs, same schema): the exact rule refuses 597 of
+  // them, and 217 of those refusals are calls that really run through the
+  // interface — dropping the `ℹ` row that says so and printing `✓ complete`
+  // for a method a call really reaches.
+  //
+  // A shape that could not be read must never mean "refuse". `sigShape` returns
+  // `null` for a generic method, a callback-typed member, an optional member,
+  // or a declaration whose parameter list wraps onto the next line — 144 of
+  // nest's 283 interface members (51%) have no readable shape at all. Falling
+  // back to the name-only rule here costs nothing: the `ℹ` row this produces
+  // can never be mistaken for a certain caller, so there is no false claim to
+  // make by letting it through. Refusing it instead would manufacture a false
+  // `✓ complete`, which is the one claim this file must never make by mistake.
+  const shapeSatisfies = (lang, ifaceShape, implShape) => {
+    if (!ifaceShape || !implShape) return true; // unreadable: fall back to name-only
+    if (lang === 'go') {
+      // Untouched: a Go implementation must repeat the `...` itself, so a
+      // variadic member already compares correctly under plain equality —
+      // `Printf(format string, args ...any)` reads as the same params/result
+      // shape on both the interface and the implementing method.
+      return ifaceShape.params === implShape.params && ifaceShape.hasResult === implShape.hasResult;
+    }
+    // TS/JS: fewer params is fine, a result annotation is optional. A rest
+    // parameter on the INTERFACE side (`...optionalParams: any[]`) means "any
+    // number more", not "at most this many", so the count check does not
+    // apply at all once the interface member is variadic. Measured on nest:
+    // `LoggerService.error(message, ...optionalParams)` (2 params) is
+    // implemented by `CustomLogger.error(message, trace?, context?)` (3
+    // params) — exactly what NestJS's own docs tell you to write for a
+    // custom logger — and the old `implShape.params <= ifaceShape.params`
+    // rule refused it. Of the 44 refusals left after that fix, 6 have a rest
+    // parameter on the interface side, 5 of those carry calls, and together
+    // they were dropping 20 `ℹ` rows.
+    if (ifaceShape.variadic) return true;
+    return implShape.params <= ifaceShape.params;
+  };
+
   const interfaceReach = (node) => {
     if (!node?.name) return [];
     const owner = ownerOf(node);
     if (!owner || owner.kind === 'interface') return [];
     const ownNames = new Set(owner.names);
+    const implShape = sigShape(node.signature, node.name);
     // Only interfaces that declare a method of this name can be relevant.
+    // ORDER BY o.qname: when two interfaces both carry a method of this name,
+    // this decides which one's "ℹ" group is reported first, and that must
+    // not depend on SQLite's unordered row delivery.
     const ifaces = db.prepare(`
-      SELECT o.id, o.qname FROM nodes n JOIN nodes o ON n.container_id = o.id
-      WHERE o.kind = 'interface' AND o.lang = ? AND n.name = ? AND o.id <> ?`)
+      SELECT DISTINCT o.id, o.qname FROM nodes n JOIN nodes o ON n.container_id = o.id
+      WHERE o.kind = 'interface' AND o.lang = ? AND n.name = ? AND o.id <> ?
+      ORDER BY o.qname`)
       .all(node.lang, node.name, owner.id);
     const out = [];
     for (const iface of ifaces) {
-      const need = db.prepare('SELECT name FROM nodes WHERE container_id = ?').all(iface.id)
-        .map((r) => r.name);
+      // ORDER BY start_line: a stable order for the members of one interface,
+      // and the same order the overload scan below relies on being stable.
+      const members = db.prepare(
+        'SELECT name, signature FROM nodes WHERE container_id = ? ORDER BY start_line')
+        .all(iface.id);
+      // An optional member does not have to be there, so it is not demanded.
+      const need = members.filter((m) => !isOptionalMember(m)).map((m) => m.name);
       if (!need.length || !need.every((n) => ownNames.has(n))) continue;
+      // Compared with shapeSatisfies — see its comment for the Go/TypeScript
+      // split and why an unreadable shape falls back to name-only instead of
+      // refusing. Without some shape check at all, a one-parameter
+      // `Cache.ListGroups(reset bool)` read as satisfying a zero-parameter
+      // `Store.ListGroups() []string`, on name alone.
+      //
+      // A TypeScript interface can declare one name more than once — overloads.
+      // A type that implements ANY of the declared shapes satisfies the
+      // interface, so compare against every same-named member and stop at the
+      // first that agrees. Taking only the first member refused a class that
+      // implemented the second overload, and then reported "no callers,
+      // complete" for a method that every call reaches.
+      const candidates = members.filter((m) => m.name === node.name);
+      const matches = candidates.some((m) => shapeSatisfies(node.lang, sigShape(m.signature, m.name), implShape));
+      if (!matches) continue;
       for (const r of db.prepare(`
         SELECT e.file, e.line, e.dst_name, s.qname AS src_qname, n.qname AS via
         FROM edges e JOIN nodes n ON n.id = e.dst_id
@@ -1795,6 +1945,102 @@ function attachReadHelpers(store, db, hasFts) {
     return out;
   };
 
+  // The mirror of interfaceReach. Asked about a method an INTERFACE declares,
+  // find the types that implement the interface and report the calls that land on
+  // their method. Those calls resolve certainly — the receiver's type is written
+  // at the call site — so they are knowledge the reader would otherwise have to
+  // grep for.
+  //
+  // Measured on caddy: `callers caddyhttp.Handler.ServeHTTP` named 1 of the 18
+  // calls in modules/caddyhttp/metrics_test.go. The other 17 resolve to
+  // `metricsInstrumentedRoute.ServeHTTP`, which is the right answer to "which
+  // method runs" and the wrong answer to the question that was asked.
+  //
+  // Satisfaction is checked two ways: the type must carry every method name the
+  // interface declares (the comment above ownerOf says what this misses with an
+  // embedded interface), PLUS the one method being asked about must match the
+  // interface's shape for it. The name alone is not enough here: caddy holds 34
+  // methods named `ServeHTTP` in three shapes, and a question about the
+  // two-parameter form that returns an error is not a question about the
+  // three-parameter middleware form or about the standard library's form that
+  // returns nothing.
+  const implementationReach = (node) => {
+    if (!node?.name || !node.container_id) return [];
+    const iface = db.prepare('SELECT id, qname, kind FROM nodes WHERE id = ?').get(node.container_id);
+    if (!iface || iface.kind !== 'interface') return [];
+    // Loop-invariant, so read once before the candidate scan runs. May be
+    // `null` — an unreadable interface shape no longer means "refuse every
+    // candidate"; shapeSatisfies falls back to name-only for it below.
+    const ifaceShape = sigShape(node.signature, node.name);
+    // Before the optional filter below, `need` always held at least
+    // `node.name`, because `node.container_id` is `iface.id` — node is one
+    // of the rows this query selects. That stopped being true the moment
+    // optional members started being filtered out: `need` comes back empty
+    // whenever EVERY member is optional. The common case is `node` being the
+    // interface's only member, but nest has 28 all-optional interfaces
+    // carrying 36 members between them, so some of them declare several.
+    // An empty `need` must never mean "every candidate implements" —
+    // `[].every(...)` is always true, so without the check right below,
+    // every same-named method anywhere would pass the name-set gate. The
+    // guard mirrors interfaceReach's own `!need.length` check, for the same
+    // reason. An optional member does not have to be there, so it is not
+    // demanded — a type may legally implement the interface without it.
+    const need = db.prepare('SELECT name, signature FROM nodes WHERE container_id = ?')
+      .all(iface.id)
+      .filter((m) => !isOptionalMember(m))
+      .map((m) => m.name);
+    if (!need.length) return [];
+    const rowsFor = db.prepare(`
+      SELECT e.file, e.line, e.dst_name, s.qname AS src_qname
+      FROM edges e LEFT JOIN nodes s ON s.id = e.src_id
+      WHERE e.kind = 'call' AND e.dst_id = ? ORDER BY e.file, e.line`);
+    const out = [];
+    // ORDER BY qname: candidates decide which row wins a dedup key shared with
+    // another candidate's row on the same file:line (see addOnce), and that
+    // choice must not depend on SQLite's unordered row delivery.
+    for (const cand of db.prepare(`
+      SELECT id, qname, signature, name, lang, container_id FROM nodes
+      WHERE name = ? AND lang = ? AND kind IN ('function','method') AND id <> ?
+      ORDER BY qname`)
+      .all(node.name, node.lang, node.id)) {
+      const owner = ownerOf(cand);
+      if (!owner || owner.kind === 'interface') continue;
+      const ownNames = new Set(owner.names);
+      if (!need.every((n) => ownNames.has(n))) continue;
+      // See shapeSatisfies above interfaceReach for the Go/TypeScript split
+      // and why a shape that could not be read falls back to name-only.
+      if (!shapeSatisfies(node.lang, ifaceShape, sigShape(cand.signature, cand.name))) continue;
+      for (const r of rowsFor.all(cand.id)) {
+        out.push({ file: r.file, line: r.line, dst_name: r.dst_name, src_qname: r.src_qname,
+          reason: 'implementation', reachable: 1, via: cand.qname });
+      }
+    }
+    return out;
+  };
+
+  // Adds each row of `extra` to `rows`, at most once, sharing the `seen` set
+  // with the caller. `seen` starts out holding the file:line of every row
+  // `collectGaps` already reported, so a reach row for a line already listed
+  // as a plain gap is dropped — the two would say the same thing twice, in
+  // different words.
+  //
+  // Keyed on `file|line|reason|via`, not `file|line` alone, once a row is
+  // added here: two implementations can be called on the SAME line —
+  // `append(p.ListGroups(), m.ListGroups()...)` names both `p` and `m` on one
+  // line — and that is two different facts, each with its own `via`. A
+  // `file|line` key would keep only whichever row the database happened to
+  // return first and silently drop the other. Shared by store.gapsFor and
+  // store.gapsAround so the rule lives in one place.
+  const addOnce = (rows, seen, extra) => {
+    for (const r of extra) {
+      const shortKey = `${r.file}|${r.line}`;
+      const fullKey = `${shortKey}|${r.reason}|${r.via}`;
+      if (seen.has(shortKey) || seen.has(fullKey)) continue;
+      seen.add(fullKey);
+      rows.push(r);
+    }
+  };
+
   store.gapsFor = (name) => {
     if (!hasBare) return [];
     const targets = targetsFor(name);
@@ -1802,12 +2048,8 @@ function attachReadHelpers(store, db, hasFts) {
     const rows = collectGaps(targets.map((t) => symbolOf(name, t)), targets.map((t) => t.id));
     const seen = new Set(rows.map((r) => `${r.file}|${r.line}`));
     for (const t of targets) {
-      for (const r of interfaceReach(t)) {
-        const key = `${r.file}|${r.line}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        rows.push(r);
-      }
+      addOnce(rows, seen, interfaceReach(t));
+      addOnce(rows, seen, implementationReach(t));
     }
     return rows.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
   };
@@ -1855,16 +2097,14 @@ function attachReadHelpers(store, db, hasFts) {
     const symbols = [...targets.map((t) => symbolOf(name, t)), ...reached.map((n) => symbolOf(n.qname, n))];
     const callerCheckIds = [...targets.map((t) => t.id), ...reached.map((n) => n.id)];
     const rows = collectGaps(symbols, callerCheckIds);
-    // The same interface line the direct question gets. An impact walk that stops
-    // at a concrete method has to say what reaches it, or the set reads as closed.
+    // The same interface and implementation lines the direct question gets. An
+    // impact walk that stops at a concrete method — or that asks about an
+    // interface method directly — has to say what reaches it, or the set reads
+    // as closed.
     const seen = new Set(rows.map((r) => `${r.file}|${r.line}`));
     for (const t of targets) {
-      for (const r of interfaceReach(t)) {
-        const key = `${r.file}|${r.line}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        rows.push(r);
-      }
+      addOnce(rows, seen, interfaceReach(t));
+      addOnce(rows, seen, implementationReach(t));
     }
     return rows.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
   };

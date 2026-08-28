@@ -28,7 +28,13 @@
 ; while 1,241 hugo call edges and 91 caddy ones pointed straight at one.
 ; `method_spec` only ever appears in an interface body; an EMBEDDED interface is a
 ; constraint_elem, not a method_spec, so it stays out on its own.
-(interface_type (method_spec name: (field_identifier) @name)) @definition.method
+; The definition is anchored on the METHOD_SPEC, not on the interface_type around
+; it. Anchoring outside was measured wrong twice over: every method_spec in one
+; interface then shares the interface's span, so the driver's span dedup keeps one
+; of them (13 caddy interfaces declared 31 methods and the graph held 13), and the
+; signature line handed to each method was `type X interface {` instead of the
+; method's own declaration.
+(interface_type (method_spec name: (field_identifier) @name) @definition.method)
 (type_spec name: (type_identifier) @name) @definition.type
 (type_alias name: (type_identifier) @name) @definition.type
 

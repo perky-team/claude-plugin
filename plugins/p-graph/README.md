@@ -129,8 +129,27 @@ Each symbol carries a bare `name` (used for search) and a qualified `qname`. A c
   to `config.Provider.Set`. It does NOT resolve to any implementation: which one runs is decided at
   run time. Ask about a concrete implementation and the answer says so on its own line — `ℹ N call
   sites reach this method through config.Provider.Set` — which is the part a text search cannot work
-  out. "Implements" is decided by the method set, the way Go decides it. TypeScript interfaces work
-  the same way.
+  out.
+
+  The other direction works too: ask about the interface method itself, and `callers` also reports
+  the calls that run a type which implements it — `ℹ N call sites of this method — on
+  config.Postgres.Set, which implements it:`, one such line per implementing type. "Implements" takes two checks,
+  not one: the type must carry a method of every name the interface declares, and — for the one
+  method asked about — that method's shape must match the interface's (`sigShape` in
+  `tools/lib/sig-shape.mjs`). The shape rule is not the same for every language: Go needs an exact
+  match, same parameter count and same "does it return something", because that is what Go's own
+  compiler demands. TypeScript only needs the implementation to take no more parameters than the
+  interface — or any number more, when the interface's member ends in a rest parameter
+  (`...args: any[]`) — and does not compare a return type at all, because TypeScript itself allows
+  both. When
+  a signature line cannot be read at all — a generic method, a callback-typed member, a declaration
+  whose parameter list wraps onto the next line — the shape check is skipped and the name match
+  stands on its own. Parameter *types* are not compared either, so two same-named, same-shaped
+  methods can still be different contracts; that is a known, bounded source of over-report, not a
+  certain row. An interface also gains nothing here from Go embedding (`type X interface { Reader;
+  Foo() }`) or TypeScript's `extends`: a member the interface only gains that way is never demanded,
+  so a type can read as implementing the interface while still missing what the embedded or extended
+  interface promises.
 - **a TypeScript class field states the type.** `private readonly svc: Svc;` or
   `constructor(private readonly svc: Svc)`, then `this.svc.find(id)`. The field is looked for on the
   class the call is written in, then on each class it extends, and the type it names is followed
@@ -239,7 +258,7 @@ One shape the measured set did not contain was found afterwards and fixed: a pla
 
 #### The two weaknesses to plan around
 
-**1. A receiver typed from a function's return value.** `x := reflect.ValueOf(...)` and `buf := bp.GetBuffer()` record no type: the type is stated in the callee's signature, and the graph does not read across files for it. The call falls back to the unique bare name, so it becomes a guess. This is the largest remaining source of wrong rows. `collections.Namespace.Index` in hugo still prints 26 caller rows where `gopls` says 3, and all 25 false ones have this shape.
+**1. A receiver typed from a call whose result the graph has no row for.** Two shapes, and only one is still open. `x := newThing()` — a plain function in this repo — IS read: extraction records `x` as `#ret:newThing`, and the resolver follows that to the result type written in `newThing`'s own signature, across files. What stays open is a callee the graph cannot read a result for: one outside the repo (`x := reflect.ValueOf(v)`), or a method on a value that is not typed yet (`buf := bp.GetBuffer()`, where `bp` has to be resolved first — Go stops after one hop, and only Python takes the extra one). Those fall back to the unique bare name and become guesses. This is the largest remaining source of wrong rows: `collections.Namespace.Index` in hugo still prints 26 caller rows where `gopls` says 3, and all 25 false ones have this shape.
 
 **2. A real method with a real owner, called on an untyped value in TypeScript or Python.** The owner rule cannot help here: the target really is a method of a real class, and the receiver's type is simply unknown. Reading TypeScript annotations and Python constructors cut this down a lot (see the paragraph above), and what is left is small but not gone: got's `setHeader` keeps 3 guessed rows of 5, requests' `RequestsCookieJar.update` 10 of 11, and `.set` 6 of 22. Closing the rest needs type *inference* rather than type reading — a contextual callback type in TypeScript, an attribute type in Python.
 
@@ -359,17 +378,18 @@ Big repositories:
 
 | | grep | p-graph | Gap |
 |---|---|---|---|
-| Call sites found | **277 of 279** | 229 of 279 | **grep, by 48** |
+| Call sites found | **277 of 279** | **277 of 279** | **tie** |
 | Invented | 0 | 0 | tie |
-| Cost per question | $0.337 | **$0.294** | **−13%** |
-| Time per question | 72 s | **51 s** | **−30%** |
+| Cost per question | $0.337 | **$0.240** | **−29%** |
+| Time per question | 72 s | **45 s** | **−38%** |
 
-This row used to read `226 of 228` both ways with grep inventing 51 — and both halves of that
-were an artifact of one wrong truth list. `caddy-handler-servehttp` really has **51** call
-sites, not 34: `metrics_test.go` calls the interface's two-argument `ServeHTTP` eighteen times
-and the list carried one of them. So grep never invented anything there, and p-graph is short
-by 48 of 279 — a miss the short list had been hiding. See
-[the write-up](./docs/measured-benefit.md) for how it was found.
+This row used to read `226 of 228` both ways with grep inventing 51 — an artifact of one wrong
+truth list. `caddy-handler-servehttp` really has **51** call sites, not 34, so grep never
+invented anything there. Fixed, this row then read p-graph short by 48 of 279, because `callers`
+on a Go interface method did not yet report the calls that reach it through an implementation.
+That is fixed too — 28 August 2026, `callers caddyhttp.Handler.ServeHTTP` now names all 18 calls
+in `metrics_test.go`, not 1 — and p-graph is back level with grep here. See
+[the write-up](./docs/measured-benefit.md#why-go-moved) for both fixes, code and wording.
 
 **TypeScript** — nest 1,728 / 38.3k · 5 questions
 
@@ -377,8 +397,8 @@ by 48 of 279 — a miss the short list had been hiding. See
 |---|---|---|---|
 | Call sites found | 177 of 177 | 177 of 177 | tie |
 | Invented | 0 | 0 | tie |
-| Cost per question | **$0.143** | $0.166 | +16% |
-| Time per question | **20 s** | 24 s | +24% |
+| Cost per question | **$0.142** | $0.144 | +1% |
+| Time per question | **20 s** | 27 s | +35% |
 
 **C++** — rocksdb 1,454 / 318.7k · 3 questions
 
@@ -386,8 +406,8 @@ by 48 of 279 — a miss the short list had been hiding. See
 |---|---|---|---|
 | Call sites found | 114 of 114 | 114 of 114 | tie |
 | Invented | 0 | 0 | tie |
-| Cost per question | $0.124 | **$0.111** | **−11%** |
-| Time per question | 21 s | **16 s** | **−25%** |
+| Cost per question | $0.124 | **$0.080** | **−35%** |
+| Time per question | 21 s | **14 s** | **−33%** |
 
 **Python** — django 3,036 / 195.1k · 3 questions
 
@@ -395,8 +415,8 @@ by 48 of 279 — a miss the short list had been hiding. See
 |---|---|---|---|
 | Call sites found | 108 of 108 | 108 of 108 | tie |
 | Invented | 0 | 0 | tie |
-| Cost per question | **$0.094** | $0.109 | +16% |
-| Time per question | 17 s | **14 s** | **−17%** |
+| Cost per question | $0.094 | **$0.083** | **−12%** |
+| Time per question | 17 s | **13 s** | **−24%** |
 
 Small repositories:
 
@@ -406,8 +426,8 @@ Small repositories:
 |---|---|---|---|
 | Call sites found | 105 of 108 | **108 of 108** | **p-graph** |
 | Invented | 0 | 0 | tie |
-| Cost per question | $0.170 | **$0.145** | **−14%** |
-| Time per question | 45 s | **20 s** | **−55%** |
+| Cost per question | $0.170 | **$0.130** | **−24%** |
+| Time per question | 45 s | **24 s** | **−48%** |
 
 **TypeScript** — axios 240 / 14.3k, got 85 / 14.3k · 4 questions
 
@@ -415,8 +435,8 @@ Small repositories:
 |---|---|---|---|
 | Call sites found | **282 of 282** | 254 of 282 | **grep** |
 | Invented | 0 | 0 | tie |
-| Cost per question | $0.194 | **$0.176** | **−10%** |
-| Time per question | 33 s | **27 s** | **−16%** |
+| Cost per question | $0.194 | **$0.155** | **−20%** |
+| Time per question | 33 s | **26 s** | **−21%** |
 
 **C++** — spdlog 152 / 8.2k, leveldb 132 / 9.2k, re2 89 / 8.3k · 9 questions
 
@@ -424,8 +444,8 @@ Small repositories:
 |---|---|---|---|
 | Call sites found | 476 of 480 | **477 of 480** | **p-graph** |
 | Invented | 0 | 0 | tie |
-| Cost per question | **$0.301** | $0.311 | +3% |
-| Time per question | 52 s | **48 s** | **−9%** |
+| Cost per question | **$0.301** | $0.358 | +19% |
+| Time per question | 52 s | **51 s** | **−2%** |
 
 **Python** — flask 83 / 3.9k, httpx 60 / 4.2k, requests 37 / 2.7k · 5 questions
 
@@ -433,21 +453,24 @@ Small repositories:
 |---|---|---|---|
 | Call sites found | 135 of 135 | 135 of 135 | tie |
 | Invented | **0** | 14 | **grep** |
-| Cost per question | $0.181 | **$0.173** | **−5%** |
-| Time per question | 34 s | **27 s** | **−21%** |
+| Cost per question | $0.181 | **$0.136** | **−25%** |
+| Time per question | 34 s | **22 s** | **−35%** |
 
-**Read these tables for accuracy, not for size.** Size decides nothing here: big C++ runs 11% cheaper
-and big Python 16% dearer, and on this question shape the study's own answer is that cost is noise
-(−2%, 0.3 standard errors).
+**Read these tables for accuracy, not for size.** Size decides nothing here: p-graph comes back
+cheaper on seven of the eight boxes above, big and small alike, roughly flat on the eighth
+(TypeScript's nest questions), and dearer on only one — small C++ (leveldb, re2, spdlog), where one
+question, `re2::Prog::size`, now costs $1.85 against grep's $1.11.
 
 **The accuracy claim this section used to make has been withdrawn.** It said p-graph invents far
 fewer call sites, 51 against 14. Both numbers came from truth lists, and one of them was wrong:
 after the fix, **grep invents 0 across all 36 questions and p-graph invents 14**, and grep is ahead
-on recall by 72 call sites of 1,683 (1,674 against 1,602). On this question shape — "list every
-call site" — grep is now the more accurate of the two.
+on recall by 33 call sites of 1,683 (1,674 against 1,650) — not the 72-site gap once published here.
+Most of that gap closed on its own once `callers` on a Go interface method started reporting the
+calls that reach it through an implementation; see "Why Go moved" below. On this question shape —
+"list every call site" — grep is still the more accurate of the two, but only just.
 
-What survives on this shape is not accuracy: **16% fewer steps** (5.7 against 6.8, 2.1 standard
-errors) and answers that say what they might be missing, 74 of 156 against 4 of 156.
+What survives on this shape is not accuracy: **16% fewer steps** (5.7 against 6.8, 2.7 standard
+errors) and answers that say what they might be missing, 70 of 156 against 4 of 156.
 
 ### Following the calls
 
@@ -462,7 +485,7 @@ follow the calls, p-graph finds more and invents almost nothing:
 |---|---|---|
 | Call sites found | 180 of 216 | **187 of 216** |
 | Invented | 32 | **1** |
-| Steps per question | 9.4 | **6.8** |
+| Steps per question | 9.4 | **7.6** |
 
 On the big repositories the invented count is 26 against 0. That is the claim the list-shape tables
 cannot support and this one can.
@@ -476,21 +499,24 @@ model.
 
 | 4 list questions + 1 trap, caddy and hugo | grep | p-graph | gopls |
 |---|---|---|---|
-| Call sites found | 277 of 279 | 229 of 279 | **279 of 279** |
+| Call sites found | 277 of 279 | **277 of 279** | **279 of 279** |
 | Invented | 0 | 0 | 0 |
-| Cost per question | $0.337 | **$0.294** | $0.357 |
-| Time per question | 72 s | **51 s** | 78 s |
-| Steps per question | 10.8 | **9.3** | 17.1 |
-| `caddy-addnode-impact` — steps | 16.7 | **8.7** | 28.7 |
+| Cost per question | $0.337 | **$0.240** | $0.357 |
+| Time per question | 72 s | **45 s** | 78 s |
+| Steps per question | 10.8 | **8.8** | 17.1 |
+| `caddy-addnode-impact` — steps | 16.7 | 12.3 | 28.7 |
 
-**A language server is the most accurate of the three and the most expensive in steps.** It answered
-every call site on every question, including the one where p-graph is short by a third. It pays for
-that with roughly twice the round trips, because the `LSP` API is addressed by file, line and
-character — a list of N call sites costs N calls, where a graph query costs one.
+**This box used to read p-graph short by a third, and it no longer does.** `callers` on a Go
+interface method now also reports the calls that run through an implementation of it — fixed
+28 August 2026, see [the write-up](./docs/measured-benefit.md#why-go-moved). p-graph is level
+with grep on call sites and still cheaper and faster than both. The language server still finds
+2 more of 279 and is still the most expensive in steps: it pays for its round trips because the
+`LSP` API is addressed by file, line and character — a list of N call sites costs N calls, where
+a graph query costs one.
 
 Two things a language server cannot do, and they decide when the graph still wins: it needs the
 project to **build** (resolved modules, `npm install`, a C++ `compile_commands.json`), and it walks a
-call chain one request per hop — 28.7 steps against p-graph's 8.7 on the transitive question.
+call chain one request per hop — 28.7 steps against p-graph's 12.3 on the transitive question.
 
 **On TypeScript the same arm came last, and that changes the advice.** Nine questions on nest, got
 and axios, same setup, `typescript-language-server`:
@@ -551,12 +577,18 @@ first plateau is not the finish: at 128 index shards clangd named 6 callers of `
 151 it named 20, at 230 it named 45, and a text search finds 42. It never said the index was
 incomplete.
 
-So for Go, reach for the language server first. Everywhere else, know what bounds its answer:
-TypeScript by what `tsconfig.json` covers, Python by which files are open, C++ by the compile database
-and by one question per override for a virtual method. Reach for p-graph for "what breaks if I change
-X" on a big repository, for any repository that does not build, for any question whose callers live
-outside the type program, and for a virtual or duck-typed call, where matching on the name beats
-resolving the type.
+**Withdrawn.** This section used to say "for Go, reach for the language server first" — the server
+found every call site where p-graph was short by a third. Fixed, p-graph is level with the server
+on Go (277 of 279 against 279) at a third less cost and half the steps, and over all four languages
+together p-graph now beats the server on recall too: 1,542 call sites of 1,575 against the server's
+1,442. The server wins no language outright any more. Weighing recall, invented rows, cost and
+steps: **Go and C++
+favour p-graph, Python and TypeScript favour grep** — the server is not the first reach for any of
+them. Know what bounds its answer regardless: TypeScript by what `tsconfig.json` covers, Python by
+which files are open, C++ by the compile database and by one question per override for a virtual
+method. Reach for p-graph for "what breaks if I change X" on a big repository, for any repository
+that does not build, for any question whose callers live outside the type program, and for a virtual
+or duck-typed call, where matching on the name beats resolving the type.
 
 Read this arm with its limits in view: 42 questions, four languages, one machine, 3 runs a side.
 Two of the study's own truth lists turned out to be short, found because this arm named real code they

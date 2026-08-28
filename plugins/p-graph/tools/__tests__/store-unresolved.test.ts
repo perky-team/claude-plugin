@@ -111,8 +111,25 @@ describe('unresolved call-site reporting', () => {
     expect(rows[0].src_qname).toBe('api.Server.HandleList');
     expect(rows[0].dst_name).toBe('ListGroups');
     expect(rows[0].via).toBe('store.Store.ListGroups');
-    // The bare name works too — that is what a user usually types.
-    expect(store.gapsFor('ListGroups')).toHaveLength(3);
+    // The bare name works too — that is what a user usually types. It also merges
+    // the interface's own method into the query, alongside Postgres and Memory,
+    // so each matched target still contributes its own gap rows (see the comment
+    // on targetsFor). Lines 8 and 12 are plain calls on Postgres, already listed
+    // as Postgres's own callers — and now ALSO reported here as calls that run
+    // Postgres's implementation of Store, the same double duty lines 7 and 9
+    // already carry as `interface` rows attributed to Postgres/Memory.
+    // `via` is included here, not just `reason`: it is the field that goes wrong
+    // when two implementations are called on one line and a dedup key without it
+    // keeps only one of them (see "two implementations called on one line" in
+    // cli-implementation-reach.test.ts).
+    const bare = store.gapsFor('ListGroups');
+    expect(bare.map((r) => `${r.file}:${r.line} ${r.reason} ${r.via ?? ''}`)).toEqual([
+      'internal/api/server.go:7 interface store.Store.ListGroups',
+      'internal/api/server.go:8 implementation store.Postgres.ListGroups',
+      'internal/api/server.go:9 interface store.Store.ListGroups',
+      'internal/api/server.go:12 implementation store.Postgres.ListGroups',
+      'internal/logs/logs.go:4 library ',
+    ]);
     // A symbol nothing calls ambiguously reports nothing.
     expect(store.gapsFor('api.Serve')).toEqual([]);
 
@@ -158,6 +175,29 @@ describe('unresolved call-site reporting', () => {
       // not the target. Still reported, under its own reason, and no longer in
       // the listed block the reader is told to grep.
       'internal/logs/logs.go:4 library',
+    ]);
+
+    store.close();
+  }, 30000);
+
+  // `callers` calls gapsFor, `impact` calls gapsAround. Before this fix,
+  // gapsAround only added interfaceReach, never implementationReach, so
+  // asked about an INTERFACE method directly, `impact` silently dropped the
+  // two lines that call Postgres.ListGroups directly (the 'implementation'
+  // rows) — it printed `(no impact)` and `✓ complete` for a method two real
+  // calls reach, while `callers` on the same method named them.
+  it('gapsAround reports the same implementation rows gapsFor does, on an interface method target', async () => {
+    writeAmbiguousFixture();
+    const store = openStore(':memory:');
+    await indexFull({ root: dir, store, ignorePatterns: [] });
+
+    const forRows = store.gapsFor('store.Store.ListGroups');
+    const aroundRows = store.gapsAround('store.Store.ListGroups');
+    expect(aroundRows).toEqual(forRows);
+    expect(forRows.map((r) => `${r.file}:${r.line} ${r.reason} ${r.via ?? ''}`)).toEqual([
+      'internal/api/server.go:8 implementation store.Postgres.ListGroups',
+      'internal/api/server.go:12 implementation store.Postgres.ListGroups',
+      'internal/logs/logs.go:4 library ',
     ]);
 
     store.close();

@@ -30,7 +30,9 @@ describe('callers on a method an interface reaches', () => {
     run(['index', '--full']);
 
     const out = run(['callers', 'store.Postgres.ListGroups']);
-    expect(out).toContain('reach this method through store.Store.ListGroups');
+    // Substring only, not the full heading: it must survive both the singular
+    // and plural verb form ("call site reaches" / "call sites reach").
+    expect(out).toContain('this method through store.Store.ListGroups');
     expect(out).toContain('api/api.go:3');
     expect(out).not.toContain('missing from this answer');
     // The static answer really is complete: no call names this method.
@@ -54,6 +56,6 @@ describe('callers on a method an interface reaches', () => {
     const out = run(['callers', 'store.Store.ListGroups']);
     expect(out).toContain('api/api.go:3');
     expect(out).toContain('✓ complete');
-    expect(out).not.toContain('reach this method through');
+    expect(out).not.toContain('this method through');
   }, 30000);
 });

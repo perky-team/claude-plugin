@@ -175,8 +175,9 @@ export async function runCommand(ctx) {
   // still print a count, because a refused call must never disappear.
   const gapCounts = (rows) => ({
     viaInterface: rows.filter((r) => r.reason === 'interface'),
+    viaImplementation: rows.filter((r) => r.reason === 'implementation'),
     listed: rows.filter((r) => r.reason !== 'external' && r.reason !== 'interface'
-      && r.reason !== 'library' && r.reachable !== 0),
+      && r.reason !== 'implementation' && r.reason !== 'library' && r.reachable !== 0),
     unrelated: rows.filter((r) => r.reason === 'ambiguous' && r.reachable === 0).length,
     library: rows.filter((r) => r.reason === 'library').length,
     external: rows.filter((r) => r.reason === 'external').length,
@@ -215,25 +216,50 @@ export async function runCommand(ctx) {
   // and "all of them" is a fact with nothing to argue about.
   const allGuessed = (rows) => rows.length > 0 && rows.every((r) => r.guess);
 
+  // Groups `rows` by `via` and prints one heading per group, followed by its
+  // call sites (capped at GAP_LIMIT). `heading(count, via)` builds the full
+  // heading line, so the two callers below can each state their own claim in
+  // their own words — one says the run-time choice is still open, the other
+  // says the graph already knows which method runs — while sharing the one
+  // grouping-and-printing loop that used to be copied between them.
+  const emitReachGroup = (rows, heading) => {
+    if (!rows.length) return;
+    const byVia = new Map();
+    for (const r of rows) {
+      if (!byVia.has(r.via)) byVia.set(r.via, []);
+      byVia.get(r.via).push(r);
+    }
+    for (const [via, rs] of byVia) {
+      out(heading(rs.length, via));
+      for (const r of rs.slice(0, GAP_LIMIT)) {
+        out(`    ${r.file}:${r.line}  ${r.src_qname ?? 'file scope'} -> ${r.dst_name}`);
+      }
+      if (rs.length > GAP_LIMIT) out(`    … and ${rs.length - GAP_LIMIT} more`);
+    }
+  };
+
   const emitGaps = (rows, complete = false, line = COMPLETE) => {
-    const { viaInterface, listed, unrelated, library, external } = gapCounts(rows);
+    const { viaInterface, viaImplementation, listed, unrelated, library, external } = gapCounts(rows);
     // Printed before everything else, and grouped by the interface that carries
     // the calls. This is knowledge, not a gap: which implementation runs is decided
     // at run time, and naming the interface is the part a text search cannot do.
-    if (viaInterface.length) {
-      const byIface = new Map();
-      for (const r of viaInterface) {
-        if (!byIface.has(r.via)) byIface.set(r.via, []);
-        byIface.get(r.via).push(r);
-      }
-      for (const [via, rs] of byIface) {
-        out(`ℹ ${rs.length} call site${rs.length === 1 ? '' : 's'} reach this method through ${via} — which implementation runs is decided at run time:`);
-        for (const r of rs.slice(0, GAP_LIMIT)) {
-          out(`    ${r.file}:${r.line}  ${r.src_qname ?? 'file scope'} -> ${r.dst_name}`);
-        }
-        if (rs.length > GAP_LIMIT) out(`    … and ${rs.length - GAP_LIMIT} more`);
-      }
-    }
+    emitReachGroup(viaInterface, (n, via) =>
+      `ℹ ${n} ${n === 1 ? 'call site reaches' : 'call sites reach'} this method through ${via}`
+      + ' — which implementation runs is decided at run time:');
+    // The opposite direction, and it says something different: here the receiver's
+    // type IS written at the call site, so the graph knows exactly which method
+    // runs. These rows ARE call sites of the method that was asked about — the
+    // heading must say so up front, not as an aside, or a reader files them
+    // under "adjacent, not the answer" and drops them. Grouped by the
+    // implementing method so the reader can also see which type each call
+    // belongs to.
+    // Measured on caddy: the old heading ("run an implementation of this
+    // method — I") is true but reads as a category next to the answer. An
+    // agent given it invented its own heading ("not the interface value
+    // itself") for all 17 rows, and the extractor then counted 1 of 18 instead
+    // of 18 — the same graph data, scored wrong because of the wording alone.
+    emitReachGroup(viaImplementation, (n, via) =>
+      `ℹ ${n} ${n === 1 ? 'call site' : 'call sites'} of this method — on ${via}, which implements it:`);
     if (!listed.length && !unrelated && !library && !external) return complete ? out(line) : undefined;
     if (listed.length) {
       out(`⚠ ${listed.length} call site${listed.length === 1 ? '' : 's'} missing from this answer:`);
