@@ -85,7 +85,10 @@ function loadDatabaseSync() {
 // the method set grows, from one name to several, so a type now has to carry
 // every one of them. A type the old, short method set called an
 // implementation can now get refused.
-export const SCHEMA_VERSION = 13;
+// 14: a node extracted from a TypeScript declaration file (`.d.ts`, `.d.cts`,
+// `.d.mts`) is marked `decl = 1`. Stored values change for every repo that ships
+// one, so the graph is rebuilt rather than read as current.
+export const SCHEMA_VERSION = 14;
 
 const META_DDL = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);

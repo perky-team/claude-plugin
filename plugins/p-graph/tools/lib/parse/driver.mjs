@@ -128,6 +128,15 @@ const JS_GLOBALS = new Set([
   'TextEncoder', 'TextDecoder', 'AbortController', 'AbortSignal', 'performance',
 ]);
 
+// A TypeScript declaration file states an API, it does not define one. axios
+// publishes `index.d.ts` and `index.d.cts`, and between them they restate every
+// public method of `lib/` under a qname of their own — `AxiosInterceptorManager.eject`
+// for `InterceptorManager.eject`. Counted as definitions, those twins made 18 bare
+// names in axios ambiguous, which is what stopped the bare-name fallback from
+// answering `eject` at all. A C++ header already yields to its definition; this is
+// the same rule for the same reason.
+const TS_DECL_FILE = /\.d\.(c|m)?ts$/;
+
 // The last segment of a dotted target name. A call site records whatever the
 // source wrote — `bp.GetBuffer` under an import alias, `api.W.helper` for an own
 // receiver — so the bare segment is the only part that is stable across
@@ -1437,11 +1446,12 @@ export async function extract({ file, lang, langId, scm, source, pyRepoModules =
     def.container_id = parent?.id ?? null;
   }
 
+  const declFile = TS_DECL_FILE.test(file);
   const nodes = defs.map((d) => ({
     id: d.id, name: d.name, qname: d.qname, kind: d.kind, lang,
     file, start_line: d.startLine, end_line: d.endLine,
     signature: d.signature, doc: '', container_id: d.container_id,
-    decl: d.decl ? 1 : 0,
+    decl: (d.decl || declFile) ? 1 : 0,
   }));
 
   // Struct-field-type table: <struct qname>.<field> -> package-qualified field
