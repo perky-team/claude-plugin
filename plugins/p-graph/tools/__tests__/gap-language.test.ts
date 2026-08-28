@@ -91,3 +91,43 @@ bool B() { return other::Ping(2); }
     store.close();
   }, 30000);
 });
+
+// The other half of the same rule. cpp and py are different languages and a row
+// from one can never answer the other. ts and js are NOT: axios defines its
+// methods in `lib/*.js` and calls them from `tests/**/*.ts`. Measured there —
+// `callers InterceptorManager.eject` named 17 of 25 call sites and then reported no
+// gaps, because the 8 it missed are `ts` rows and the target is a `js` node. The
+// p-graph rule reads that banner as "stop, do not grep", so the agent had no way to
+// recover. A gap the reader is not told about is the one failure this report exists
+// to prevent.
+describe('the gap report treats ts and js as one language', () => {
+  beforeEach(() => {
+    write('lib/manager.js', `export class Manager {
+  eject(id) { return id; }
+}
+`);
+    // Two real definitions of the name, so the bare-name fallback refuses and the
+    // row stays an honest gap instead of resolving.
+    write('lib/other.js', `export class Other {
+  eject(id) { return id; }
+}
+`);
+    write('tests/use.ts', `import client from '../lib/client.js';
+client.interceptors.request.eject(1);
+`);
+  });
+
+  it('lists a TypeScript call site as a gap of a JavaScript symbol', async () => {
+    const store = await indexed();
+
+    expect(store.gapsFor('Manager.eject').map((g) => g.file)).toContain('tests/use.ts');
+    store.close();
+  }, 30000);
+
+  it('gapsAround keeps the same rule', async () => {
+    const store = await indexed();
+
+    expect(store.gapsAround('Manager.eject').map((g) => g.file)).toContain('tests/use.ts');
+    store.close();
+  }, 30000);
+});

@@ -1682,8 +1682,14 @@ function attachReadHelpers(store, db, hasFts) {
     // first twenty rows of a C++ symbol's gap list. A longer banner nobody
     // believes is worse than a shorter one. With no target found there is no
     // language to filter by, so that case keeps every row.
-    const langs = new Set(symbols.map((s) => s.lang).filter(Boolean));
-    if (langs.size) matched = matched.filter((r) => langs.has(r.lang));
+    //
+    // "Another language" does not mean "another file extension". ts and js are one
+    // family here, for the reason `langFamily` gives. Measured on axios: the eight
+    // `.ts` call sites of a `js` method were dropped by this filter, so the banner
+    // said the answer was complete while missing 8 of 25 — and the rule reads that
+    // banner as "stop, do not grep".
+    const langs = new Set(symbols.map((s) => s.lang).filter(Boolean).map(langFamily));
+    if (langs.size) matched = matched.filter((r) => langs.has(langFamily(r.lang)));
     // A call whose receiver type the SOURCE writes down, and writes down as some
     // other type, is not a missing call site of this target. That is not a guess
     // about the call — it is the type on the declaration, the same fact the
