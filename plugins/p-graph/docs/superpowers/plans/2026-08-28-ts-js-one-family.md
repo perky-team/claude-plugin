@@ -115,6 +115,20 @@ Nothing is lost anywhere.
 > `certain` did not move in any repo, which is the check that matters: nothing
 > that was read from a type became a guess.
 
+> **The same lying banner is still open for the `this.m()` shape.** Pass C
+> (`resolveOwnReceiverFallback`) is the other bare-name fallback. Its lookup is
+> `n.name = ? AND n.lang = ?` and it carries no `definitionWins` guard; this plan
+> widened neither. Measured after the branch landed, in one repo and on one name:
+> `index.d.ts` declaring `interface BaseLike { eject }`, `lib/Base.js` defining
+> `class Base { eject }`, and `src/Child.ts` calling `this.eject(1)`. Pass C sees
+> one `ts` node called `eject` — the declaration — links the call to it, and then
+> `callers Base.eject` prints `✓ complete — no gaps` while `src/Child.ts:3` really
+> does call the method. The output is byte-identical on `cad73e2`, so it is
+> pre-existing and the branch did not cause it. Left alone on purpose: widening
+> Pass C adds new resolved rows, and the project rules gate that behind a full
+> re-measurement. So the lying banner is fixed for the member-call shape and open
+> for the `this.m()` shape, in the same repo, for the same name.
+
 ## File Structure
 
 | File | Responsibility |

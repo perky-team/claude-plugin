@@ -1278,6 +1278,19 @@ took four lines. The biggest-looking omission was not the biggest win.
   (`this.interceptors = {request: new InterceptorManager(), …}`). 2,433 chain calls across the three
   repos wait behind that shape.
 
+> **Withdrawn.** This named the object-literal chain as what keeps `axios-eject` at 51 of 75. It is
+> not. The eight missing call sites are all in `.ts` files calling a `js` method, and two guards — the
+> bare-name fallback and the gap report — each read the two as different languages. Fixed 28 August;
+> the chain shape stays open, and it costs certainty rather than recall.
+>
+> The fix does not on its own move this question's recall, and the reason is a second, separate
+> defect. All eight of those axios call sites are top-level statements, so their call edge carries
+> `src_id = NULL`, and `store.callers` inner-joins on `src_id` — the resolver now reaches them, and
+> `callers` still cannot list them. The ⚠ banner names them instead, with their file and line, which
+> is honest but costs the reader a text search for lines the answer already holds. 2,429
+> already-resolved edges across six study repos are unreportable for that reason, 1,826 of them in
+> hugo, which is Go — so this is the read path, not TypeScript.
+
 ## Following the calls
 
 Thirty of the thirty-one questions above are one shape — "list every call site" — and it is the shape
