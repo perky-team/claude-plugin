@@ -25,6 +25,11 @@ const indexed = async () => {
 // said the answer was complete: the 8 it missed are all written in `.ts` files, and
 // the bare-name fallback would only look at `ts` nodes. That is p-graph's worst
 // question in the whole study and 24 of the 33 call sites it trails grep by.
+//
+// This fix is necessary but not sufficient to close that gap: the real 8 missing
+// call sites are top-level statements, and `store.callers` inner-joins on the call's
+// own symbol, so a top-level call still cannot be printed once resolved. Do not read
+// this test as proof the axios recall number moved — it has not been re-measured.
 describe('a call in TypeScript reaches a method defined in JavaScript', () => {
   beforeEach(() => {
     write('lib/InterceptorManager.js', `export default class InterceptorManager {
@@ -102,6 +107,7 @@ it('removes the handler', () => {
 `);
     const store = await indexed();
 
+    expect(store.symbolsNamed('eject')).toHaveLength(2);
     const sites = store.callers('InterceptorManager.eject')
       .flatMap((c) => c.call_sites).map((s) => s.file);
     expect(sites).not.toContain('tests/use.ts');

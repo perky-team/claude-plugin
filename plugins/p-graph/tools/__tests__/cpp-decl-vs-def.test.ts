@@ -126,4 +126,39 @@ int Run(DB* d) { return d->Get(1); }
     expect(store.callers('db.DB.Get').filter((r) => !r.guess).map((r) => r.qname)).toEqual(['db.Run']);
     store.close();
   }, 30000);
+
+  // The ts/js language join (see SAME_LANG) must not spill into `definitionWins`
+  // and change C++. `Base::eject` is a pure virtual with no definition of its
+  // own; `Impl::eject` is an unrelated class's real definition of a method with
+  // the same bare name. Before the ts/js join existed, the bare name `eject` had
+  // two candidate nodes and Pass B refused — an honest gap. `definitionWins`
+  // must keep refusing here: a pure virtual is not a declaration of `Impl`'s
+  // method, so it must go on counting as a rival, and the study's published C++
+  // numbers were measured with that refusal in place.
+  it('a pure virtual elsewhere does not let a bare call resolve to an unrelated definition', async () => {
+    write('base.h', `#pragma once
+class Base {
+ public:
+  virtual void eject(int x) = 0;
+};
+`);
+    write('impl.cc', `class Impl {
+ public:
+  void eject(int x);
+};
+
+void Impl::eject(int x) {}
+`);
+    write('use.cc', `void run() { eject(7); }
+`);
+    const store = await indexed();
+
+    // Two candidate nodes for the bare name: the pure virtual and the real definition.
+    expect(store.db.prepare(`SELECT COUNT(*) c FROM nodes WHERE name = 'eject'`).get().c).toBe(2);
+    // Pass B must refuse rather than guess: dst_id stays unset, an honest gap.
+    const edge = store.db.prepare(
+      `SELECT dst_id, guess FROM edges WHERE kind = 'call' AND dst_name = 'eject'`).get();
+    expect(edge.dst_id).toBeNull();
+    store.close();
+  }, 30000);
 });

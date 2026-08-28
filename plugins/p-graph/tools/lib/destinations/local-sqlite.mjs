@@ -101,6 +101,12 @@ export const SCHEMA_VERSION = 14;
 // Nothing else joins. cpp and py stay apart, and that is deliberate: on re2, a C++
 // library with a Python binding, matching across languages put seven Python calls to
 // an unrelated `Match` into a C++ symbol's gap list. See gap-language.test.ts.
+//
+// This join is necessary but not sufficient for the axios recall gap: all eight of
+// those call sites are top-level statements with `src_id = NULL`, and `store.callers`
+// inner-joins on `src_id`, so they still cannot be printed however well the resolver
+// does. The same shape hides 2,429 already-resolved edges across six study repos,
+// 1,826 of them in hugo — which is Go, so this is not a TypeScript-only problem.
 const langFamily = (lang) => (lang === 'ts' || lang === 'js' ? 'tsjs' : lang);
 const SAME_LANG = (a, b) =>
   `((${a} = ${b}) OR (${a} IN ('ts','js') AND ${b} IN ('ts','js')))`;
@@ -1136,8 +1142,16 @@ export function openStore(dbPath, opts = {}) {
     // of that name stop counting — and the declared node stays in the graph, because
     // a reader may still ask about it. A graph written before schema 9 has no `decl`
     // column and nothing is marked, so the guard is left out entirely there.
+    //
+    // Only for ts and js. `decl = 1` is not only a `.d.ts` marker: driver.mjs also
+    // sets it on a bodyless C++ in-class declaration, e.g. a pure virtual method.
+    // Without the language check here, a C++ pure virtual with exactly one in-repo
+    // implementation would stop counting as a rival too, and a call that used to be
+    // an honest gap (two candidates, refuse) would silently turn into a guess. The
+    // study's published C++ numbers were measured before this change, so C++ (and
+    // Python) must keep the old behaviour. See cpp-decl-vs-def.test.ts.
     const definitionWins = declColumn()
-      ? `AND (n.decl = 0 OR NOT EXISTS (
+      ? `AND (n.decl = 0 OR n.lang NOT IN ('ts','js') OR NOT EXISTS (
            SELECT 1 FROM nodes d
            WHERE d.name = n.name AND d.kind IN ${CALLABLE} AND d.decl = 0
              AND ${SAME_LANG('d.lang', 'n.lang')}))`
