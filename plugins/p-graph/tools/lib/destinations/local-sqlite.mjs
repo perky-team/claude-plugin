@@ -1401,7 +1401,7 @@ function attachReadHelpers(store, db, hasFts) {
   const QUALIFIER_KNOWN_SQL = (dstName, nodesAlias, lang) => `
     CASE WHEN instr(${dstName}, '.') = 0 THEN 1
          WHEN EXISTS (
-           SELECT 1 FROM nodes ${nodesAlias} WHERE ${nodesAlias}.lang = ${lang}
+           SELECT 1 FROM nodes ${nodesAlias} WHERE ${SAME_LANG(`${nodesAlias}.lang`, lang)}
              AND ${nodesAlias}.qname LIKE substr(${dstName}, 1, instr(${dstName}, '.') - 1) || '.%'
          ) THEN 1 ELSE 0 END`;
   // These are prepared lazily, inside the helpers that use them, like every
@@ -1435,12 +1435,22 @@ function attachReadHelpers(store, db, hasFts) {
   // count; qualifierExistsSql is asked once per distinct qualifier, and the
   // number of distinct qualifiers among matched rows is always small next to
   // the row count.
+  //
+  // Both ask by language FAMILY, not by exact lang, and both bind that family's
+  // language twice — once per side of SAME_LANG. Same rule as the resolver and as
+  // the language filter below: a `.ts` call and the `.js` method it names are one
+  // language. Keying these two per exact lang quietly undid the filter's fix.
+  // Measured on the fixture in gap-language.test.ts: the `.ts` row survived the
+  // filter, then counted 0 candidates because both `eject` nodes are `js`, so its
+  // reason came out `external` — and an `external` row is counted, never listed.
+  // The printed answer said "1 call the graph found nothing to link to" while the
+  // graph held two nodes it could have linked to. See cli-unresolved.test.ts.
   const candidateCountsSql = (n) => `
     SELECT name, count(*) AS c FROM nodes
-    WHERE lang = ? AND name IN (${Array(n).fill('?').join(',')})
+    WHERE ${SAME_LANG('lang', '?')} AND name IN (${Array(n).fill('?').join(',')})
       AND kind IN ('function','method','class')
     GROUP BY name`;
-  const qualifierExistsSql = `SELECT 1 FROM nodes WHERE lang = ? AND qname LIKE ? LIMIT 1`;
+  const qualifierExistsSql = `SELECT 1 FROM nodes WHERE ${SAME_LANG('lang', '?')} AND qname LIKE ? LIMIT 1`;
   const noCallerRowsByIdSql = (n) => `
     SELECT e.dst_name, e.file, e.line FROM edges e
     WHERE e.kind = 'call' AND e.src_id IS NULL
@@ -1520,16 +1530,21 @@ function attachReadHelpers(store, db, hasFts) {
   // exist (see the reason calc in collectGaps below), so there is nothing to
   // look up for it.
   const candidatesByLangBare = (rows) => {
-    const byLang = new Map(); // lang -> Set(dst_bare)
+    // family -> { lang, bares }. `lang` is one row's own language out of that
+    // family, kept only to bind: SAME_LANG answers the same for `ts` as for
+    // `js`, so which of the two it is cannot change a count.
+    const byFamily = new Map();
     for (const r of rows) {
       if (r.external === 1 || r.lang == null || r.dst_bare == null) continue;
-      (byLang.get(r.lang) ?? byLang.set(r.lang, new Set()).get(r.lang)).add(r.dst_bare);
+      const fam = langFamily(r.lang);
+      if (!byFamily.has(fam)) byFamily.set(fam, { lang: r.lang, bares: new Set() });
+      byFamily.get(fam).bares.add(r.dst_bare);
     }
-    const out = new Map(); // "lang|bare" -> count
-    for (const [lang, bares] of byLang) {
+    const out = new Map(); // "family|bare" -> count
+    for (const [fam, { lang, bares }] of byFamily) {
       for (const names of chunk([...bares], 400)) {
-        for (const row of db.prepare(candidateCountsSql(names.length)).all(lang, ...names)) {
-          out.set(`${lang}|${row.name}`, row.c);
+        for (const row of db.prepare(candidateCountsSql(names.length)).all(lang, lang, ...names)) {
+          out.set(`${fam}|${row.name}`, row.c);
         }
       }
     }
@@ -1540,17 +1555,19 @@ function attachReadHelpers(store, db, hasFts) {
   // lookup needed, same as the old CASE's WHEN branch). External rows are
   // excluded for the same reason as above.
   const qualifiersByLangQualifier = (rows) => {
-    const byLang = new Map(); // lang -> Set(qualifier)
+    const byFamily = new Map(); // family -> { lang, quals }
     for (const r of rows) {
       if (r.external === 1 || r.lang == null) continue;
       const dot = r.dst_name.indexOf('.');
       if (dot === -1) continue;
-      (byLang.get(r.lang) ?? byLang.set(r.lang, new Set()).get(r.lang)).add(r.dst_name.slice(0, dot));
+      const fam = langFamily(r.lang);
+      if (!byFamily.has(fam)) byFamily.set(fam, { lang: r.lang, quals: new Set() });
+      byFamily.get(fam).quals.add(r.dst_name.slice(0, dot));
     }
     const stmt = db.prepare(qualifierExistsSql);
-    const out = new Map(); // "lang|qualifier" -> 0 | 1
-    for (const [lang, quals] of byLang) {
-      for (const q of quals) out.set(`${lang}|${q}`, stmt.get(lang, `${q}.%`) ? 1 : 0);
+    const out = new Map(); // "family|qualifier" -> 0 | 1
+    for (const [fam, { lang, quals }] of byFamily) {
+      for (const q of quals) out.set(`${fam}|${q}`, stmt.get(lang, lang, `${q}.%`) ? 1 : 0);
     }
     return out;
   };
@@ -1744,9 +1761,13 @@ function attachReadHelpers(store, db, hasFts) {
       const key = `${r.file}|${r.line}|${r.dst_name}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      const candidateCount = r.external === 1 ? 0 : (candidates.get(`${r.lang}|${r.dst_bare}`) ?? 0);
+      // Both maps are keyed by family, so read them by family. Keyed by exact
+      // lang, a `.ts` call to a `.js` method scored 0 candidates and was thrown
+      // out of the list as `external` right after the filter above had saved it.
+      const fam = langFamily(r.lang);
+      const candidateCount = r.external === 1 ? 0 : (candidates.get(`${fam}|${r.dst_bare}`) ?? 0);
       const dot = r.dst_name.indexOf('.');
-      const known = dot === -1 ? 1 : (qualifierKnown.get(`${r.lang}|${r.dst_name.slice(0, dot)}`) ?? 0);
+      const known = dot === -1 ? 1 : (qualifierKnown.get(`${fam}|${r.dst_name.slice(0, dot)}`) ?? 0);
       const reason = libraryRows.has(key) ? 'library'
         : (candidateCount > 0 && known ? 'ambiguous' : 'external');
       out.push({
@@ -2113,10 +2134,13 @@ function attachReadHelpers(store, db, hasFts) {
     if (!hasBare) return [];
     const n = store.node(name);
     if (!n) return [];
+    // The language family, same as collectGaps — `callees` and `callers` have to
+    // agree about one row. A line that is a gap read one way and not the other is
+    // its own bug, and the reader has no way to tell which answer to believe.
     return db.prepare(`
       SELECT e.dst_name, e.dst_bare, e.file, e.line, e.external, e.lang,
              (SELECT count(*) FROM nodes n2
-              WHERE n2.name = e.dst_bare AND n2.lang = e.lang
+              WHERE n2.name = e.dst_bare AND ${SAME_LANG('n2.lang', 'e.lang')}
                 AND n2.kind IN ('function','method','class')) AS candidates,
              ${QUALIFIER_KNOWN_SQL('e.dst_name', 'n3', 'e.lang')} AS qualifier_known
       FROM edges e WHERE e.kind = 'call' AND e.dst_id IS NULL AND e.src_id = ?

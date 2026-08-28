@@ -240,4 +240,32 @@ func (z *Z) Mid() {}
     expect(impactRow).toBeTruthy();
     expect(impactRow.reachable).toBe(1);
   }, 30000);
+
+  // The same row gap-language.test.ts pins at the store level, asked through the
+  // CLI instead. It has to be asked here: that store test passed while the
+  // printed answer still said the graph had found nothing to link to. The row was
+  // rescued from the language filter and then thrown away by the reason
+  // classifier, which counted candidates per exact lang — so a `.ts` call whose
+  // only same-named candidates are `.js` nodes came out with zero candidates,
+  // was labelled `external`, and `external` rows are counted, never listed.
+  it('lists a TypeScript call site as a gap of a JavaScript method', () => {
+    write('lib/manager.js', `export class Manager {
+  eject(id) { return id; }
+}
+`);
+    // Two real definitions of the name, so the bare-name fallback refuses and the
+    // row stays an honest gap instead of resolving.
+    write('lib/other.js', `export class Other {
+  eject(id) { return id; }
+}
+`);
+    write('tests/use.ts', 'client.interceptors.request.eject(1);\n');
+    run(['index', '--full']);
+    const text = run(['callers', 'Manager.eject']);
+    expect(text).toContain('missing from this answer');
+    expect(text).toMatch(/^ {4}tests\/use\.ts:1\b/m);
+    // The count line the row used to hide in. It claims the graph could not link
+    // the call to anything, and here the graph has two nodes named `eject`.
+    expect(text).not.toContain('found nothing to link to');
+  }, 30000);
 });
