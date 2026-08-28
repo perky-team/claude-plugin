@@ -135,7 +135,12 @@ const JS_GLOBALS = new Set([
 // names in axios ambiguous, which is what stopped the bare-name fallback from
 // answering `eject` at all. A C++ header already yields to its definition; this is
 // the same rule for the same reason.
-const TS_DECL_FILE = /\.d\.(c|m)?ts$/;
+//
+// Case-insensitive, because the language resolver is: parse/index.mjs lowercases
+// the extension before it picks TypeScript, so `Index.D.TS` is indexed as
+// TypeScript. Without the `i` flag that file would be read as code that DEFINES
+// the API, and its nodes would compete with the real ones.
+const TS_DECL_FILE = /\.d\.(c|m)?ts$/i;
 
 // The last segment of a dotted target name. A call site records whatever the
 // source wrote — `bp.GetBuffer` under an import alias, `api.W.helper` for an own

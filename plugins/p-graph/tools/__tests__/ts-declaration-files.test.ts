@@ -60,18 +60,44 @@ describe('a TypeScript declaration file is marked as declarations', () => {
     store.close();
   }, 30000);
 
-  // The guard is on the whole suffix, not on a bare `.d`. A file named
-  // `schema.d.ts` is a declaration; one named `payload.ts` is not, wherever it sits.
+  // The guard is on the whole suffix, not on a bare `.d`. `schema.d.ts` is a
+  // declaration; `payload.ts` beside it is not. Both files are here on purpose: a
+  // repo holding only `payload.ts` would pass this case even if the suffix rule
+  // were never applied at all.
   it('leaves an ordinary .ts file alone', async () => {
-    write('lib/api.ts', `export class Api {
-  send(x: number): void {}
+    write('lib/schema.d.ts', `export interface Schema {
+  send(x: number): void;
+}
+`);
+    write('lib/payload.ts', `export class Payload {
+  wrap(x: number): void {}
 }
 `);
     const store = await indexed();
 
-    const send = store.symbolsNamed('send').filter((n) => n.file === 'lib/api.ts');
+    const wrap = store.symbolsNamed('wrap').filter((n) => n.file === 'lib/payload.ts');
+    expect(wrap).toHaveLength(1);
+    expect(wrap[0].decl).toBe(0);
+    const send = store.symbolsNamed('send').filter((n) => n.file === 'lib/schema.d.ts');
     expect(send).toHaveLength(1);
-    expect(send[0].decl).toBe(0);
+    expect(send[0].decl).toBe(1);
+    store.close();
+  }, 30000);
+
+  // The language resolver lowercases the extension before it picks TypeScript
+  // (parse/index.mjs), so `Index.D.TS` is indexed as TypeScript. The suffix test
+  // has to read the name the same way, or the file is parsed as code that defines
+  // an API and its nodes compete with the real ones.
+  it('marks a declaration file whose name is uppercase', async () => {
+    write('Index.D.TS', `export interface Api {
+  send(x: number): void;
+}
+`);
+    const store = await indexed();
+
+    const send = store.symbolsNamed('send').filter((n) => n.file === 'Index.D.TS');
+    expect(send).toHaveLength(1);
+    expect(send[0].decl).toBe(1);
     store.close();
   }, 30000);
 });
