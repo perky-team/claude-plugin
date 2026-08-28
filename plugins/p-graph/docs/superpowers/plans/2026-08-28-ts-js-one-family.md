@@ -70,16 +70,50 @@ callable nodes instead of one, the "exactly one" guard would refuse, and the 6 s
 that work today would be lost. 18 names in axios are ambiguous for this reason and no
 other.
 
+**A note on the test fixtures, found while implementing Task 1.** Every fixture below
+declares its API with `interface`, not with `declare class`. That is not a style
+choice. An ambient class method with no body parses as `method_signature` inside
+`class_body`, and `ts.scm` captures that shape only inside `interface_body` — so
+`export declare class A { eject(id: number): void; }` yields the class node and **no
+member at all**, whatever this plan changes. Reproduced against the real parser:
+
+```
+declare class   -> A[class,decl=1]
+interface       -> A[interface,decl=1] A.eject[method,decl=1]
+```
+
+axios itself writes `export interface AxiosInterceptorManager<V>`, so the interface
+fixture is also the shape that was measured. The `declare class` hole is a separate,
+pre-existing gap in extraction. Closing it means editing `ts.scm`, which the project
+rules gate behind a full re-measurement, so it stays out of this plan.
+
 So the two changes must land together. Simulated over the study's three TypeScript
 indexes, before writing any code:
 
 | Repo | nodes | `.d.ts` nodes | bare names newly unique | **newly ambiguous** |
 |---|---:|---:|---:|---:|
-| axios | 3,279 | 44 | **+95** | **0** |
+| axios | 3,279 | 44 | +95 | **0** |
 | nest | 11,031 | 0 | +9 | **0** |
 | got | 3,317 | 0 | +12 | **0** |
 
-Nothing is lost anywhere. Task 4 re-runs that count against the rebuilt graphs.
+Nothing is lost anywhere.
+
+> **The "newly unique" column was five times too high.** Measured after the code
+> landed, by rebuilding each index with the pre-branch code and then with this
+> branch: **20** rows moved in axios, **0** in nest, **6** in got. The simulation
+> counted only whether a bare name has exactly one candidate. It did not model
+> Pass B's other guards — the member-owner rule, the `#ret:` veto, the qname veto —
+> and each of those still refuses rows the simulation counted. The "newly
+> ambiguous" column held: nothing was lost.
+>
+> | Repo | certain before → after | guesses before → after | unresolved before → after |
+> |---|---|---|---|
+> | axios | 2,386 → **2,386** | 321 → 341 | 8,583 → 8,563 |
+> | nest | 8,961 → **8,961** | 566 → 566 | 25,464 → 25,464 |
+> | got | 1,644 → **1,644** | 212 → 218 | 11,035 → 11,029 |
+>
+> `certain` did not move in any repo, which is the check that matters: nothing
+> that was read from a type became a guess.
 
 ## File Structure
 
@@ -139,7 +173,7 @@ const indexed = async () => {
 // to its definition in C++; this is the same rule for the same reason.
 describe('a TypeScript declaration file is marked as declarations', () => {
   it('marks every node from a .d.ts file', async () => {
-    write('index.d.ts', `export declare class ApiInterceptor {
+    write('index.d.ts', `export interface ApiInterceptor {
   eject(id: number): void;
 }
 `);
@@ -152,8 +186,8 @@ describe('a TypeScript declaration file is marked as declarations', () => {
   }, 30000);
 
   it('marks .d.cts and .d.mts the same way', async () => {
-    write('index.d.cts', `export declare class ApiInterceptor { eject(id: number): void; }\n`);
-    write('index.d.mts', `export declare class ApiInterceptor { eject(id: number): void; }\n`);
+    write('index.d.cts', `export interface ApiInterceptor { eject(id: number): void; }\n`);
+    write('index.d.mts', `export interface ApiInterceptor { eject(id: number): void; }\n`);
     const store = await indexed();
 
     for (const f of ['index.d.cts', 'index.d.mts']) {
@@ -340,7 +374,7 @@ client.interceptors.request.eject(1);
   // "exactly one" guard refuses, and the call sites that resolved BEFORE this change
   // are lost. A declaration must not count while a definition of that name exists.
   it('is not blocked by a published declaration of the same API', async () => {
-    write('index.d.ts', `export declare class AxiosInterceptorManager {
+    write('index.d.ts', `export interface AxiosInterceptorManager {
   eject(id: number): void;
 }
 `);
@@ -355,7 +389,7 @@ client.interceptors.request.eject(1);
   // The declaration is kept, not deleted: it is a symbol of the repo and a reader
   // may ask about it by name.
   it('keeps the declared symbol in the graph', async () => {
-    write('index.d.ts', `export declare class AxiosInterceptorManager {
+    write('index.d.ts', `export interface AxiosInterceptorManager {
   eject(id: number): void;
 }
 `);
