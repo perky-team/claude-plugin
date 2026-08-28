@@ -90,6 +90,21 @@ function loadDatabaseSync() {
 // one, so the graph is rebuilt rather than read as current.
 export const SCHEMA_VERSION = 14;
 
+// `ts` and `js` are one language for resolution. A repository that ships
+// JavaScript, writes its tests in TypeScript and publishes an `index.d.ts` is not
+// three repositories, and every type-reading pass in this file already says so with
+// `lang IN ('ts','js')`. Measured on axios: the eight top-level
+// `axios.interceptors.request.eject(...)` calls are `ts` rows and the method they
+// call is a `js` node, so the bare-name fallback could never see it — while the
+// identical calls in `.js` test files resolved.
+//
+// Nothing else joins. cpp and py stay apart, and that is deliberate: on re2, a C++
+// library with a Python binding, matching across languages put seven Python calls to
+// an unrelated `Match` into a C++ symbol's gap list. See gap-language.test.ts.
+const langFamily = (lang) => (lang === 'ts' || lang === 'js' ? 'tsjs' : lang);
+const SAME_LANG = (a, b) =>
+  `((${a} = ${b}) OR (${a} IN ('ts','js') AND ${b} IN ('ts','js')))`;
+
 const META_DDL = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 `;
@@ -1111,20 +1126,38 @@ export function openStore(dbPath, opts = {}) {
     // recorded and it leads nowhere.
     // A bare name is not a fact about the receiver's type — it is a guess that
     // the one repo symbol with this name is the one the call site meant.
+
+    // A declaration is not a rival definition. Joining ts and js below would
+    // otherwise LOSE call sites that resolve today: axios publishes `index.d.ts`
+    // and `index.d.cts`, both declaring `AxiosInterceptorManager.eject`, so the
+    // bare name `eject` would have three callable nodes where it has one, and the
+    // "exactly one" guard would refuse them all. 18 names in axios are ambiguous for
+    // this reason and no other. So when a name has a real definition, declarations
+    // of that name stop counting — and the declared node stays in the graph, because
+    // a reader may still ask about it. A graph written before schema 9 has no `decl`
+    // column and nothing is marked, so the guard is left out entirely there.
+    const definitionWins = declColumn()
+      ? `AND (n.decl = 0 OR NOT EXISTS (
+           SELECT 1 FROM nodes d
+           WHERE d.name = n.name AND d.kind IN ${CALLABLE} AND d.decl = 0
+             AND ${SAME_LANG('d.lang', 'n.lang')}))`
+      : '';
     db.prepare(`
       UPDATE edges SET dst_id = (
         SELECT n.id FROM nodes n
-        WHERE n.name = edges.dst_name AND n.lang = edges.lang AND n.kind IN ${CALLABLE}
-          AND ${MEMBER_TARGET_OK}
+        WHERE n.name = edges.dst_name AND ${SAME_LANG('n.lang', 'edges.lang')}
+          AND n.kind IN ${CALLABLE} AND ${MEMBER_TARGET_OK} ${definitionWins}
         LIMIT 1
       ), guess = 1
       WHERE kind = 'call' AND dst_id IS NULL AND dst_name IS NOT NULL AND external = 0
-        AND (SELECT count(*) FROM nodes n WHERE n.qname = edges.dst_name AND n.lang = edges.lang) = 0
         AND (SELECT count(*) FROM nodes n
-             WHERE n.name = edges.dst_name AND n.lang = edges.lang AND n.kind IN ${CALLABLE}) = 1
+             WHERE n.qname = edges.dst_name AND ${SAME_LANG('n.lang', 'edges.lang')}) = 0
+        AND (SELECT count(*) FROM nodes n
+             WHERE n.name = edges.dst_name AND ${SAME_LANG('n.lang', 'edges.lang')}
+               AND n.kind IN ${CALLABLE} ${definitionWins}) = 1
         AND EXISTS (SELECT 1 FROM nodes n
-             WHERE n.name = edges.dst_name AND n.lang = edges.lang AND n.kind IN ${CALLABLE}
-               AND ${MEMBER_TARGET_OK})
+             WHERE n.name = edges.dst_name AND ${SAME_LANG('n.lang', 'edges.lang')}
+               AND n.kind IN ${CALLABLE} AND ${MEMBER_TARGET_OK} ${definitionWins})
         AND NOT EXISTS (
           SELECT 1 FROM field_types ft
           WHERE ft.key = edges.field_key
