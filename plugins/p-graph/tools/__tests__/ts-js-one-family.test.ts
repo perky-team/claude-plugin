@@ -85,8 +85,12 @@ it('removes the handler', () => {
     store.close();
   }, 30000);
 
-  // The declaration is kept, not deleted: it is a symbol of the repo and a reader
-  // may ask about it by name.
+  // The declaration is kept here because its qname DIFFERS from the definition's
+  // — `AxiosInterceptorManager.eject` against `InterceptorManager.eject`. That is
+  // the common case for a published `.d.ts`, since it renames the API. It is not a
+  // general promise: the DELETE at the head of resolve is keyed on qname + lang,
+  // so a declaration that repeats the definition's qname IS deleted. The last
+  // describe in this file pins that shape.
   it('keeps the declared symbol in the graph', async () => {
     write('index.d.ts', `export interface AxiosInterceptorManager {
   eject(id: number): void;
@@ -111,6 +115,66 @@ it('removes the handler', () => {
     const sites = store.callers('InterceptorManager.eject')
       .flatMap((c) => c.call_sites).map((s) => s.file);
     expect(sites).not.toContain('tests/use.ts');
+    store.close();
+  }, 30000);
+});
+
+// The DELETE at the head of resolve is keyed on qname AND lang, and every node
+// from a `.d.ts` file is lang `ts`. So a declaration whose qname MATCHES the
+// definition's is deleted, not kept. A published `index.d.ts` usually renames the
+// API — axios declares `AxiosInterceptorManager.eject` for `InterceptorManager.eject`
+// — which is why the case above keeps its node. This one pins the other shape, and
+// it pins what happens TODAY: changing the DELETE is a separate question and it
+// needs its own measurement.
+describe('a declaration that shares the definition\'s qname is deleted', () => {
+  it('drops the declared class and its declared method', async () => {
+    write('index.d.ts', `export interface Api {
+  send(x: number): void;
+}
+`);
+    write('src/api.ts', `export class Api {
+  send(x: number): void {}
+}
+`);
+    const store = await indexed();
+
+    expect(store.symbolsNamed('Api').map((n) => n.file)).toEqual(['src/api.ts']);
+    expect(store.symbolsNamed('send').map((n) => n.file)).toEqual(['src/api.ts']);
+    store.close();
+  }, 30000);
+
+  // The second-order effect, new with this branch. In C++ `decl = 1` is never set
+  // on a class node, so a C++ parent always survives. A `.d.ts` marks every node
+  // in the file, container included. So when the declaration file states a member
+  // the class does not define, the container is deleted and the member is left
+  // with a container_id pointing at nothing. Nothing crashes, and memberOwnerSql
+  // needs that container row, so a call written on a receiver can no longer reach
+  // the orphan.
+  it('leaves a declared-only member with no container', async () => {
+    write('index.d.ts', `export interface Api {
+  send(x: number): void;
+  receive(x: number): void;
+}
+`);
+    write('src/api.ts', `export class Api {
+  send(x: number): void {}
+}
+`);
+    write('src/use.ts', `import { Api } from '../index';
+export function run(a) { a.receive(1); }
+`);
+    const store = await indexed();
+
+    // The container is gone and the declared-only member is not.
+    expect(store.symbolsNamed('Api').map((n) => n.file)).toEqual(['src/api.ts']);
+    expect(store.symbolsNamed('receive').map((n) => n.file)).toEqual(['index.d.ts']);
+    // Named against the owner it no longer has, so the assertion below is about
+    // a symbol that really is in the graph.
+    expect(store.symbolsNamed('receive')[0].qname).toBe('Api.receive');
+    // `receive` is the only node of that name in the repo, so the bare-name
+    // fallback would link the call — but the member check cannot find an owner,
+    // so the call stays an honest gap instead.
+    expect(store.callers('Api.receive').flatMap((c) => c.call_sites)).toEqual([]);
     store.close();
   }, 30000);
 });

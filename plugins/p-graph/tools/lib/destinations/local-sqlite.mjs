@@ -1139,9 +1139,38 @@ export function openStore(dbPath, opts = {}) {
     // bare name `eject` would have three callable nodes where it has one, and the
     // "exactly one" guard would refuse them all. 18 names in axios are ambiguous for
     // this reason and no other. So when a name has a real definition, declarations
-    // of that name stop counting — and the declared node stays in the graph, because
-    // a reader may still ask about it. A graph written before schema 9 has no `decl`
-    // column and nothing is marked, so the guard is left out entirely there.
+    // of that name stop counting here. A graph written before schema 9 has no
+    // `decl` column and nothing is marked, so the guard is left out entirely there.
+    //
+    // The declared node itself survives only when its qname DIFFERS from the
+    // definition's. That is the common case for a published `.d.ts`, because it
+    // renames the API — axios declares `AxiosInterceptorManager.eject` for
+    // `InterceptorManager.eject`. When the two qnames match, the DELETE at the head
+    // of resolve removes the declared node instead: it is keyed on qname + lang, and
+    // every node in a `.d.ts` file is lang `ts`. Measured — `index.d.ts` declaring
+    // `interface Api { send(...) }` beside `src/api.ts` defining
+    // `class Api { send() {} }` loses both of the `.d.ts` nodes.
+    //
+    // One effect of that is new here, and it is NOT fixed. In C++, `decl = 1` never
+    // lands on a class node, so a C++ parent always survives. A `.d.ts` marks every
+    // node in the file, container included. So when the declaration file states a
+    // member the class does not define, the container is deleted and the member is
+    // left with a container_id pointing at nothing. Nothing crashes — `ownerOf` and
+    // `implementationReach` both guard — but `memberOwnerSql` needs that container
+    // row, so a declared-only method quietly stops being reachable as a member call.
+    // Pinned in ts-js-one-family.test.ts. Changing the DELETE needs its own
+    // measurement.
+    //
+    // Last, this closes the lying banner for ONE call shape. Pass C
+    // (`resolveOwnReceiverFallback`, the `this.m()` / `self.m()` fallback) still
+    // matches per exact lang and has no definitionWins guard. Measured in the same
+    // repo, on the same name: `index.d.ts` declaring `interface BaseLike { eject }`
+    // (a renamed API, the way axios writes one), `lib/Base.js` defining
+    // `class Base { eject }`, and `src/Child.ts` calling `this.eject(1)`. Pass C
+    // sees one `ts` node called `eject` — the declaration — and links the call to
+    // it, so `callers Base.eject` prints "complete — no gaps" and never names
+    // src/Child.ts:3. Pre-existing: byte-identical output on cad73e2. Widening this
+    // pass would add new resolved rows, so it waits for its own measurement.
     //
     // Only for ts and js. `decl = 1` is not only a `.d.ts` marker: driver.mjs also
     // sets it on a bodyless C++ in-class declaration, e.g. a pure virtual method.
