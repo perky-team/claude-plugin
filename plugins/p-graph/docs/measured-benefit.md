@@ -5,6 +5,12 @@ fixing it **reversed the accuracy claim this page led with**. A third arm — a 
 also added. Both are in "The answer" below; the round-by-round sections further down are the record of
 what earlier passes reported, and two paragraphs in them now carry a withdrawal note.
 
+Updated 28 August 2026: `callers` on a Go interface method now also reports the calls that run
+through an implementation of it, and the p-graph arm was re-measured in full — 156 runs, zero
+errors — to check it. This **reversed the language-server conclusion**: "for Go, reach for the
+language server first" no longer holds. See "The third arm: a language server" and "Why Go moved"
+below; grep and the language server were not re-run, and none of their numbers moved.
+
 p-graph 1.4.0 plus the Python round below, which is not released yet. We already knew whether the graph's
 own rows are right — `measure.mjs` has audited that for months. What nobody had measured is the
 question a user actually has: **should I ask the graph, or should I just grep?**
@@ -33,31 +39,33 @@ Fourteen repositories, 52 questions, 36 of them "who calls X" and 16 that follow
 
 | What we measured | grep | p-graph | Gap | Verdict |
 |---|---|---|---|---|
-| **"who calls X"** — call sites found | **1674 of 1683** | 1602 of 1683 | −72 | **grep** |
+| **"who calls X"** — call sites found | **1674 of 1683** | 1650 of 1683 | −24 | **grep** |
 | **"who calls X"** — call sites invented | **0** | 14 | +14 | **grep** |
-| **"who calls X"** — cost per question | $0.216 | $0.212 | −2% (SE $0.014, 0.3 SE) | **noise** |
-| **"who calls X"** — time per question | 39.8 s | 32.8 s | −18% (SE 4.0 s, 1.8 SE) | **noise** |
-| **"who calls X"** — steps per question | 6.8 | **5.7** | −16% (SE 0.5, **2.1 SE**) | **p-graph** |
-| **"who calls X"** — tool calls | 6.6 | **5.0** | −24% | **p-graph** |
-| **"who calls X"** — context read back | 614k | **552k** | −10% | **p-graph** |
-| **"who calls X"** — text searches | 3.7 | **0.6** | −84% | **p-graph** |
+| **"who calls X"** — cost per question | $0.216 | $0.199 | −8% (SE $0.026, 0.6 SE) | **noise** |
+| **"who calls X"** — time per question | 39.8 s | 32.2 s | −19% (SE 3.9 s, **2.0 SE**) | **p-graph** |
+| **"who calls X"** — steps per question | 6.8 | **5.7** | −16% (SE 0.4, **2.7 SE**) | **p-graph** |
+| **"who calls X"** — tool calls | 6.6 | **5.3** | −20% | **p-graph** |
+| **"who calls X"** — context read back | 614k | **587k** | −4% | **p-graph** |
+| **"who calls X"** — text searches | 3.7 | **0.9** | −76% | **p-graph** |
 | **follow the calls** — call sites found | 180 of 216 | **187 of 216** | +7 | **p-graph** |
 | **follow the calls** — call sites invented | 32 | **1** | −97% | **p-graph** |
-| **follow the calls** — steps per question | 9.4 | **6.8** | −28% | **p-graph** |
+| **follow the calls** — steps per question | 9.4 | **7.6** | −19% | **p-graph** |
 | **follow the calls, big repos** — cost | $0.453 | **$0.273** | −40% | **p-graph** |
 | **follow the calls, big repos** — time | 103 s | **53 s** | −48% | **p-graph** |
 | **follow the calls, small repos** — cost | **$0.190** | $0.232 | +22% | **grep** |
-| Answers that admit their own limits | 3% (4/156) | **47% (74/156)** | +44 pts | **p-graph** |
+| Answers that admit their own limits | 3% (4/156) | **45% (70/156)** | +42 pts | **p-graph** |
 
 **tie** means the two sides landed on the same number. **noise** means the gap is under two standard
 errors, so we cannot tell it from zero.
 
 **The two question shapes now give opposite answers, and that is the finding.**
 
-On **"who calls X"** — list every call site — grep is the more accurate of the two. It finds 72 more
-call sites of 1,683 and it invents nothing at all, where p-graph invents 14. What p-graph buys on this
-shape is not correctness: it is 16% fewer steps, a sixth of the text searches, and an answer that says
-what it might be missing 47% of the time against grep's 3%.
+On **"who calls X"** — list every call site — grep is still the more accurate of the two, but only
+just. It finds 24 more call sites of 1,683 and it invents nothing at all, where p-graph invents 14.
+That gap used to be 72 sites; most of it closed on 28 August when `callers` on a Go interface method
+started reporting the calls that reach it through an implementation — see "Why Go moved" below. What
+p-graph buys on this shape is not correctness: it is 16% fewer steps, a quarter of the text searches,
+and an answer that says what it might be missing 45% of the time against grep's 3%.
 
 On **following the calls** — "what breaks if I change X", "how does X reach Y" — p-graph wins the
 accuracy row outright: 187 of 216 against 180, and **1 invented row against 32**. On the big
@@ -1373,12 +1381,14 @@ written rather than something shaky.
 
 ## What that means
 
-- **For "who calls X", grep is the more accurate of the two.** 1,674 call sites of 1,683 against
-  1,602, and grep invents none where p-graph invents 14. Cost and time are a tie. p-graph still wins
-  the one shape a text search cannot do — a call written without a qualifier from inside the class
-  that owns the method, which grep missed in all three runs — but that is one question, and the total
-  goes the other way. Most of the 72-site gap is two questions: `caddy-handler-servehttp` (104 of
-  153) and `axios-eject` (51 of 75). See "By language".
+- **For "who calls X", grep is still the more accurate of the two, but the gap has mostly closed.**
+  1,674 call sites of 1,683 against 1,650, and grep invents none where p-graph invents 14. Cost and
+  time now lean p-graph's way. p-graph still wins the one shape a text search cannot do — a call
+  written without a qualifier from inside the class that owns the method, which grep missed in all
+  three runs — but that is one question, and the total still goes grep's way. The gap used to be 72
+  sites and was mostly `caddy-handler-servehttp` (104 of 153); fixed 28 August, that question now
+  reads 152 of 153, and `axios-eject` (51 of 75) is what is left of the 33-site gap. See "Why Go
+  moved" and "By language".
 - **The plugin earns its keep on a big repository, and not on a small one.** That is the clearest line
   this study has produced, and it is the one to read first. On the eleven questions that follow the
   calls, split by the size of the repository:
@@ -1394,7 +1404,7 @@ written rather than something shaky.
 - **For "what breaks if I change X", use p-graph — on a repository big enough to need it.** Half the
   cost, a third of the time, a seventh of the steps, and one `impact` call instead of a hand-walked
   call tree.
-- **The reason to install it is the honesty, not the speed.** 74 answers of 156 said what they might be
+- **The reason to install it is the honesty, not the speed.** 70 answers of 156 said what they might be
   missing, against 4 of 156. That is the gap banner and the guess marking being relayed, and grep has
   no equivalent.
 - **On the follow-the-calls shape, and only there, p-graph is also the more accurate.** 187 call sites
@@ -1408,11 +1418,11 @@ written rather than something shaky.
 ## Where the graph still earns its place
 
 Besides the transitive question, one more number came out clearly for the plugin. An answer is worth
-more when it says what it does not know, and p-graph said so ten times as often:
+more when it says what it does not know, and p-graph said so far more often:
 
 | | Runs whose answer flags its own limits |
 |---|---|
-| p-graph | **74 of 156** |
+| p-graph | **70 of 156** |
 | grep | 4 of 156 |
 
 That is the gap banner and the `UNVERIFIED` marking doing their job — they are text the agent can
@@ -1434,22 +1444,30 @@ questions on leveldb, re2, spdlog and rocksdb. Three runs a side each.
 
 | 4 list questions + 1 trap | grep | p-graph | gopls |
 |---|---|---|---|
-| Call sites found | 277 of 279 | 229 of 279 | **279 of 279** |
+| Call sites found | 277 of 279 | **277 of 279** | **279 of 279** |
 | Call sites invented | 0 | 0 | 0 |
-| Cost per question | $0.337 | **$0.294** | $0.357 |
-| Time per question | 72 s | **51 s** | 78 s |
-| Steps per question | 10.8 | **9.3** | 17.1 |
-| Tool calls per question | 6.6 | **5.0** | 16.9 |
-| `caddy-addnode-impact` — steps | 16.7 | **8.7** | 28.7 |
+| Cost per question | $0.337 | **$0.240** | $0.357 |
+| Time per question | 72 s | **45 s** | 78 s |
+| Steps per question | 10.8 | **8.8** | 17.1 |
+| Tool calls per question | 6.6 | **5.3** | 16.9 |
+| `caddy-addnode-impact` — steps | 16.7 | 12.3 | 28.7 |
 
-**The language server is the most accurate of the three and the most expensive in round trips.** It
-answered every call site of every question, including `caddy-handler-servehttp`, where p-graph lists 34
-of 51. That is what a type checker should do, and it did it.
+> **Withdrawn.** This box used to read p-graph short by a third — 229 of 279, against grep's 277 and
+> gopls's 279 — and the paragraph below said the language server "answered every call site of every
+> question" and was "the most accurate of the three." Neither holds any more. `callers` on a Go
+> interface method now also reports the calls that run through an implementation of it, and p-graph
+> reads 277 of 279 here: level with grep, 2 short of gopls, at a third less cost than either. See
+> "Why Go moved" below for what changed and why it took two fixes, not one.
 
-What it costs is steps: 17.1 against 9.3. The mechanism is the API. `LSP` is addressed by file, line
-and character, so a list of N call sites costs about N calls, where a graph query costs one. The tool
-breakdown shows the arm is not even pure LSP — 4.1 `LSP` calls a question and **5.3 greps**, because
-the agent opens the lines it is told about to check the receiver.
+**The language server is still the most expensive of the three in round trips, and it no longer has
+sole claim to the most accurate.** gopls finds 2 more call sites of 279 than grep or p-graph, both of
+which are now level with each other. That is what a type checker should do on Go, and it still does
+it — but it costs about half again what p-graph pays, at about twice the steps.
+
+What it costs is steps: 17.1 against p-graph's 8.8. The mechanism is the API. `LSP` is addressed by
+file, line and character, so a list of N call sites costs about N calls, where a graph query costs
+one. The tool breakdown shows the arm is not even pure LSP — 4.1 `LSP` calls a question and **5.3
+greps**, because the agent opens the lines it is told about to check the receiver.
 
 Two things decide when the graph still wins:
 
@@ -1457,8 +1475,28 @@ Two things decide when the graph still wins:
   `compile_commands.json`. On the machine this was measured on, C++ has no toolchain at all — no
   `cmake`, no `ninja`, no compiler — so clangd could not be run on rocksdb or leveldb, while p-graph
   indexes both from text. That is not a footnote; it is the whole reason a parser-based graph exists.
-- **It walks a chain one request per hop.** 28.7 steps against p-graph's 8.7 on the transitive
+- **It walks a chain one request per hop.** 28.7 steps against p-graph's 12.3 on the transitive
   question, where `impact` answers in one call.
+
+### Why Go moved
+
+**The code.** `callers` on a method an interface declares now also reports the calls that run an
+implementation of it. Before, `callers caddyhttp.Handler.ServeHTTP` named 1 of the 18 calls in
+caddy's `modules/caddyhttp/metrics_test.go`; now it names 18. Separately, a Go interface declaring
+several methods used to keep only its first — 13 caddy interfaces declared 31 methods and the graph
+held 13; now 31. The same defect existed in TypeScript and was fixed too: nest's indexed
+interface-method count went from 101 to 283.
+
+**The wording, and it was worth as much as the code.** With the code fixed, the first re-measurement
+came back with Go recall unchanged. The graph reported all 18 sites and the agent printed all 18 with
+line numbers — under a heading it invented: *"Calls to the same 2-arg/error signature on a concrete
+type that implements `Handler` (17 sites, tests only) … a concrete implementer of `Handler`, not the
+interface value itself."* The extraction step took **1 of 18** from that answer, where it took 18 of
+18 from the grep and server answers. The cause: the rule's table of "what this line means, what to
+do" had a row for the older interface-reach heading and **no row for the new one**, so the agent had
+nothing to follow and chose the cautious reading. Adding the row and rewording the heading took that
+question from 104 to 152 of 153. That is the **fourth** time this study has found wording moving the
+number more than code did — see "What we got wrong" for the other three.
 
 ### TypeScript: the server came last, and the project's own tsconfig says why
 
@@ -1670,14 +1708,23 @@ had read 9, 0 and 24. The three that remain are one each on three questions, and
 genuine error: an lsp run put `should_redirect_with_slash` on the chain, and it does not reach the
 target.
 
-**The advice this arm supports, now that all four languages have run:** for Go, reach for the
-language server first — it answered every call site of every question. Everywhere else, know what
-bounds its answer before you trust it. TypeScript is bounded by what `tsconfig.json` covers: a
+> **Withdrawn.** This paragraph used to open "for Go, reach for the language server first — it
+> answered every call site of every question." That was true when it was written and it is not the
+> advice any more: p-graph now reads 277 of 279 on the same Go questions, level with grep and 2 short
+> of the server, at a third less cost. See "Why Go moved".
+
+**The advice this arm supports, now that all four languages have run and the Go fix has landed:** the
+server wins no language outright. Over the 33 list questions all three arms share, p-graph is now
+ahead of the server study-wide — 1,542 call sites of 1,575 against 1,442 — because what it loses to
+gopls on Go (277 against 279, 2 sites) it more than makes back on Python, C++ and TypeScript, where
+the server is bounded in ways a graph is not. TypeScript is bounded by what `tsconfig.json` covers: a
 monorepo split into per-package projects, or a project that excludes its tests, is short and does not
 say so. Python is bounded by which files are open, so ask again after reading more; per call it is
 the cheapest of the three. C++ is bounded twice over — by the compile database, and by the fact that
 a virtual method's callers are split between the declaration and each override, so "who calls this"
-needs one question per override.
+needs one question per override. Weighing recall, invented rows, cost and steps together, per
+language: **Go and C++ favour p-graph, Python and TypeScript favour grep** — the server is not the
+first reach for any of them, even on Go.
 
 Reach for p-graph for "what breaks if I change X" on a big repository, for any repository that does
 not build, for any question whose callers live outside the type program, and for a virtual or
@@ -1824,6 +1871,18 @@ edit reparses in under two seconds.
   agent to grep, so the run paid for both. Two more fixes took it to 27 sites and 14 rows and the cost
   to $0.83. Third round in a row where the deciding factor was the size of the banner, not the size of
   the answer.
+- **We fixed the graph, re-measured, and Go recall did not move — because the wording, not the code,
+  was still the problem.** Indexing implementer calls through an interface method took
+  `caddy-handler-servehttp` from 1 of 18 call sites resolved to 18 of 18, but the first re-measurement
+  after the fix landed came back unchanged: the agent printed all 18 lines with citations, then filed
+  them under a heading it invented on the spot — "a concrete implementer of `Handler`, not the
+  interface value itself" — because the rule's table of headings had a row for the old wording and
+  none for the new one. The extractor read that heading as a hedge and scored 1 of 18. Adding the
+  missing row and rewording the heading, with no change to the graph, took the question from 104 to
+  152 of 153. **That is the fourth time this study has found wording moving the number more than code
+  did** — after the ⚠ banner size on `caddyhttp.Handler.ServeHTTP` two rounds earlier, on
+  `re2::Prog::size`, and on `AxiosHeaders.has`. Reading the answer the agent actually produced, not
+  just the graph data behind it, is now part of shipping any fix to a heading.
 - **We tried to hide rows we had promised to show, and only the tests caught it.** The gap filter was
   first written as "drop any row whose receiver the source types as something other than the target".
   That reads fine and it is wrong: a call on a LIBRARY type is refused by the resolver and REPORTED, and
@@ -1993,6 +2052,12 @@ Changed already, on the strength of this page:
   the name lookup walks outward the way C++ does. See "The four C++ fixes".
 - **A gap report keeps to the target's language, and an unknown symbol never claims completeness.**
 - **The noise floor is printed by the script**, so no number on this page exists only in the document.
+- **`callers` on a Go interface method reports the calls that run through an implementation of it**,
+  and a Go interface keeps every method it declares, not just its first. TypeScript's indexed
+  interface-method count got the same fix. See "Why Go moved".
+- **The implementation-reach heading was reworded** so it reads as part of the answer, not an aside —
+  and the installed rule gained the row that names it, so an agent has somewhere to look up what the
+  heading means. See "Why Go moved" and "What we got wrong".
 
 What the numbers point at next, in order:
 
