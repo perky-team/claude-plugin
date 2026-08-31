@@ -25,7 +25,9 @@ silently miss a hit.
 Then read the three markers in the output:
 
 **1. Guessed rows.** A row printed plainly is certain: the graph knew the target's
-qualified name, or it knew the receiver's type. A row printed under
+qualified name, or it knew the receiver's type. One row can carry several call
+sites, and it is marked by its most certain one — so a plain row promises that at
+least one of its lines is certain, not all of them. A row printed under
 `UNVERIFIED: …, matched by name only (guess) — …` matched on nothing but a bare
 method name that happens to be unique in the repo. Treat it as a lead — open the
 `file:line` and read the call before reporting it — and say which rows were
@@ -50,4 +52,8 @@ symbol to show (made at module scope, or inside a non-definition callback);
 checking, the two counted groups are scale. Pass the banner on and grep to
 confirm. `status` shows the repo-wide share as `unattributed calls N/M`.
 
-Always ask by `qname` — a bare name merges every symbol that shares it.
+Ask by bare name — one call, not two. `callers`, `callees`, `impact`, `context`,
+`trace` and `explore` all resolve an id, a bare name or a `qname` (`node` is the
+exception: id or `qname`). A bare name shared by several symbols merges them, and
+the answer says so on its first line: `target: 2 symbols named Get`, plus the
+qnames to ask by if you need one of them.
