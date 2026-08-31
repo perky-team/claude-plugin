@@ -1327,17 +1327,30 @@ function attachReadHelpers(store, db, hasFts) {
     return db.prepare(`SELECT * FROM nodes WHERE id IN (${holes(ns.length)})
                        OR qname IN (${holes(ns.length)}) LIMIT 1`).get(...ns, ...ns) ?? null;
   };
-  // callers() matches a target by id, qname OR bare name, so the gap report
-  // (gapsFor/gapsAround) has to resolve the same way. Going through store.node()
-  // (id or qname only) meant a bare-name query silently dropped the whole
-  // no-caller report — 184 rows on a real repo — while the rows above it kept
-  // printing. Returns every matching node, so a name shared by several symbols
-  // (e.g. two unrelated classes with the same method name) makes all of them
-  // contribute their gap rows, not just whichever the caller finds first.
+  // The three spellings of one target, as a single SQL condition: an id, a bare
+  // name, or a qname. Every command must find a target the same way, or two
+  // commands answer different questions from the same words. Bind the name list
+  // three times, once per term.
+  //
+  // Two failures came from a query that used a smaller set:
+  //   - `store.node` (id or qname only) resolved the target of `impact` and
+  //     `callees`, so `impact Root` answered about NOTHING for every Go function
+  //     and every method in any language — and then said `✓ complete`. The rule
+  //     this plugin ships tells the agent to ask by bare name.
+  //   - `store.callers` and `store.callees` matched a name or a qname only, so an
+  //     ID argument printed an empty list: `context <node-id>` showed no callers
+  //     at all, with the same `✓ complete` under it.
+  // A node id is 16 hex characters, so it can never collide with a real name.
+  const namesTarget = (alias, n) => `${alias}.id IN (${holes(n)})
+      OR ${alias}.name IN (${holes(n)}) OR ${alias}.qname IN (${holes(n)})`;
+  // Every node one query can mean. Returns ALL of them, so a name shared by
+  // several symbols (e.g. two unrelated classes with the same method name) has
+  // every one of them contribute its rows, not just whichever the caller finds
+  // first.
   const targetsFor = (nameOrId) => {
     const ns = matchNames(nameOrId);
-    return db.prepare(`SELECT * FROM nodes WHERE id IN (${holes(ns.length)})
-      OR qname IN (${holes(ns.length)}) OR name IN (${holes(ns.length)})`).all(...ns, ...ns, ...ns);
+    return db.prepare(`SELECT n.* FROM nodes n
+      WHERE ${namesTarget('n', ns.length)}`).all(...ns, ...ns, ...ns);
   };
   // Grouped by the reported node's id, not SELECT DISTINCT on every column:
   // two edges can reach the same caller/callee, one certain and one a guess,
@@ -1391,7 +1404,7 @@ function attachReadHelpers(store, db, hasFts) {
     WHERE e.kind = 'call' AND e.src_id IS NULL AND (${where})
     GROUP BY e.file ORDER BY e.file`;
   const fileScopeCallers = (ns) => db.prepare(fileScopeSql(
-    `d.name IN (${holes(ns.length)}) OR d.qname IN (${holes(ns.length)})`)).all(...ns, ...ns);
+    namesTarget('d', ns.length))).all(...ns, ...ns, ...ns);
   // `sites` passes straight through so withSites — the one place that parses a
   // site list — is the one that turns it into call_sites, the same as it does for
   // an ordinary node row.
@@ -1407,8 +1420,8 @@ function attachReadHelpers(store, db, hasFts) {
     const nodeRows = withSites(db.prepare(`
       SELECT s.*, ${GUESS_COL} AS guess, ${SITES} FROM edges e JOIN nodes s ON s.id = e.src_id
       JOIN nodes d ON d.id = e.dst_id
-      WHERE d.name IN (${holes(ns.length)}) OR d.qname IN (${holes(ns.length)})
-      GROUP BY s.id`).all(...ns, ...ns));
+      WHERE ${namesTarget('d', ns.length)}
+      GROUP BY s.id`).all(...ns, ...ns, ...ns));
     // Node rows first, file rows last: a reader scans the top of a list.
     return [...nodeRows, ...withSites(fileScopeCallers(ns).map(asFileRow))];
   };
@@ -1417,16 +1430,18 @@ function attachReadHelpers(store, db, hasFts) {
     return withSites(db.prepare(`
       SELECT d.*, ${GUESS_COL} AS guess, ${SITES} FROM edges e JOIN nodes s ON s.id = e.src_id
       JOIN nodes d ON d.id = e.dst_id
-      WHERE s.name IN (${holes(ns.length)}) OR s.qname IN (${holes(ns.length)})
-      GROUP BY d.id`).all(...ns, ...ns));
+      WHERE ${namesTarget('s', ns.length)}
+      GROUP BY d.id`).all(...ns, ...ns, ...ns));
   };
   // Which symbol(s) a bare name actually reaches. `callers Get` merges every
   // symbol named Get and used to do it silently, so a reader had to run `search`
   // first to find out what they were asking about. One call now says so.
+  // Matches an id too, so the "no symbol named X" line cannot fire for an id the
+  // list rows above it just answered for.
   store.symbolsNamed = (name) => {
     const ns = matchNames(name);
-    return db.prepare(`SELECT * FROM nodes WHERE name IN (${holes(ns.length)})
-      OR qname IN (${holes(ns.length)}) ORDER BY qname`).all(...ns, ...ns);
+    return db.prepare(`SELECT n.* FROM nodes n WHERE ${namesTarget('n', ns.length)}
+      ORDER BY n.qname`).all(...ns, ...ns, ...ns);
   };
   store.files = (prefix) => {
     let p = prefix == null ? '' : String(prefix);
@@ -2223,20 +2238,29 @@ function attachReadHelpers(store, db, hasFts) {
   };
   store.gapsFrom = (name) => {
     if (!hasBare) return [];
-    const n = store.node(name);
-    if (!n) return [];
+    // targetsFor, not store.node: `store.callees` matches the caller by id, bare
+    // name or qname, so this report has to match the same way. Through store.node
+    // (id or qname only) a bare-name question got NO gap report at all, and the
+    // answer then claimed to be complete. Measured on a two-class fixture:
+    // `callees T.do` said `⚠ 1 call site missing`, `callees do` said `✓ complete`
+    // about the same method.
+    const targets = targetsFor(name);
+    if (!targets.length) return [];
+    const ids = targets.map((t) => t.id);
     // The language family, same as collectGaps — `callees` and `callers` have to
     // agree about one row. A line that is a gap read one way and not the other is
     // its own bug, and the reader has no way to tell which answer to believe.
     return db.prepare(`
       SELECT e.dst_name, e.dst_bare, e.file, e.line, e.external, e.lang,
+             s.qname AS src_qname,
              (SELECT count(*) FROM nodes n2
               WHERE n2.name = e.dst_bare AND ${SAME_LANG('n2.lang', 'e.lang')}
                 AND n2.kind IN ('function','method','class')) AS candidates,
              ${QUALIFIER_KNOWN_SQL('e.dst_name', 'n3', 'e.lang')} AS qualifier_known
-      FROM edges e WHERE e.kind = 'call' AND e.dst_id IS NULL AND e.src_id = ?
-      ORDER BY e.file, e.line`).all(n.id).map((r) => ({
-        file: r.file, line: r.line, dst_name: r.dst_name, src_qname: n.qname,
+      FROM edges e JOIN nodes s ON s.id = e.src_id
+      WHERE e.kind = 'call' AND e.dst_id IS NULL AND e.src_id IN (${holes(ids.length)})
+      ORDER BY e.file, e.line`).all(...ids).map((r) => ({
+        file: r.file, line: r.line, dst_name: r.dst_name, src_qname: r.src_qname,
         // Must agree with collectGaps' reason above: external when there is no
         // repo candidate at all, OR when a qualifier was written and it does
         // not name a repo package.
@@ -2248,11 +2272,16 @@ function attachReadHelpers(store, db, hasFts) {
   // anything the walk already reached, which is where it stopped.
   //
   // Resolved with targetsFor, same reasoning as gapsFor: a bare name can match
-  // several symbols. impact() itself still walks from one id at a time (a
-  // frontier is a per-symbol call graph, blending several would confuse the
-  // walk), so run it once per matched target and merge the frontiers. A node
-  // already counted as a target is dropped from the merged "reached" set so it
-  // does not also show up as its own reached neighbour.
+  // several symbols. The walk still starts from one node at a time (a frontier is
+  // a per-symbol call graph, blending several would confuse the walk), so run it
+  // once per matched target and merge the frontiers. A node already counted as a
+  // target is dropped from the merged "reached" set so it does not also show up
+  // as its own reached neighbour.
+  //
+  // impactNodes, not store.impact: the node rows are the frontier, and a file is
+  // not a symbol — `symbolOf` would read `app/boot.js` as a qname and hand the
+  // gap report `app/boot` as an owner type to match call receivers against. A
+  // file-scope call is a leaf too, so it hides no further frontier anyway.
   store.gapsAround = (name) => {
     if (!hasBare) return [];
     const targets = targetsFor(name);
@@ -2260,13 +2289,8 @@ function attachReadHelpers(store, db, hasFts) {
     const targetIds = new Set(targets.map((t) => t.id));
     const reachedById = new Map();
     for (const t of targets) {
-      for (const n of store.impact(t.qname)) {
-        // `store.impact` also returns a synthetic `kind: 'file'` row per file
-        // that calls into the reached set. A file is not a symbol: `symbolOf`
-        // would read `app/boot.js` as a qname and hand the gap report `app/boot`
-        // as an owner type to match call receivers against. Skip them — and a
-        // file-scope call is a leaf, so it hides no further frontier anyway.
-        if (n.kind !== 'file' && !targetIds.has(n.id)) reachedById.set(n.id, n);
+      for (const n of impactNodes(t)) {
+        if (!targetIds.has(n.id)) reachedById.set(n.id, n);
       }
     }
     const reached = [...reachedById.values()];
@@ -2296,19 +2320,54 @@ function attachReadHelpers(store, db, hasFts) {
   // in one place because three queries below must read the same frontier — the
   // node rows, the file-scope rows and the count of refused guesses. If they
   // disagreed, the answer would name a node the count did not cover.
-  const UP_CTE = `
+  //
+  // Seeded from a LIST of ids, not one. A bare name can mean several symbols, and
+  // `impact` answers for all of them, the same as `callers` does. The walk from a
+  // set of seeds reaches exactly the union of the walks from each seed, so one
+  // query answers for the whole set.
+  const upCte = (n) => `
       WITH RECURSIVE up(id, depth) AS (
-        SELECT ?, 0
+        SELECT id, 0 FROM nodes WHERE id IN (${holes(n)})
         UNION
         SELECT e.src_id, up.depth + 1 FROM edges e
         JOIN up ON e.dst_id = up.id
         WHERE up.depth < ${MAX_DEPTH} AND e.src_id IS NOT NULL ${GUESS_FILTER}
       )`;
+  // The node rows of the walk from ONE symbol. Kept apart from store.impact so
+  // store.gapsAround can walk from a node it has already resolved, instead of
+  // resolving the same name a second time.
+  //
+  // `guess` and `call_sites` keep ONE row shape in the JSON array. A file row
+  // carries both; a node row carried neither, so a consumer reading
+  // `json.impact.map((r) => r.call_sites.length)` threw as soon as the walk
+  // returned a node. Both are additive — `--json` is a contract, so no existing
+  // field changes value or disappears — and both say something true:
+  //   `guess: 0`      the walk follows certain edges only (GUESS_FILTER), so
+  //                   every node it reached is certain by construction.
+  //   `call_sites: []` this walk reports WHICH symbols break, not where each one
+  //                   writes its call. `callers` is the command that reports call
+  //                   sites, and it fills this key in.
+  const impactNodes = (target) => db.prepare(`${upCte(1)}
+      SELECT DISTINCT n.* FROM nodes n JOIN up ON n.id = up.id
+      WHERE n.id != ?`).all(target.id, target.id).map((n) => ({ ...n, guess: 0, call_sites: [] }));
   store.impact = (name) => {
-    const target = store.node(name);
-    if (!target) return [];
-    const nodeRows = db.prepare(`${UP_CTE}
-      SELECT DISTINCT n.* FROM nodes n JOIN up ON n.id = up.id WHERE n.id != ?`).all(target.id, target.id);
+    // targetsFor, not store.node: store.node matches an id or a qname and never a
+    // bare name, so `impact Root` returned [] for every Go function and for every
+    // method in any language — and the answer then said `✓ complete` over
+    // nothing, on the path the shipped rule tells the agent to use.
+    const targets = targetsFor(name);
+    if (!targets.length) return [];
+    // One walk per matched symbol, merged by node id. A node reached from two
+    // same-named targets is one answer, not two — the same rule `callers` follows
+    // when it groups its rows by the caller's id.
+    //
+    // Each walk excludes its OWN start and no other, so a symbol that shares the
+    // name AND calls the other one still shows up as impacted — which is what
+    // `callers` reports for the same pair.
+    const byId = new Map();
+    for (const t of targets) {
+      for (const r of impactNodes(t)) if (!byId.has(r.id)) byId.set(r.id, r);
+    }
     // A call written outside any function breaks when the target changes, so it
     // belongs in "what breaks if I change X" — but nothing calls a top-level
     // statement, so it is a LEAF: it ends the chain instead of extending it.
@@ -2321,14 +2380,21 @@ function attachReadHelpers(store, db, hasFts) {
     // of them breaks too. `m.eject(1)` at module scope and `mid()` at module
     // scope, where `mid` calls `eject`, are both real answers.
     //
+    // Asked ONCE for every target, not once per target, because SQL is where the
+    // grouping happens: one file holding a top-level call to two same-named
+    // targets must come out as one row carrying both lines. Merging per-target
+    // rows in JS would have to redo that grouping, and getting it wrong drops a
+    // real call site under `✓ complete`.
+    //
     // GUESS_FILTER, the same rule the walk above follows. A guessed row here
     // would sit in a flat list next to certain ones with nothing to tell them
     // apart, and `impact` exists to answer without false alarms. The refused ones
     // are counted by store.impactSkippedGuesses instead, which blocks ✓ complete.
+    const ids = targets.map((t) => t.id);
     const fileRows = withSites(db.prepare(fileScopeSql(
-      `e.dst_id IN (SELECT id FROM up) ${GUESS_FILTER}`, UP_CTE)).all(target.id).map(asFileRow));
+      `e.dst_id IN (SELECT id FROM up) ${GUESS_FILTER}`, upCte(ids.length))).all(...ids).map(asFileRow));
     // Node rows first, file rows last: a reader scans the top of a list.
-    return [...nodeRows, ...fileRows];
+    return [...byId.values(), ...fileRows];
   };
   // How many guessed edges the walk above refused to follow, for this one
   // target. `impact` returning [] means one of two very different things:
@@ -2347,13 +2413,20 @@ function attachReadHelpers(store, db, hasFts) {
   // no longer in the gap report. Counting it here is the only thing that stops
   // an empty list plus `✓ complete` over a real call site the graph could not
   // settle.
+  //
+  // Resolved with targetsFor, exactly like store.impact: with store.node here the
+  // count and the walk described different targets, so a bare-name question got
+  // an empty list, a count of 0 and `✓ complete` over a call site the graph could
+  // not settle. One walk over all the matched targets, not a sum of per-target
+  // counts — a sum would count the same guessed edge twice when two targets reach
+  // the same node.
   store.impactSkippedGuesses = (name) => {
     if (!hasGuess) return 0; // no column, so nothing on this DB is a guess
-    const target = store.node(name);
-    if (!target) return 0;
-    return db.prepare(`${UP_CTE}
+    const ids = targetsFor(name).map((t) => t.id);
+    if (!ids.length) return 0;
+    return db.prepare(`${upCte(ids.length)}
       SELECT count(*) AS c FROM edges e JOIN up ON up.id = e.dst_id
-      WHERE e.guess = 1`).get(target.id).c;
+      WHERE e.guess = 1`).get(...ids).c;
   };
   // How X reaches Y, and how sure each step is. Returns
   // `{ path: [qname, …], guessed: [bool, …] }` with one flag per ARROW, so
