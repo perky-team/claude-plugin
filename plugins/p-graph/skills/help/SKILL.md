@@ -54,6 +54,9 @@ confirm. `status` shows the repo-wide share as `unattributed calls N/M`.
 
 Ask by bare name — one call, not two. `callers`, `callees`, `impact`, `context`,
 `trace` and `explore` all resolve an id, a bare name or a `qname` (`node` is the
-exception: id or `qname`). A bare name shared by several symbols merges them, and
-the answer says so on its first line: `target: 2 symbols named Get`, plus the
-qnames to ask by if you need one of them.
+exception: id or `qname`). When a bare name is shared, `callers`, `callees` and
+`impact` merge the symbols into one list and say so on their first line:
+`target: 2 symbols named Get`, plus the qnames to ask by. The other three have no
+such line, because they name what they resolved themselves: `context` prints a
+declaration row per symbol, `explore` prints one row per symbol, and `trace`
+names both ends in the route.

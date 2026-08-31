@@ -30,7 +30,7 @@ finds no extra call site.
 
 | Question | Command |
 |---|---|
-| Where is symbol X defined? | `pgraph search X` then `pgraph node X` |
+| Where is symbol X defined? | `pgraph search X` — it already prints the kind, qname, `file:line` and signature. `pgraph node <qname>` adds the doc comment, and it takes an id or a qname, never a bare name |
 | What calls Y? | `pgraph callers Y` |
 | What does Y call? | `pgraph callees Y` |
 | What breaks if I change Z? | `pgraph impact Z` |
@@ -65,8 +65,7 @@ certain call and one guess in the same caller: `callers Manager.eject` prints
 `function run  app/run.js:2`, which is where `run` is written, not where it calls. So a row
 appearing in `impact` does NOT settle its call sites. The only signal there is the
 `guessed edge … not followed` count, and it does not say which line — so **open every line
-of a plain row you are about to rely on.** The mixed node row is the common case; the mixed
-file row is the rare one.
+of a plain row you are about to rely on.** This applies to a node row and a file row alike.
 
 **`impact` is a floor, not a ceiling.** It follows certain edges only and never walks a
 guess, so a real dependency can be missing. When it refuses one it prints a line like

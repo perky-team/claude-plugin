@@ -44,7 +44,7 @@ Run every command via `node "${CLAUDE_PLUGIN_ROOT}/tools/pgraph.mjs" <cmd>`. ALW
 
 | Question | Command(s) |
 |---|---|
-| Where is symbol X defined? | `search X` then `node X` |
+| Where is symbol X defined? | `search X` — it prints the kind, the qname, the `file:line` and the signature. Add `node <the qname search printed>` only if you need the doc comment; `node` takes an id or a qname, never a bare name |
 | What calls Y? | `callers Y` |
 | What does Y call? | `callees Y` |
 | What breaks if I change Z? | `impact Z` (a floor, not a ceiling — see Step 3) |
@@ -58,7 +58,7 @@ that to `callers` / `callees` / `impact` / `trace`. A name you do know needs no 
 when it is shared — see "A bare name is one call, not two" below. `context X` is the fastest
 single call for "tell me about X" — one call returns the symbol plus its immediate callers and
 callees. Pass `--json` to any read command if you want to post-process the rows: `callers`,
-`callees` and `impact` return `{ <command>: [rows], gaps: [gap rows] }`. A `callers` or `callees`
+`callees` and `impact` return `{ <command>: [rows], targets: [every symbol the name resolved to], gaps: [gap rows] }`. Read `targets` before attributing a row: a shared bare name merges the symbols, and `targets` is the only place the JSON says so. A `callers` or `callees`
 row carries a `guess` field — 0 is certain, 1 is matched by name only. Every gap row carries
 `reason` and `reachable`. `impact` walks certain edges only, and adds `skipped_guesses`: the number
 of guessed edges it refused to follow. `context --json` returns
