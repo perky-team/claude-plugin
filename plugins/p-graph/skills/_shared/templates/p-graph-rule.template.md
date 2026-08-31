@@ -17,7 +17,7 @@ endings mean opposite things:
 |---|---|---|
 | `✓ complete — …` | the graph found nothing missing | **stop. Do not grep. Report the list as it stands.** |
 | `✓ no gaps — but every row above is a guess …` | nothing is missing, and nothing is settled either | do not grep for more rows; **open the rows you have** and say which survived |
-| `⚠ N call sites missing from this answer` | the graph knows it is short, and it prints every missing row with its own `file:line` | **every printed row is a candidate the graph could not settle: open that line and judge it.** The middle column names the code the call sits in; `file scope` means the call is written outside any function, and that is still a candidate, not a confirmed call site. Never grep for a line the banner has already named |
+| `⚠ N call sites missing from this answer` | the graph knows it is short, and it names each missing row with its own `file:line` — the first 20, then `… and N more` for the rest | **every printed row is a candidate the graph could not settle: open that line and judge it.** The middle column names the code the call sits in; `file scope` means the call is written outside any function, and that is still a candidate, not a confirmed call site. Never grep for a line the banner has already named |
 | `no symbol named X in the graph` | nothing carries that name | check the spelling with `pgraph search X` — this is **not** "nothing calls it" |
 | `ℹ N call sites reach this method through I` | the calls are written on an interface, so no call names this method | **do not grep.** Report both: this method has no direct callers, and N calls reach it through `I`. Which implementation runs is a run-time decision |
 | `ℹ N call sites of this method — on I, which implements it` | these ARE call sites of the method you asked about — `I` is the concrete type the graph resolved each one to | **do not grep.** Put them in your main list of call sites, and name `I` as the implementing type. Nothing here is missing or needs a text search |
@@ -52,6 +52,13 @@ matched was a bare method name that happens to be unique in this repo. **Treat a
 as a lead: open the `file:line`, read the call, and say in your answer which rows were
 guesses.** Never fold them into the certain list.
 
+One row can carry several call sites, and it is marked by its **most certain** one. So a
+plain row promises that **at least one** of its lines is certain, not all of them — a
+guessed call site can print beside a certain one with nothing to mark it. `impact` splits
+them, because it lists only the certain ones. Measured on a two-call file: `callers`
+prints `file app/boot.js  3, 4` plainly, `impact` prints `file app/boot.js  3` and says
+one guessed edge was not followed — so line 4 is the guess.
+
 **`impact` is a floor, not a ceiling.** It follows certain edges only and never walks a
 guess, so a real dependency can be missing. When it refuses one it prints a line like
 `1 guessed edge (receiver type unknown) near this target was not followed, so a real impact through one may be missing.`
@@ -81,10 +88,11 @@ module's top level, a Go package-level `var x = pkg.New()`, a `@Injectable()` on
 class — has no enclosing symbol to name, so `callers`, `context` and `impact` name the
 **file** that holds it and put every line on one row: `file app/boot.js  3, 4`. The
 line numbers are already on the row, so never grep for them. Such a row is marked like
-any other: printed plainly it is certain and you report it as it stands; printed under
-`UNVERIFIED: … (guess)` it is a guess, so open it and judge it as you would any other
-guess. `impact` is stricter — it lists only the certain ones and adds a guessed one to
-its `guessed edge … not followed` count, which also stops it saying `✓ complete`.
+any other, and the same "most certain one" rule applies: printed plainly at least one
+of its lines is certain, printed under `UNVERIFIED: … (guess)` every line on it is a
+guess. `impact` is stricter, and it is what tells a mixed row apart — it lists only the
+certain call sites and adds a guessed one to its `guessed edge … not followed` count,
+which also stops it saying `✓ complete`.
 Across ten repos 4,672 of 4,998 resolved file-scope calls (93%) are certain, so 326
 are counted instead of listed.
 

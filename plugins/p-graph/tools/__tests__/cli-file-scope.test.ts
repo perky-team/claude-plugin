@@ -138,4 +138,52 @@ mid();
     expect(fileRow.start_line).toBe(null);
     expect(fileRow.call_sites.map((s) => s.line)).toEqual([3, 4]);
   }, 30000);
+
+  // One file, one certain call and one guessed call. A row's `guess` is
+  // MIN(e.guess) over the calls it groups, so the row folds to CERTAIN and the
+  // guessed line prints beside the certain one with nothing on the row to say so.
+  // Node rows have always folded this way, and nothing here is invented — but the
+  // rule tells the reader what a plain row is worth, so what a plain row really
+  // promises has to be pinned: at least one of its lines is certain, not all of
+  // them. `impact` is the way to split them, because it lists only the certain
+  // ones.
+  describe('a file that holds one certain call and one guess', () => {
+    beforeEach(() => {
+      // `const m = new Manager()` writes the receiver's type, so line 3 is
+      // certain. `new Manager().eject(2)` on line 4 is matched by the method name
+      // alone, so it is a guess.
+      write('app/boot.js', `import { Manager } from '../lib/manager.js';
+const m = new Manager();
+m.eject(1);
+new Manager().eject(2);
+`);
+      run(['index', '--full']);
+    });
+
+    it('prints one plain row for callers, holding both lines', async () => {
+      const text = run(['callers', 'Manager.eject']);
+      expect(text).toMatch(/file app\/boot\.js\s+3, 4/);
+      // Nothing marks the guessed line, and the answer still says complete —
+      // which is true, because no call site is missing.
+      expect(text).not.toContain('UNVERIFIED');
+      expect(text).toContain('✓ complete');
+
+      const json = JSON.parse(run(['callers', 'Manager.eject', '--json']));
+      const fileRow = json.callers.find((r) => r.kind === 'file');
+      expect(fileRow.guess).toBe(0);
+      expect(fileRow.call_sites.map((s) => s.line)).toEqual([3, 4]);
+    }, 30000);
+
+    it('shows only the certain line in impact, and says a guess was refused', async () => {
+      const lines = run(['impact', 'Manager.eject']).split('\n').map((l) => l.trim());
+      expect(lines).toContain('file app/boot.js  3');
+      expect(lines).not.toContain('file app/boot.js  3, 4');
+
+      const text = run(['impact', 'Manager.eject']);
+      expect(text).toContain('1 guessed edge');
+      // A refused edge disqualifies the completeness claim on its own.
+      expect(text).not.toContain('✓ complete');
+      expect(JSON.parse(run(['impact', 'Manager.eject', '--json'])).complete).toBe(false);
+    }, 30000);
+  });
 });
