@@ -25,7 +25,7 @@ afterEach(() => rmSync(dir, { recursive: true, force: true }));
 // in any language, and then said `✓ complete`. The rule this plugin ships tells
 // the agent to ask by bare name ("Ask by bare name — one call, not two"), so that
 // is the documented path.
-describe('impact answers a bare name, the same as callers does', () => {
+describe('every command answers a bare name, the same as callers does', () => {
   beforeEach(() => {
     write('go.mod', 'module x\n\ngo 1.21\n');
     write('svc/svc.go', `package svc
@@ -84,6 +84,61 @@ func Mid() int { return svc.Root() }
       expect(text).toContain('✓ complete');
     }
   }, 30000);
+
+  // `store.trace` resolved BOTH endpoints with store.node, so `trace Mid Root`
+  // printed `(no path)` while `trace app.Mid svc.Root` printed the path. Nothing
+  // rescued it: no banner, and exit 0. The skill tells the agent that `(no path)`
+  // means the graph found nothing along resolved calls, so the agent reports "there
+  // is no path" as a fact about the code.
+  it('traces between two bare names', () => {
+    const bare = run(['trace', 'Mid', 'Root']);
+    expect(bare).not.toContain('(no path)');
+    expect(bare).toContain('app.Mid -> svc.Root');
+
+    const byBare = JSON.parse(run(['trace', 'Mid', 'Root', '--json']));
+    const byQname = JSON.parse(run(['trace', 'app.Mid', 'svc.Root', '--json']));
+    expect(byBare.path).toEqual(['app.Mid', 'svc.Root']);
+    expect(byBare.path).toEqual(byQname.path);
+    expect(byBare.guessed_hops).toEqual([false]);
+  }, 30000);
+
+  // "no path between these two" and "I never found one of these two" are different
+  // answers, and `(no path)` said the first when the second was true.
+  it('says an endpoint is unknown instead of printing (no path)', () => {
+    const text = run(['trace', 'Mid', 'Nope']);
+    expect(text).toContain('no symbol named Nope in the graph');
+    expect(text).not.toContain('(no path');
+
+    const json = JSON.parse(run(['trace', 'Mid', 'Nope', '--json']));
+    expect(json.path).toBeNull();
+    expect(json.unknown_symbols).toEqual(['Nope']);
+  }, 30000);
+
+  // `explore` mapped store.node over its arguments and dropped every miss, so
+  // `explore Root` printed nothing at all and exited 0 — and the rule lists
+  // `pgraph explore A B C` as the way to ask about several symbols at once.
+  it('explores a bare name', () => {
+    expect(run(['explore', 'Root'])).toContain('function svc.Root');
+    const rows = JSON.parse(run(['explore', 'Root', 'Mid', '--json']));
+    expect(rows.map((r) => r.qname).sort()).toEqual(['app.Mid', 'svc.Root']);
+  }, 30000);
+
+  it('says so when an explored name is in nothing', () => {
+    expect(run(['explore', 'Nope'])).toContain('no symbol named Nope in the graph');
+  }, 30000);
+
+  // `context` exited 1 for every Go function and every method, because its header
+  // row still came from store.node while its lists already matched a bare name.
+  it('gives a bare name the context the qname gives', () => {
+    const byBare = run(['context', 'Root']);
+    const byQname = run(['context', 'svc.Root']);
+    for (const text of [byBare, byQname]) {
+      expect(text).toContain('function svc.Root');
+      expect(text).toContain('function app.Mid');
+      expect(text).toMatch(/file app\/app\.go\s+5/);
+    }
+    expect(JSON.parse(run(['context', 'Root', '--json'])).node.qname).toBe('svc.Root');
+  }, 30000);
 });
 
 describe('a bare name shared by two symbols is answered for both', () => {
@@ -120,6 +175,23 @@ var _ = func() { pkgb.Run() }()
 `);
     run(['index', '--full']);
   });
+
+  // `callers Run` prints "2 symbols named Run — the rows below merge all of them",
+  // `impact Run` printed pkga.Run's blast radius with nothing said. So "what breaks
+  // if I change Run" attributed one package's callers to the other one's function.
+  // The rule promises the first line of the answer names the symbol it resolved.
+  it('says which symbols it merged, the same as callers does', () => {
+    for (const cmd of ['callers', 'impact', 'context']) {
+      const text = run([cmd, 'Run']);
+      expect(text).toContain('2 symbols named Run — the rows below merge all of them.');
+      expect(text).toContain('Ask by qname to separate: pkga.Run, pkgb.Run');
+    }
+  }, 30000);
+
+  it('explores every symbol a shared name carries', () => {
+    const rows = JSON.parse(run(['explore', 'Run', '--json']));
+    expect(rows.map((r) => r.qname)).toEqual(['pkga.Run', 'pkgb.Run']);
+  }, 30000);
 
   it('unions the two impacts and names each row once', () => {
     const json = JSON.parse(run(['impact', 'Run', '--json']));

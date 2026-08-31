@@ -2421,9 +2421,20 @@ function attachReadHelpers(store, db, hasFts) {
   // runs first over certain edges only, and falls back to all edges. Two edges
   // between the same pair collapse to the more certain one (MIN), because the
   // hop is then real however the other edge was resolved.
+  //
+  // BOTH ends are resolved with targetsFor, for the reason on namesTarget above:
+  // store.node matches an id or a qname and never a bare name. Measured on a Go
+  // graph where app.Mid calls svc.Root, `trace Mid Root` printed `(no path)` while
+  // `trace app.Mid svc.Root` printed the path. That is the worst shape a wrong
+  // answer can take here: no banner, exit 0, and the skill tells the agent that
+  // `(no path)` means the graph looked along resolved calls and found nothing.
+  // ALL the matched starts seed ONE breadth-first walk and it stops at the first
+  // matched end, so a shared name costs no extra pass, and the route it prints
+  // names the pair it used.
   store.trace = (fromName, toName) => {
-    const from = store.node(fromName), to = store.node(toName);
-    if (!from || !to) return null;
+    const fromIds = targetsFor(fromName).map((t) => t.id);
+    const toIds = new Set(targetsFor(toName).map((t) => t.id));
+    if (!fromIds.length || !toIds.size) return null;
     const edges = db.prepare(`
       SELECT src_id, dst_id, ${hasGuess ? 'MIN(guess)' : '0'} AS guess FROM edges
       WHERE dst_id IS NOT NULL AND src_id IS NOT NULL
@@ -2437,11 +2448,11 @@ function attachReadHelpers(store, db, hasFts) {
     // allows. `hops` holds the guess flag of the arrow that led to each node
     // after the first, so it is always one shorter than `ids`.
     const walk = (certainOnly) => {
-      const q = [{ ids: [from.id], hops: [] }], seen = new Set([from.id]);
+      const q = fromIds.map((id) => ({ ids: [id], hops: [] })), seen = new Set(fromIds);
       while (q.length) {
         const cur = q.shift();
         const last = cur.ids[cur.ids.length - 1];
-        if (last === to.id) return cur;
+        if (toIds.has(last)) return cur;
         for (const nx of next.get(last) ?? []) {
           if (certainOnly && nx.guess) continue;
           if (seen.has(nx.id)) continue;

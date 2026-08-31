@@ -372,9 +372,19 @@ export async function runCommand(ctx) {
     // name no symbol carries, for the reason on noSuchSymbol.
     const known = store.symbolsNamed(target);
     const complete = !gapsOff && known.length > 0 && skippedGuesses === 0 && nothingMissing(gaps);
-    if (opts.json) return emitJson({ impact: rows, gaps, skipped_guesses: skippedGuesses, complete,
+    // `targets` for the same reason the text prints a `target:` line: without it a
+    // --json reader cannot see that two symbols share the name and the rows merge
+    // both. Additive, and the same field `callers` and `callees` already return.
+    if (opts.json) return emitJson({ impact: rows, targets: known, gaps, skipped_guesses: skippedGuesses, complete,
       ...(gapsOff ? { gaps_unavailable: true } : {}) });
-    if (!known.length) out(noSuchSymbol(target));
+    // The same first line `callers` prints, and for the same reason: a bare name
+    // can carry several symbols, and `impact` merged their blast radius in
+    // silence. Measured on two Go packages that both export `Run`, where only
+    // pkga.Run has a caller: `callers Run` said "2 symbols named Run", `impact
+    // Run` printed pkga.Run's rows with nothing said — so "what breaks if I
+    // change Run" attributed one package's callers to the other's function. This
+    // also prints the "no symbol named X" line, so it replaces that call.
+    emitTargets(target);
     rows.length ? rows.forEach((r) => out(fmtNode(r))) : out('(no impact)');
     // Only say this when it is actually true for this query — with no guess
     // anywhere near the target, the line would always print and never mean
@@ -389,7 +399,13 @@ export async function runCommand(ctx) {
   }
   if (command === 'trace') {
     if (opts._[0] === undefined || opts._[1] === undefined) die('trace needs two symbols');
-    const found = store.trace(opts._[0], opts._[1]);
+    const [fromName, toName] = opts._;
+    // "there is no path between these two" and "I never found one of these two"
+    // are different answers, and `(no path)` gave the first when the second was
+    // true. Both endpoints now resolve by bare name (store.trace), so this is the
+    // one case left, and it is reported in the words `callers` uses.
+    const unknown = [...new Set([fromName, toName])].filter((nm) => !store.symbolsNamed(nm).length);
+    const found = unknown.length ? null : store.trace(fromName, toName);
     const st = store.status();
     const guessedHops = found ? found.guessed.filter(Boolean).length : 0;
     if (opts.json) {
@@ -400,8 +416,10 @@ export async function runCommand(ctx) {
         guessed_hops: found?.guessed ?? null,
         certain: found ? guessedHops === 0 : null,
         unresolved_calls: st.unresolved_calls, call_edges: st.call_edges,
+        ...(unknown.length ? { unknown_symbols: unknown } : {}),
       });
     }
+    if (unknown.length) { unknown.forEach((nm) => out(noSuchSymbol(nm))); return; }
     if (found) {
       // Mark the ARROW, because a guess is a fact about the step, not about
       // either symbol: the symbols on both sides are really in the graph.
@@ -420,9 +438,16 @@ export async function runCommand(ctx) {
       : '(no path)');
   }
   if (command === 'context') {
-    const n = store.node(needArg('a symbol')); if (!n) die('symbol not found', 1);
-    const gapsIn = store.gapsFor(opts._[0]);
-    const gapsOut = store.gapsFrom(opts._[0]);
+    const target = needArg('a symbol');
+    // Resolved with symbolsNamed, not store.node: the header came from store.node,
+    // which matches an id or a qname and never a bare name, so `context Root` exited
+    // 1 for every Go function and every method in any language while its own lists
+    // already matched the bare name. It still exits 1 when nothing carries the name.
+    const known = store.symbolsNamed(target);
+    if (!known.length) die('symbol not found', 1);
+    const n = known[0];
+    const gapsIn = store.gapsFor(target);
+    const gapsOut = store.gapsFrom(target);
     // A call from X whose bare name matches X's own name (wrapper delegation,
     // e.g. Counter.Write calling a field's Write) shows up in BOTH gapsIn (it
     // names the target) and gapsOut (X itself made the call). Dedupe on the
@@ -436,11 +461,16 @@ export async function runCommand(ctx) {
     });
     const complete = !gapsOff && nothingMissing(gaps);
     const ctxObj = {
-      node: n, callers: store.callers(opts._[0]), callees: store.callees(opts._[0]),
+      node: n, targets: known,
+      callers: store.callers(target), callees: store.callees(target),
       gaps_in: gapsIn, gaps_out: gapsOut, gaps, complete,
     };
     if (opts.json) return emitJson(gapsOff ? { ...ctxObj, gaps_unavailable: true } : ctxObj);
-    out(fmtNode(n));
+    // The lists below merge every symbol the name carries, so say so before them —
+    // the same line `callers` prints. `node` in --json stays one row, and `targets`
+    // carries them all.
+    if (known.length > 1) emitTargets(target);
+    known.forEach((k) => out(fmtNode(k)));
     // Same split as `callers`/`callees`, run through the same function, so a
     // possibly-wrong row can never show up here unmarked and mixed in with
     // certain ones while `callers` on the same symbol keeps it apart.
@@ -450,8 +480,21 @@ export async function runCommand(ctx) {
     return emitGaps(gaps, complete);
   }
   if (command === 'explore') {
-    const rows = opts._.map((q) => store.node(q)).filter(Boolean);
-    return opts.json ? emitJson(rows) : rows.forEach((r) => { out(fmtNode(r)); });
+    // Resolved with symbolsNamed, not store.node, and the miss was silent: `explore
+    // Root` printed NOTHING and exited 0 for every Go function, because store.node
+    // matched an id or a qname only and `.filter(Boolean)` dropped the miss. The
+    // rule lists `pgraph explore A B C` for asking about several symbols at once.
+    // One name can carry several symbols, so every match is listed; the same symbol
+    // asked for twice (`explore Root svc.Root`) is still one row.
+    const seen = new Set(), rows = [], unknown = [];
+    for (const q of opts._) {
+      const hits = store.symbolsNamed(q);
+      if (!hits.length) unknown.push(q);
+      for (const r of hits) if (!seen.has(r.id)) { seen.add(r.id); rows.push(r); }
+    }
+    if (opts.json) return emitJson(rows);
+    rows.forEach((r) => out(fmtNode(r)));
+    return unknown.forEach((q) => out(noSuchSymbol(q)));
   }
 
   die(`not implemented: ${command}`, 3);
