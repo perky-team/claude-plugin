@@ -85,9 +85,17 @@ export async function runCommand(ctx) {
   // 300 characters of row for a fact nobody asked for, and none of the call
   // lines. `pgraph node <qname>` still prints the signature, and so does
   // `search`. Repeated files are written once: `a.go:10, 11`.
+  //
+  // A file row (a call written outside any symbol) carries the path as its NAME,
+  // so `${n.kind} ${n.qname}` has already printed it. Seeding `last` with that
+  // path lets the same "repeated file written once" rule drop it from the sites
+  // too: `file app/boot.js  3, 4`, not `file app/boot.js  app/boot.js:3, 4`.
+  // It is also why such a row never falls back to `file:line` — a file has no
+  // declaration line, and `app/boot.js:null` would read as a place to open.
   const fmtSites = (n) => {
-    if (!n.call_sites?.length) return `${n.file}:${n.start_line}`;
-    let last = null;
+    const own = n.kind === 'file' ? n.qname : null;
+    if (!n.call_sites?.length) return own ?? `${n.file}:${n.start_line}`;
+    let last = own;
     return n.call_sites.map((s) => {
       const out = s.file === last ? String(s.line) : `${s.file}:${s.line}`;
       last = s.file;
