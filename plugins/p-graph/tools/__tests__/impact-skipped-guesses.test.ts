@@ -46,11 +46,17 @@ func R2() { y, _ := Make(); y.Guessed() }
     expect(text).toContain('were not followed');
   }, 30000);
 
-  // `impact` walks `e.src_id IS NOT NULL` only: an edge with no source symbol has
-  // no caller to report, so the walk never had it to refuse. Counting it as a
-  // skipped guess tells the reader a path was withheld when there was none —
-  // and the same call is ALREADY reported, as a `no-caller` gap row.
-  it('does not count a guess the walk would never have followed anyway', () => {
+  // A call written at file scope is a LEAF of the impact walk now: nothing calls a
+  // top-level statement, so it ends the chain, but it still breaks when the target
+  // changes. That makes a GUESSED one a path the walk refuses, exactly like a
+  // guessed edge that does have a caller — so it is counted here.
+  //
+  // It used to be counted nowhere and reported as a `no-caller` gap row instead.
+  // That row is gone: `impact` lists the certain file-scope calls itself, and
+  // naming a listed line under ⚠ made one answer contradict itself. The count is
+  // what keeps the refused ones honest — without it this answer would be an empty
+  // list plus `✓ complete`, over a real call site the graph could not settle.
+  it('counts a guessed file-scope call as a path it refused', () => {
     write('svc/svc.go', `package svc
 type A struct{}
 func (a *A) Guessed() {}
@@ -60,14 +66,42 @@ var eager = func() *A { x, _ := Make(); x.Guessed(); return x }()
     run(['index', '--full']);
 
     const json = JSON.parse(run(['impact', 'svc.A.Guessed', '--json']));
+    // The one path in is a guess, so the walk refuses it and the list stays empty.
     expect(json.impact).toEqual([]);
-    // The one call site sits outside any indexed symbol, so it is a gap row...
-    expect(json.gaps.some((g) => g.reason === 'no-caller')).toBe(true);
-    // ...and must NOT also be counted as a path the walk refused.
-    expect(json.skipped_guesses).toBe(0);
+    // No longer a gap row — the count below is where it is reported.
+    expect(json.gaps.some((g) => g.reason === 'no-caller')).toBe(false);
+    expect(json.skipped_guesses).toBe(1);
+    // A refused edge disqualifies the completeness claim on its own.
+    expect(json.complete).toBe(false);
 
     const text = run(['impact', 'svc.A.Guessed']);
-    expect(text).not.toContain('were not followed');
+    expect(text).toContain('1 guessed edge');
+    expect(text).toContain('was not followed');
+    expect(text).not.toContain('✓ complete');
+  }, 30000);
+
+  // The other half of the same rule: a file-scope call the resolver settled is
+  // CERTAIN, so `impact` lists it as a leaf. `a := &A{}` writes the receiver's
+  // type at the call site, so nothing here is a guess.
+  it('lists a certain file-scope call as a leaf of the walk', () => {
+    write('svc/svc.go', `package svc
+type A struct{}
+func (a *A) Certain() {}
+var eager = func() *A { a := &A{}; a.Certain(); return a }()
+`);
+    run(['index', '--full']);
+
+    const json = JSON.parse(run(['impact', 'svc.A.Certain', '--json']));
+    const fileRow = json.impact.find((r) => r.kind === 'file');
+    expect(fileRow).toBeTruthy();
+    expect(fileRow.qname).toBe('svc/svc.go');
+    expect(fileRow.call_sites.map((s) => s.line)).toEqual([4]);
+    expect(json.skipped_guesses).toBe(0);
+    expect(json.gaps.some((g) => g.reason === 'no-caller')).toBe(false);
+
+    const text = run(['impact', 'svc.A.Certain']);
+    expect(text).toContain('file svc/svc.go  4');
+    expect(text).not.toContain('(no impact)');
   }, 30000);
 
   it('reports skipped_guesses: 0 and drops the disclaimer when no guess is near the target', () => {

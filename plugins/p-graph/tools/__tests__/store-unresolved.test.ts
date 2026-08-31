@@ -292,14 +292,22 @@ func (w *Wrap) Do() string { return w.Get() }
     store.close();
   }, 30000);
 
-  it('reports a resolved call site that sits outside any indexed symbol', async () => {
+  // "reports" was the ⚠ banner's own word, and this case now asserts the banner is
+  // absent. Its sibling in cli-unresolved.test.ts was renamed for the same reason.
+  it('lists a resolved call site that sits outside any indexed symbol', async () => {
     writeHidingFixture();
     const store = openStore(':memory:');
     await indexFull({ root: dir, store, ignorePatterns: [] });
 
     // `e.start()` is at module scope in boot.ts: resolved, and no symbol encloses
     // it. callers() reports it as a `file` row — the file IS the caller here.
-    const row = store.callers('Engine.start').find((r) => r.file === 'web/boot.ts');
+    const rows = store.callers('Engine.start');
+    // One row, and it is that file. Picking the row out by name says the right row
+    // is there but not that it is the ONLY one, so a spurious extra caller — the
+    // failure this whole read path could produce — would slip past. boot.ts holds
+    // the only call to Engine.start in the fixture, so the count is 1.
+    expect(rows).toHaveLength(1);
+    const row = rows.find((r) => r.file === 'web/boot.ts');
     expect(row).toBeTruthy();
     expect(row.kind).toBe('file');
     expect(row.call_sites.map((s) => s.line)).toEqual([3]);

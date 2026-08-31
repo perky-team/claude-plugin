@@ -78,8 +78,6 @@ export async function runCommand(ctx) {
   const gapsOff = Boolean(store.gapsUnavailable);
   const noteGapsOff = () => { if (gapsOff) out(`⚠ ${GAPS_UNAVAILABLE}`); };
 
-  const fmtNode = (n) => `${n.kind} ${n.qname}  ${n.file}:${n.start_line}  ${n.signature}`;
-
   // A caller row answers "where is the call written", so that is what it shows.
   // It used to show where the CALLER was declared, plus its signature — up to
   // 300 characters of row for a fact nobody asked for, and none of the call
@@ -103,6 +101,18 @@ export async function runCommand(ctx) {
     }).join(', ');
   };
   const fmtCall = (n) => `${n.kind} ${n.qname}  ${fmtSites(n)}`;
+
+  // A declaration row: where the symbol is written, and its signature. `impact`
+  // prints these, and `impact` now also returns file rows — a call written
+  // outside any symbol. A file has no declaration line and no signature, so this
+  // template would read `file app/boot.js  app/boot.js:null  null`: two nulls
+  // dressed up as a place the reader could open. What such a row carries is its
+  // call sites, so print those, in the same words `callers` uses for the same
+  // row: `file app/boot.js  3, 4`. Kept in this one formatter, so no caller of it
+  // needs to know about the case.
+  const fmtNode = (n) => (n.kind === 'file'
+    ? fmtCall(n)
+    : `${n.kind} ${n.qname}  ${n.file}:${n.start_line}  ${n.signature}`);
 
   // `callers Get` merges every symbol named Get, and used to do it in silence —
   // so a reader ran `search Get` first just to learn what they had asked about.

@@ -59,17 +59,71 @@ describe('the printed answer lists a file-scope caller', () => {
     expect(text).not.toContain('outside any indexed symbol');
   }, 30000);
 
-  // `impact` is the one command that still needs the ⚠ line for these calls, and
-  // that is why the gap rows were not deleted outright. It walks resolved edges
-  // that HAVE a caller, so it lists no file row and cannot name these two sites
-  // any other way. Dropping the report here would hide them completely and let
-  // `impact` claim `✓ complete` — the exact failure this branch exists to fix.
-  it('keeps naming the call sites in impact, which lists no file row', async () => {
+  // `impact X` answers "what breaks if I change X", and a call written at file
+  // scope really does break. So it belongs in the answer — as a LEAF: nothing
+  // calls a top-level statement, so it ends the reverse walk instead of
+  // extending it.
+  //
+  // It used to print `(no impact)` and then name the two lines under ⚠. The
+  // headline was false and the banner rescued it, and `callers` on the same
+  // symbol said something else. Both commands now print the same row.
+  it('lists the file row in impact too, and says the answer is complete', async () => {
     const text = run(['impact', 'Manager.eject']);
-    expect(text).not.toContain('file app/boot.js');
-    expect(text).toContain('2 call sites missing from this answer');
-    expect(text).toContain('app/boot.js:3  outside any indexed symbol');
-    expect(text).toContain('app/boot.js:4  outside any indexed symbol');
+    expect(text).toContain('file app/boot.js');
+    expect(text).toMatch(/file app\/boot\.js\s+3, 4/);
+    expect(text).not.toContain('(no impact)');
+    // A file has no declaration line and no signature, so neither may be faked.
+    expect(text).not.toMatch(/boot\.js:(null|undefined|0)\b/);
+    expect(text).not.toContain('null');
+    expect(text).toContain('✓ complete');
+    expect(text).not.toContain('missing from this answer');
+    expect(text).not.toContain('outside any indexed symbol');
+  }, 30000);
+
+  // The whole point of this work: two commands, one symbol, one answer. They
+  // disagreed — `callers` listed the file row and said complete, `impact` said
+  // `(no impact)` and then named the lines as missing.
+  it('makes callers and impact agree about the same symbol', async () => {
+    const callers = run(['callers', 'Manager.eject']);
+    const impact = run(['impact', 'Manager.eject']);
+    for (const text of [callers, impact]) {
+      expect(text).toMatch(/file app\/boot\.js\s+3, 4/);
+      expect(text).toContain('✓ complete');
+    }
+  }, 30000);
+
+  // A file-scope call does not have to name the target directly. `impact` returns
+  // everything the reverse walk reached, and a top-level call landing on ANY of
+  // those breaks when the target changes — `mid` calls the target, `late.js` calls
+  // `mid` at file scope. So the file rows attach to the whole reached set, not
+  // only to the target.
+  it('lists a file-scope call that reaches the target through another symbol', async () => {
+    write('app/mid.js', `import { Manager } from '../lib/manager.js';
+export function mid() { const m = new Manager(); return m.eject(9); }
+`);
+    write('app/late.js', `import { mid } from './mid.js';
+mid();
+`);
+    run(['index', '--full']);
+
+    const text = run(['impact', 'Manager.eject']);
+    expect(text).toContain('function mid');
+    expect(text).toMatch(/file app\/late\.js\s+2/);
+    // And the direct call is still there.
+    expect(text).toMatch(/file app\/boot\.js\s+3, 4/);
+  }, 30000);
+
+  // `--json` and the text come from the same store call, so they cannot disagree
+  // about whether a call site is in the answer or missing from it.
+  it('agrees with --json for impact', async () => {
+    const json = JSON.parse(run(['impact', 'Manager.eject', '--json']));
+    expect(json.complete).toBe(true);
+    expect(json.gaps).toEqual([]);
+    expect(json.skipped_guesses).toBe(0);
+    const fileRow = json.impact.find((r) => r.kind === 'file');
+    expect(fileRow.qname).toBe('app/boot.js');
+    expect(fileRow.start_line).toBe(null);
+    expect(fileRow.call_sites.map((s) => s.line)).toEqual([3, 4]);
   }, 30000);
 
   // The text answer and `--json` must agree about the same question. A consumer

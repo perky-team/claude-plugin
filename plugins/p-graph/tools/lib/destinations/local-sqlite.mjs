@@ -1379,12 +1379,19 @@ function attachReadHelpers(store, db, hasFts) {
   // already names a real node) can contribute a row. An unresolved call at file
   // scope is not a call site of this symbol, and it stays in the gap report where
   // it belongs.
-  const fileScopeCallers = (ns) => db.prepare(`
+  //
+  // One shape, two questions. `store.callers` asks by the target's NAME.
+  // `store.impact` asks by the SET of nodes its reverse walk reached, which it
+  // hands over as a CTE to prepend. Both need the same grouping, the same guess
+  // column and the same site list, so they share the shape instead of drifting
+  // apart — one query that reports a file-scope call, not two.
+  const fileScopeSql = (where, cte = '') => `${cte}
     SELECT e.file, ${GUESS_COL} AS guess, ${SITES}
     FROM edges e JOIN nodes d ON d.id = e.dst_id
-    WHERE e.kind = 'call' AND e.src_id IS NULL
-      AND (d.name IN (${holes(ns.length)}) OR d.qname IN (${holes(ns.length)}))
-    GROUP BY e.file ORDER BY e.file`).all(...ns, ...ns);
+    WHERE e.kind = 'call' AND e.src_id IS NULL AND (${where})
+    GROUP BY e.file ORDER BY e.file`;
+  const fileScopeCallers = (ns) => db.prepare(fileScopeSql(
+    `d.name IN (${holes(ns.length)}) OR d.qname IN (${holes(ns.length)})`)).all(...ns, ...ns);
   // `sites` passes straight through so withSites — the one place that parses a
   // site list — is the one that turns it into call_sites, the same as it does for
   // an ordinary node row.
@@ -1455,14 +1462,15 @@ function attachReadHelpers(store, db, hasFts) {
   //                 repo methods share that bare name. Expected, counted, not
   //                 worth listing.
   //   'no-caller' — a RESOLVED call to the target made outside any indexed symbol
-  //                 (module scope, a `var x = pkg.New()`). Only `gapsAround`
-  //                 (impact) asks for these now. `gapsFor` (callers, context)
-  //                 does not: `store.callers` returns a `kind: 'file'` row for
-  //                 each such file, so the call sites are IN the answer, and
-  //                 naming them again under ⚠ made one answer contradict
-  //                 itself — 2 sites listed, "2 sites missing". `store.impact`
-  //                 walks `src_id IS NOT NULL`, so it still cannot show them;
-  //                 there the ⚠ line is the only place they appear, and it stays.
+  //                 (module scope, a `var x = pkg.New()`). NO command asks for
+  //                 these any more, so this reason is not produced today: both
+  //                 `gapsFor` (callers, context) and `gapsAround` (impact) pass
+  //                 an empty id list. Both `store.callers` and `store.impact`
+  //                 return a `kind: 'file'` row for each such file, so the call
+  //                 sites are IN the answer, and naming them again under ⚠ made
+  //                 one answer contradict itself — 2 sites listed, "2 sites
+  //                 missing". The query below stays as the one place that knows
+  //                 how to find these rows; pass real ids to get them back.
   // `reachable` is 0 only for a Go 'ambiguous' row in a file that neither belongs
   // to nor imports the target's package: a same-name coincidence is then far more
   // likely than a real call. Everything else is 1, including all non-Go rows.
@@ -2203,8 +2211,8 @@ function attachReadHelpers(store, db, hasFts) {
     // the ⚠ heading say "missing" about lines the reader had just read. The
     // rows are also capped at 20 in the banner and uncapped in the list —
     // measured on hugo, `parse.mkItem` has 120 of them, so 100 were replaced by
-    // "… and 100 more". `gapsAround` still asks for them: `store.impact` walks
-    // resolved edges with a caller only, so it lists no file rows.
+    // "… and 100 more". `gapsAround` (impact) passes [] for the same reason:
+    // `store.impact` lists these files too, as leaves of its reverse walk.
     const rows = collectGaps(targets.map((t) => symbolOf(name, t)), []);
     const seen = new Set(rows.map((r) => `${r.file}|${r.line}`));
     for (const t of targets) {
@@ -2253,13 +2261,25 @@ function attachReadHelpers(store, db, hasFts) {
     const reachedById = new Map();
     for (const t of targets) {
       for (const n of store.impact(t.qname)) {
-        if (!targetIds.has(n.id)) reachedById.set(n.id, n);
+        // `store.impact` also returns a synthetic `kind: 'file'` row per file
+        // that calls into the reached set. A file is not a symbol: `symbolOf`
+        // would read `app/boot.js` as a qname and hand the gap report `app/boot`
+        // as an owner type to match call receivers against. Skip them — and a
+        // file-scope call is a leaf, so it hides no further frontier anyway.
+        if (n.kind !== 'file' && !targetIds.has(n.id)) reachedById.set(n.id, n);
       }
     }
     const reached = [...reachedById.values()];
     const symbols = [...targets.map((t) => symbolOf(name, t)), ...reached.map((n) => symbolOf(n.qname, n))];
-    const callerCheckIds = [...targets.map((t) => t.id), ...reached.map((n) => n.id)];
-    const rows = collectGaps(symbols, callerCheckIds);
+    // No caller-less ids to check, the same reason as gapsFor: `store.impact`
+    // now returns a `kind: 'file'` row for every file that holds such a call, so
+    // those call sites are IN the answer. Naming them again under ⚠ made `impact`
+    // print `(no impact)` and then list two lines that really do break — a false
+    // headline rescued by a banner, and a flat disagreement with `callers` on the
+    // same symbol. A GUESSED file-scope call is not listed, because the walk
+    // refuses guesses; store.impactSkippedGuesses counts it, which blocks
+    // ✓ complete just as firmly as a gap row did.
+    const rows = collectGaps(symbols, []);
     // The same interface and implementation lines the direct question gets. An
     // impact walk that stops at a concrete method — or that asks about an
     // interface method directly — has to say what reaches it, or the set reads
@@ -2272,18 +2292,43 @@ function attachReadHelpers(store, db, hasFts) {
     return rows.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
   };
   const MAX_DEPTH = 50;
-  store.impact = (name) => {
-    const target = store.node(name);
-    if (!target) return [];
-    return db.prepare(`
+  // The reverse walk itself: the target, then whatever calls it, and so on. Held
+  // in one place because three queries below must read the same frontier — the
+  // node rows, the file-scope rows and the count of refused guesses. If they
+  // disagreed, the answer would name a node the count did not cover.
+  const UP_CTE = `
       WITH RECURSIVE up(id, depth) AS (
         SELECT ?, 0
         UNION
         SELECT e.src_id, up.depth + 1 FROM edges e
         JOIN up ON e.dst_id = up.id
         WHERE up.depth < ${MAX_DEPTH} AND e.src_id IS NOT NULL ${GUESS_FILTER}
-      )
+      )`;
+  store.impact = (name) => {
+    const target = store.node(name);
+    if (!target) return [];
+    const nodeRows = db.prepare(`${UP_CTE}
       SELECT DISTINCT n.* FROM nodes n JOIN up ON n.id = up.id WHERE n.id != ?`).all(target.id, target.id);
+    // A call written outside any function breaks when the target changes, so it
+    // belongs in "what breaks if I change X" — but nothing calls a top-level
+    // statement, so it is a LEAF: it ends the chain instead of extending it.
+    // `impact` used to print `(no impact)` and then name those lines under the ⚠
+    // banner. The headline was false, the banner rescued it, and `callers` on the
+    // same symbol already listed them — the two commands disagreed.
+    //
+    // `e.dst_id IN (SELECT id FROM up)`, not just the target: `up` holds the
+    // target AND everything the walk reached, and a top-level call landing on any
+    // of them breaks too. `m.eject(1)` at module scope and `mid()` at module
+    // scope, where `mid` calls `eject`, are both real answers.
+    //
+    // GUESS_FILTER, the same rule the walk above follows. A guessed row here
+    // would sit in a flat list next to certain ones with nothing to tell them
+    // apart, and `impact` exists to answer without false alarms. The refused ones
+    // are counted by store.impactSkippedGuesses instead, which blocks ✓ complete.
+    const fileRows = withSites(db.prepare(fileScopeSql(
+      `e.dst_id IN (SELECT id FROM up) ${GUESS_FILTER}`, UP_CTE)).all(target.id).map(asFileRow));
+    // Node rows first, file rows last: a reader scans the top of a list.
+    return [...nodeRows, ...fileRows];
   };
   // How many guessed edges the walk above refused to follow, for this one
   // target. `impact` returning [] means one of two very different things:
@@ -2293,20 +2338,22 @@ function attachReadHelpers(store, db, hasFts) {
   // target plus everything store.impact returns), and this counts every
   // guessed edge landing on one of them — the exact set of edges the filter
   // in store.impact turned away.
+  //
+  // Every guessed edge, with a caller or without one. It used to skip
+  // `src_id IS NULL`, and that was right while `impact` could not show a
+  // file-scope call at all: the walk never had such an edge to refuse, and the
+  // call was reported as a `no-caller` gap row instead. Now `impact` lists the
+  // certain file-scope calls, so a guessed one IS a path it refused — and it is
+  // no longer in the gap report. Counting it here is the only thing that stops
+  // an empty list plus `✓ complete` over a real call site the graph could not
+  // settle.
   store.impactSkippedGuesses = (name) => {
     if (!hasGuess) return 0; // no column, so nothing on this DB is a guess
     const target = store.node(name);
     if (!target) return 0;
-    return db.prepare(`
-      WITH RECURSIVE up(id, depth) AS (
-        SELECT ?, 0
-        UNION
-        SELECT e.src_id, up.depth + 1 FROM edges e
-        JOIN up ON e.dst_id = up.id
-        WHERE up.depth < ${MAX_DEPTH} AND e.src_id IS NOT NULL ${GUESS_FILTER}
-      )
+    return db.prepare(`${UP_CTE}
       SELECT count(*) AS c FROM edges e JOIN up ON up.id = e.dst_id
-      WHERE e.guess = 1 AND e.src_id IS NOT NULL`).get(target.id).c;
+      WHERE e.guess = 1`).get(target.id).c;
   };
   // How X reaches Y, and how sure each step is. Returns
   // `{ path: [qname, …], guessed: [bool, …] }` with one flag per ARROW, so
