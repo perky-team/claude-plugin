@@ -53,8 +53,9 @@ Run every command via `node "${CLAUDE_PLUGIN_ROOT}/tools/pgraph.mjs" <cmd>`. ALW
 | Several symbols at once | `explore A B C` |
 | What files are under path/ | `files path/` |
 
-**Chain calls** when the name is unknown or ambiguous: run `search X` first to resolve the exact
-`qname`, then feed that to `callers` / `callees` / `impact` / `trace`. `context X` is the fastest
+**Chain calls** when you do not know the name at all: run `search X` first to find it, then feed
+that to `callers` / `callees` / `impact` / `trace`. A name you do know needs no `search` first, even
+when it is shared — see "A bare name is one call, not two" below. `context X` is the fastest
 single call for "tell me about X" — one call returns the symbol plus its immediate callers and
 callees. Pass `--json` to any read command if you want to post-process the rows: `callers`,
 `callees` and `impact` return `{ <command>: [rows], gaps: [gap rows] }`. A `callers` or `callees`
@@ -66,8 +67,14 @@ three gap lists: `gaps_in` (calls that name this symbol), `gaps_out` (calls this
 that calls a same-named method on one of its own fields) can show up in both `gaps_in` and
 `gaps_out` for the same call site, and `gaps` has already removed the duplicate.
 
-**Ask by `qname`, never by bare name.** `callers Get` matches *every* symbol named `Get` and merges
-their callers into one list with no marker. `callers store.Postgres.Get` asks about one symbol.
+**A bare name is one call, not two.** `callers`, `callees`, `impact`, `context`, `trace` and
+`explore` each resolve an id, a bare name or a `qname`, so `callers Get` works and you do not need
+`search` first. (`node` is the exception — it takes an id or a `qname`.) A bare name shared by
+several symbols does merge them into one list, and `callers`, `callees` and `impact` say so on
+their first line: `target: 2 symbols named Get`, plus the qnames to ask by. Read that line, and ask
+again by `qname` (`callers store.Postgres.Get`) if you need one of them. The other three name what
+they resolved in their own words: `context` prints the declaration row of every symbol the name
+carries, `explore` prints one row per symbol, and `trace` names both ends in the route it prints.
 
 ## Step 3 — Read the three markers, and relay them
 
@@ -76,7 +83,10 @@ Three things in the output tell you how much a row is worth. Handle all three.
 ### 3a — Certain rows are the answer; guessed rows are leads
 
 Rows printed plainly are **certain**: the graph knew the target's qualified name, or it knew the
-receiver's type. Rows printed under this heading are **guesses**:
+receiver's type. One row can carry several call sites, and it is marked by its **most certain** one,
+so a plain row promises that **at least one** of its lines is certain — not all of them. A guessed
+call site can print beside a certain one with nothing to mark it. Rows printed under this heading
+are **guesses**, every line on them:
 
 ```
 UNVERIFIED: 1 more caller, matched by name only (guess) — the graph could not see the receiver's type, so this one may be a different symbol with the same method name:
@@ -99,11 +109,16 @@ A row that begins with `file` is a call written outside any function — a modul
 package-level `var x = pkg.New()`, a `@Injectable()` on a class. There is no enclosing symbol to
 name, so the row names the file and carries every line on it: `file app/boot.js  3, 4`. Those are
 call sites of the symbol you asked about, and the line numbers are already on the row — never grep
-for them. The row obeys the same split as any other: plain is certain, and under `UNVERIFIED` it is
-a guess you open and judge like any other guess. `impact` is stricter: it lists only the certain
+for them. The row obeys the same marking as any other: printed plainly, at least one of its lines is
+certain; printed under `UNVERIFIED`, every line on it is a guess you open and judge like any other
+guess. `impact` is stricter: it lists only the certain
 ones and adds a guessed
 one to `skipped_guesses`, which blocks `✓ complete`. Across ten repos 4,672 of 4,998 resolved
-file-scope calls (93%) are certain, so 326 are counted instead of listed.
+file-scope calls (93%) are certain, so 326 are counted instead of listed. That is also how you tell
+a mixed **file** row apart — `impact` prints only its certain lines. A mixed **node** row has no
+such split: `impact` prints no call sites for a node row at all, only the declaration line, so a
+node row in an `impact` answer says nothing about which of its call sites are settled. Open every
+line of a plain row you are about to rely on.
 
 ### 3b — `impact` is a floor, not a ceiling
 
@@ -157,7 +172,9 @@ with a text search.
 Read the output and compose a concise answer — usually a short paragraph or a tight list, not a
 raw dump. Cite the concrete `file:line` from the output for each claim. Output rows are formatted
 `kind qname  file:line  signature`. `(no matches)` means no symbol carries that name. `(no path)`
-means the graph found nothing along resolved calls; `(no impact)` means it found nothing along
+means the graph found nothing along resolved calls — and when one END of a `trace` is a name nothing
+carries, you get `no symbol named X in the graph` instead, which is a different answer and never
+`(no path)`. `(no impact)` means it found nothing along
 **certain** calls, which is narrower — check the banner and the `skipped_guesses` line before
 calling either one an answer. A `⚠ p-graph STALE` line on stderr means the auto-refresh couldn't
 run — say so and suggest `/p-graph:sync`.

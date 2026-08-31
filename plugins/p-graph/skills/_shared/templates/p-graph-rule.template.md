@@ -54,10 +54,19 @@ guesses.** Never fold them into the certain list.
 
 One row can carry several call sites, and it is marked by its **most certain** one. So a
 plain row promises that **at least one** of its lines is certain, not all of them — a
-guessed call site can print beside a certain one with nothing to mark it. `impact` splits
-them, because it lists only the certain ones. Measured on a two-call file: `callers`
-prints `file app/boot.js  3, 4` plainly, `impact` prints `file app/boot.js  3` and says
-one guessed edge was not followed — so line 4 is the guess.
+guessed call site can print beside a certain one with nothing to mark it. Which line is
+which depends on the row. For a **`file`** row, `impact` splits them, because it lists only
+the certain lines: measured on a two-call file, `callers` prints `file app/boot.js  3, 4`
+plainly, `impact` prints `file app/boot.js  3` and says one guessed edge was not followed —
+so line 4 is the guess. For an ordinary **node** row nothing splits them, because `impact`
+reports no call sites for a node row at all — just the declaration line. Measured on one
+certain call and one guess in the same caller: `callers Manager.eject` prints
+`function run  app/run.js:4, 5`, and `impact Manager.eject` prints
+`function run  app/run.js:2`, which is where `run` is written, not where it calls. So a row
+appearing in `impact` does NOT settle its call sites. The only signal there is the
+`guessed edge … not followed` count, and it does not say which line — so **open every line
+of a plain row you are about to rely on.** The mixed node row is the common case; the mixed
+file row is the rare one.
 
 **`impact` is a floor, not a ceiling.** It follows certain edges only and never walks a
 guess, so a real dependency can be missing. When it refuses one it prints a line like
@@ -107,7 +116,11 @@ now lists all 25 — 11 certain and 14 guesses — and says `✓ complete`.
 **Ask by bare name — one call, not two.** The first line of the answer says which
 symbol it resolved (`target: function svc.Get  svc/get.go:12`). If the name is shared
 it says so and lists them, and only then is it worth asking again by `qname`. Do not
-run `search` first to find the qualified name; the answer tells you.
+run `search` first to find the qualified name; the answer tells you. `trace` and
+`explore` print no `target:` line: `trace` names both ends in the route it prints, and
+`explore` prints one row per symbol the name carries. An end of a `trace` that no
+symbol carries prints `no symbol named X in the graph`, never `(no path)` — those are
+different answers.
 
 Sometimes the shared symbols carry the SAME qname — a TypeScript or Python name has
 no module path in it, so a monorepo can hold several. The answer then says
