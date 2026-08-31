@@ -186,13 +186,25 @@ func Do() { fmt.Errorf("x") }
     expect(text).toContain('1 call the graph found nothing to link to');
   }, 30000);
 
-  it('names a resolved call site that has no caller row', () => {
+  // This call site used to be named under the ⚠ banner, as "outside any indexed
+  // symbol". It is now a row in the answer itself — a `file` row, because a call
+  // written at module scope has no enclosing symbol to name. Same fixture, same
+  // call site, one pass fewer for the reader: the ⚠ heading told them to go and
+  // grep for a line the list can simply hold.
+  it('lists a resolved call site that has no caller row', () => {
     write('web/engine.ts', 'export class Engine { start() {} }');
     write('web/boot.ts', "import { Engine } from './engine';\nnew Engine().start();");
     run(['index', '--full']);
     const text = run(['callers', 'Engine.start']);
-    expect(text).toContain('web/boot.ts:2');
-    expect(text).toContain('outside any indexed symbol');
+    expect(text).toContain('file web/boot.ts  2');
+    // Listed, so not missing — the ⚠ banner has nothing left to say here.
+    expect(text).not.toContain('outside any indexed symbol');
+    expect(text).not.toContain('missing from this answer');
+    // Not "✓ complete": `new Engine().start()` gives the resolver no receiver
+    // type to read, so the one row is a guess, and the all-guessed wording
+    // applies instead. See cli-file-scope.test.ts for the certain-row case that
+    // does earn `✓ complete`.
+    expect(text).toContain('✓ no gaps — but every row above is a guess');
   }, 30000);
 
   it('scores a frontier gap against the package that actually matched it, not the impact target', () => {

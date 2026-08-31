@@ -1455,7 +1455,14 @@ function attachReadHelpers(store, db, hasFts) {
   //                 repo methods share that bare name. Expected, counted, not
   //                 worth listing.
   //   'no-caller' — a RESOLVED call to the target made outside any indexed symbol
-  //                 (module scope, a callback body), which `callers` cannot show
+  //                 (module scope, a `var x = pkg.New()`). Only `gapsAround`
+  //                 (impact) asks for these now. `gapsFor` (callers, context)
+  //                 does not: `store.callers` returns a `kind: 'file'` row for
+  //                 each such file, so the call sites are IN the answer, and
+  //                 naming them again under ⚠ made one answer contradict
+  //                 itself — 2 sites listed, "2 sites missing". `store.impact`
+  //                 walks `src_id IS NOT NULL`, so it still cannot show them;
+  //                 there the ⚠ line is the only place they appear, and it stays.
   // `reachable` is 0 only for a Go 'ambiguous' row in a file that neither belongs
   // to nor imports the target's package: a same-name coincidence is then far more
   // likely than a real call. Everything else is 1, including all non-Go rows.
@@ -2190,7 +2197,15 @@ function attachReadHelpers(store, db, hasFts) {
     if (!hasBare) return [];
     const targets = targetsFor(name);
     if (!targets.length) return collectGaps([symbolOf(name, null)], []);
-    const rows = collectGaps(targets.map((t) => symbolOf(name, t)), targets.map((t) => t.id));
+    // No caller-less ids to check: `store.callers` above already returns one
+    // `kind: 'file'` row per file that holds such a call, with every line on it.
+    // Reporting the same lines here too made the answer contradict itself, and
+    // the ⚠ heading say "missing" about lines the reader had just read. The
+    // rows are also capped at 20 in the banner and uncapped in the list —
+    // measured on hugo, `parse.mkItem` has 120 of them, so 100 were replaced by
+    // "… and 100 more". `gapsAround` still asks for them: `store.impact` walks
+    // resolved edges with a caller only, so it lists no file rows.
+    const rows = collectGaps(targets.map((t) => symbolOf(name, t)), []);
     const seen = new Set(rows.map((r) => `${r.file}|${r.line}`));
     for (const t of targets) {
       addOnce(rows, seen, interfaceReach(t));

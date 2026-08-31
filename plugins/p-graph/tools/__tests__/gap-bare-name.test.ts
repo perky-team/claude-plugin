@@ -14,30 +14,37 @@ const write = (rel, src) => {
   writeFileSync(abs, src);
 };
 
-describe('a bare-name query keeps the gap report', () => {
-  it('reports the same no-caller rows whether asked by qname or by bare name', async () => {
+describe('a bare-name query reports as much as a qname query', () => {
+  it('reports the same file-scope rows whether asked by qname or by bare name', async () => {
     // `start` is called at module scope, so the call resolves but has no caller
-    // symbol — exactly the row `callers` cannot show and the banner must.
+    // symbol. It used to be a `no-caller` row in the gap report; `callers` now
+    // holds it as a `file` row instead, so this is where the bare-name rule has
+    // to be checked. The rule itself is unchanged: whatever a qname query
+    // reports, the bare name must report too.
     write('web/engine.ts', 'export class Engine { start() {} }');
     write('web/boot.ts', "import { Engine } from './engine';\nnew Engine().start();");
     const store = openStore(':memory:');
     await indexFull({ root: dir, store, ignorePatterns: [] });
 
-    const byQname = store.gapsFor('Engine.start');
-    expect(byQname.filter((r) => r.reason === 'no-caller')).toHaveLength(1);
+    const sites = (rows) => rows.filter((r) => r.kind === 'file')
+      .flatMap((r) => r.call_sites.map((s) => `${s.file}:${s.line}`));
+    const byQname = store.callers('Engine.start');
+    expect(sites(byQname)).toEqual(['web/boot.ts:2']);
 
-    // `store.callers('start')` finds the symbol by bare name, so the gap report
-    // must find it too. Before this fix it returned nothing.
-    expect(store.callers('start').length).toBe(store.callers('Engine.start').length);
-    const byName = store.gapsFor('start');
-    expect(byName.filter((r) => r.reason === 'no-caller')).toHaveLength(1);
-    expect(byName.map((r) => `${r.file}:${r.line}`))
-      .toEqual(byQname.map((r) => `${r.file}:${r.line}`));
+    // `store.callers('start')` finds the symbol by bare name, so it must find
+    // the same call site. Before the fix this whole report was silently dropped
+    // for a bare-name query — 184 rows on a real repo.
+    expect(store.callers('start').length).toBe(byQname.length);
+    expect(sites(store.callers('start'))).toEqual(sites(byQname));
+
+    // Listed once, so counted nowhere else: no gap row for the same line.
+    expect(store.gapsFor('start')).toEqual([]);
+    expect(store.gapsFor('Engine.start')).toEqual([]);
 
     store.close();
   }, 30000);
 
-  it('collects no-caller rows from every symbol a bare name matches', async () => {
+  it('collects file-scope rows from every symbol a bare name matches', async () => {
     // Two package-level Go funcs named "Run", called by their qualified name
     // ("pkga.Run", "pkgb.Run") from a package-scope var initializer — no
     // enclosing func, so each call resolves but has no caller symbol. A TS
@@ -54,9 +61,11 @@ describe('a bare-name query keeps the gap report', () => {
     await indexFull({ root: dir, store, ignorePatterns: [] });
 
     // Both pkga.Run and pkgb.Run are called at package scope. Asking by the
-    // shared bare name must report both call sites, not one and not none.
-    const rows = store.gapsFor('Run').filter((r) => r.reason === 'no-caller');
+    // shared bare name must report both call sites, not one and not none. They
+    // are `file` rows in the answer now, not `no-caller` rows in the banner.
+    const rows = store.callers('Run').filter((r) => r.kind === 'file');
     expect(rows.map((r) => r.file).sort()).toEqual(['caller_a/caller_a.go', 'caller_b/caller_b.go']);
+    expect(store.gapsFor('Run')).toEqual([]);
 
     store.close();
   }, 30000);

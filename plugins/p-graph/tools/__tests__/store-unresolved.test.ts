@@ -297,13 +297,15 @@ func (w *Wrap) Do() string { return w.Get() }
     const store = openStore(':memory:');
     await indexFull({ root: dir, store, ignorePatterns: [] });
 
-    // `e.start()` is at module scope in boot.ts: resolved, but callers() cannot
-    // show a caller row for it.
-    expect(store.callers('Engine.start')).toEqual([]);
-    const rows = store.gapsFor('Engine.start');
-    const row = rows.find((r) => r.file === 'web/boot.ts');
+    // `e.start()` is at module scope in boot.ts: resolved, and no symbol encloses
+    // it. callers() reports it as a `file` row — the file IS the caller here.
+    const row = store.callers('Engine.start').find((r) => r.file === 'web/boot.ts');
     expect(row).toBeTruthy();
-    expect(row.reason).toBe('no-caller');
+    expect(row.kind).toBe('file');
+    expect(row.call_sites.map((s) => s.line)).toEqual([3]);
+    // And it is therefore NOT a gap: the answer holds the line, so the ⚠ banner
+    // saying it is missing would contradict the list right above it.
+    expect(store.gapsFor('Engine.start').filter((r) => r.file === 'web/boot.ts')).toEqual([]);
     store.close();
   }, 30000);
 
