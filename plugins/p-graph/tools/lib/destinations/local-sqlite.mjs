@@ -1358,13 +1358,52 @@ function attachReadHelpers(store, db, hasFts) {
       .sort((a, b) => (a.file === b.file ? a.line - b.line : a.file < b.file ? -1 : 1)),
   }));
   const SITES = `group_concat(DISTINCT e.file || ':' || e.line) AS sites`;
+
+  // A call written outside any function — a module's top level, a Go package-level
+  // `var x = pkg.New()`, a `@Injectable()` on a class — has no enclosing symbol, so
+  // its edge holds `src_id = NULL` and the join in `store.callers` below cannot see
+  // it. Those calls were reported in the gap banner instead, one line each, and
+  // that banner stops at GAP_LIMIT rows. Measured on hugo: `parse.mkItem` has 120
+  // of them, 20 were named and 100 were replaced by "… and 100 more". Across
+  // axios, nest, got and hugo, 13 symbols are over the cap and 1,500 rows are
+  // never named anywhere.
+  //
+  // The row this builds is shaped like a node row so every existing reader renders
+  // it unchanged, but no node is stored for it. A node spanning the file would
+  // enclose every top-level definition in it, and driver.mjs:1402 builds a child's
+  // qname from its parent's — so every top-level qname in the file would gain a
+  // file prefix. Pass A calls a unique bare qname CERTAIN, and the driver's own
+  // comment at :1390 records three false certain rows from moving one qname.
+  //
+  // JOIN, not LEFT JOIN, on nodes d: only a RESOLVED edge (one whose dst_id
+  // already names a real node) can contribute a row. An unresolved call at file
+  // scope is not a call site of this symbol, and it stays in the gap report where
+  // it belongs.
+  const fileScopeCallers = (ns) => db.prepare(`
+    SELECT e.file, ${GUESS_COL} AS guess, ${SITES}
+    FROM edges e JOIN nodes d ON d.id = e.dst_id
+    WHERE e.kind = 'call' AND e.src_id IS NULL
+      AND (d.name IN (${holes(ns.length)}) OR d.qname IN (${holes(ns.length)}))
+    GROUP BY e.file ORDER BY e.file`).all(...ns, ...ns);
+  // `sites` passes straight through so withSites — the one place that parses a
+  // site list — is the one that turns it into call_sites, the same as it does for
+  // an ordinary node row.
+  const asFileRow = (r) => ({
+    id: `filescope:${r.file}`,
+    name: r.file.slice(r.file.lastIndexOf('/') + 1),
+    qname: r.file, kind: 'file', lang: null, file: r.file,
+    start_line: null, end_line: null, signature: null, doc: '',
+    container_id: null, decl: 0, guess: r.guess, sites: r.sites,
+  });
   store.callers = (name) => {
     const ns = matchNames(name);
-    return withSites(db.prepare(`
+    const nodeRows = withSites(db.prepare(`
       SELECT s.*, ${GUESS_COL} AS guess, ${SITES} FROM edges e JOIN nodes s ON s.id = e.src_id
       JOIN nodes d ON d.id = e.dst_id
       WHERE d.name IN (${holes(ns.length)}) OR d.qname IN (${holes(ns.length)})
       GROUP BY s.id`).all(...ns, ...ns));
+    // Node rows first, file rows last: a reader scans the top of a list.
+    return [...nodeRows, ...withSites(fileScopeCallers(ns).map(asFileRow))];
   };
   store.callees = (name) => {
     const ns = matchNames(name);
