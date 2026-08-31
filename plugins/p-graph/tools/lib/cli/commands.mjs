@@ -282,10 +282,11 @@ export async function runCommand(ctx) {
     if (listed.length) {
       out(`⚠ ${listed.length} call site${listed.length === 1 ? '' : 's'} missing from this answer:`);
       for (const r of listed.slice(0, GAP_LIMIT)) {
-        const where = r.reason === 'no-caller'
-          ? 'outside any indexed symbol'
-          : (r.src_qname ?? 'file scope');
-        out(`    ${r.file}:${r.line}  ${where} -> ${r.dst_name}`);
+        // `file scope` when the gap row has no enclosing symbol: the call is
+        // written outside any function and the graph could not resolve it. A
+        // RESOLVED call at file scope is not a gap at all — `callers` and
+        // `impact` list it as a `file` row.
+        out(`    ${r.file}:${r.line}  ${r.src_qname ?? 'file scope'} -> ${r.dst_name}`);
       }
       if (listed.length > GAP_LIMIT) out(`    … and ${listed.length - GAP_LIMIT} more`);
     }

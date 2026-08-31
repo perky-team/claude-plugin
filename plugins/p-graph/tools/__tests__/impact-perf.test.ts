@@ -39,8 +39,8 @@ describe('the impact frontier scan does not repeat per reached node', () => {
     };
     store.gapsAround('chain.Leaf');
     // 31 reached symbols would mean ~62 lookups under the old code. One lookup
-    // per distinct name is the target; allow a small constant for the no-caller
-    // scan.
+    // per distinct name is the target; allow a small constant for the reverse
+    // walk each reached node needs.
     expect(queries).toBeLessThan(10);
 
     store.close();

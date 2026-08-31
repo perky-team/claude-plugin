@@ -68,8 +68,11 @@ var eager = func() *A { x, _ := Make(); x.Guessed(); return x }()
     const json = JSON.parse(run(['impact', 'svc.A.Guessed', '--json']));
     // The one path in is a guess, so the walk refuses it and the list stays empty.
     expect(json.impact).toEqual([]);
-    // No longer a gap row — the count below is where it is reported.
-    expect(json.gaps.some((g) => g.reason === 'no-caller')).toBe(false);
+    // Not reported as missing anywhere — the count below is where it lives now.
+    // (This used to assert no row carried `reason: 'no-caller'`; that reason is
+    // deleted, so the assertion now pins the whole gap list as empty, which is
+    // the fact the old one was reaching for.)
+    expect(json.gaps).toEqual([]);
     expect(json.skipped_guesses).toBe(1);
     // A refused edge disqualifies the completeness claim on its own.
     expect(json.complete).toBe(false);
@@ -97,7 +100,10 @@ var eager = func() *A { a := &A{}; a.Certain(); return a }()
     expect(fileRow.qname).toBe('svc/svc.go');
     expect(fileRow.call_sites.map((s) => s.line)).toEqual([4]);
     expect(json.skipped_guesses).toBe(0);
-    expect(json.gaps.some((g) => g.reason === 'no-caller')).toBe(false);
+    // Listed once, so counted nowhere else: the line is in the answer above and
+    // nowhere in the gap report. (It used to assert no row carried
+    // `reason: 'no-caller'`; that reason is deleted.)
+    expect(json.gaps).toEqual([]);
 
     const text = run(['impact', 'svc.A.Certain']);
     expect(text).toContain('file svc/svc.go  4');

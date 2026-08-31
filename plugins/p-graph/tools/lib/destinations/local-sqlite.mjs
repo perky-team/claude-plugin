@@ -1476,16 +1476,14 @@ function attachReadHelpers(store, db, hasFts) {
   //                 never be a repo method called Errorf, no matter how many
   //                 repo methods share that bare name. Expected, counted, not
   //                 worth listing.
-  //   'no-caller' — a RESOLVED call to the target made outside any indexed symbol
-  //                 (module scope, a `var x = pkg.New()`). NO command asks for
-  //                 these any more, so this reason is not produced today: both
-  //                 `gapsFor` (callers, context) and `gapsAround` (impact) pass
-  //                 an empty id list. Both `store.callers` and `store.impact`
-  //                 return a `kind: 'file'` row for each such file, so the call
-  //                 sites are IN the answer, and naming them again under ⚠ made
-  //                 one answer contradict itself — 2 sites listed, "2 sites
-  //                 missing". The query below stays as the one place that knows
-  //                 how to find these rows; pass real ids to get them back.
+  //
+  // There was a third reason, 'no-caller': a RESOLVED call to the target made
+  // outside any indexed symbol (module scope, a `var x = pkg.New()`). It is gone,
+  // code and all. `store.callers` and `store.impact` return a `kind: 'file'` row
+  // for each such file, so those call sites are IN the answer, and naming them
+  // again under ⚠ made one answer contradict itself — 2 sites listed, "2 sites
+  // missing".
+  //
   // `reachable` is 0 only for a Go 'ambiguous' row in a file that neither belongs
   // to nor imports the target's package: a same-name coincidence is then far more
   // likely than a real call. Everything else is 1, including all non-Go rows.
@@ -1549,10 +1547,6 @@ function attachReadHelpers(store, db, hasFts) {
       AND kind IN ('function','method','class')
     GROUP BY name`;
   const qualifierExistsSql = `SELECT 1 FROM nodes WHERE ${SAME_LANG('lang', '?')} AND qname LIKE ? LIMIT 1`;
-  const noCallerRowsByIdSql = (n) => `
-    SELECT e.dst_name, e.file, e.line FROM edges e
-    WHERE e.kind = 'call' AND e.src_id IS NULL
-      AND e.dst_id IN (${Array(n).fill('?').join(',')})`;
   // SQLite's bound-parameter cap (SQLITE_MAX_VARIABLE_NUMBER) can be as low as
   // 999. 400 leaves headroom even when a name list is bound twice — once for
   // dst_name IN (...), once for dst_bare IN (...) — 800 params at that cap.
@@ -1608,20 +1602,14 @@ function attachReadHelpers(store, db, hasFts) {
   // impact-reached node can live in different packages, and `callers` vs
   // `impact` must agree on the same row (see gapsAround).
   //
-  // `callerCheckIds` are the node ids checked for a resolved-but-caller-less
-  // call (the 'no-caller' reason). Both name-matched gaps and no-caller gaps
-  // share one `seen` set, so a caller that wants no-caller rows for several
-  // node ids at once (gapsAround, across a whole impact set) never needs a
-  // second dedupe pass on top of this one.
-  //
   // gapsAround can pass hundreds of symbols (one per impact-reached node).
   // Querying per symbol per name variant was the perf bug this batches away:
   // one name-matched symbol used to cost up to 3 round trips, so hundreds of
   // reached nodes meant hundreds of round trips to print a handful of rows.
   // Below, every name variant from every symbol is collected once into one
-  // list and looked up in one (possibly chunked) query; the no-caller ids get
-  // the same treatment. The row shape and the `seen`-based dedupe are exactly
-  // as before — only the number of trips to SQLite changes.
+  // list and looked up in one (possibly chunked) query. The row shape and the
+  // `seen`-based dedupe are exactly as before — only the number of trips to
+  // SQLite changes.
   //
   // Candidate count per (bare name, lang), external rows excluded: an
   // external edge's candidate count is forced to 0 regardless of what nodes
@@ -1755,7 +1743,7 @@ function attachReadHelpers(store, db, hasFts) {
     return { names, repo: [...names].some((n) => known.has(n)) };
   };
 
-  const collectGaps = (symbols, callerCheckIds = []) => {
+  const collectGaps = (symbols) => {
     const seen = new Set(), out = [];
 
     // Record every symbol (by position) that offers each name variant — not
@@ -1875,18 +1863,6 @@ function attachReadHelpers(store, db, hasFts) {
           ? reachableIn(r.file, pkgForRow(r)) : 1,
       });
     }
-    if (callerCheckIds.length) {
-      for (const ids of chunk([...new Set(callerCheckIds)], 400)) {
-        const stmt = db.prepare(noCallerRowsByIdSql(ids.length));
-        for (const r of stmt.all(...ids)) {
-          const key = `${r.file}|${r.line}|${r.dst_name}`;
-          if (seen.has(key)) continue;
-          seen.add(key);
-          out.push({ file: r.file, line: r.line, dst_name: r.dst_name,
-            src_qname: null, reason: 'no-caller', reachable: 1 });
-        }
-      }
-    }
     return out.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
   };
 
@@ -1912,9 +1888,10 @@ function attachReadHelpers(store, db, hasFts) {
   //
   // The target itself is resolved with targetsFor, not store.node: a bare name
   // (the natural thing to type after `search`) can match several symbols, and
-  // every one of them may have its own no-caller call sites. Matching only by
-  // id/qname (store.node) silently dropped the whole no-caller report for a
-  // bare-name query — see the comment on targetsFor above.
+  // every one of them may have its own gap rows. Matching only by id/qname
+  // (store.node) silently dropped a whole gap report for a bare-name query — 184
+  // rows on a real repo, back when a file-scope call was still reported here.
+  // See the comment on namesTarget above.
   // Call sites that reach a CONCRETE method through an interface it implements.
   //
   // Indexing interface methods answered a question that could not be asked before
@@ -2219,16 +2196,16 @@ function attachReadHelpers(store, db, hasFts) {
   store.gapsFor = (name) => {
     if (!hasBare) return [];
     const targets = targetsFor(name);
-    if (!targets.length) return collectGaps([symbolOf(name, null)], []);
-    // No caller-less ids to check: `store.callers` above already returns one
-    // `kind: 'file'` row per file that holds such a call, with every line on it.
-    // Reporting the same lines here too made the answer contradict itself, and
-    // the ⚠ heading say "missing" about lines the reader had just read. The
-    // rows are also capped at 20 in the banner and uncapped in the list —
-    // measured on hugo, `parse.mkItem` has 120 of them, so 100 were replaced by
-    // "… and 100 more". `gapsAround` (impact) passes [] for the same reason:
+    if (!targets.length) return collectGaps([symbolOf(name, null)]);
+    // A call written at file scope is not reported here at all. `store.callers`
+    // above already returns one `kind: 'file'` row per file that holds such a
+    // call, with every line on it. Reporting the same lines here too made the
+    // answer contradict itself, and the ⚠ heading say "missing" about lines the
+    // reader had just read. The rows are also capped at 20 in the banner and
+    // uncapped in the list — measured on hugo, `parse.mkItem` has 120 of them, so
+    // 100 were replaced by "… and 100 more". Same in `gapsAround` (impact):
     // `store.impact` lists these files too, as leaves of its reverse walk.
-    const rows = collectGaps(targets.map((t) => symbolOf(name, t)), []);
+    const rows = collectGaps(targets.map((t) => symbolOf(name, t)));
     const seen = new Set(rows.map((r) => `${r.file}|${r.line}`));
     for (const t of targets) {
       addOnce(rows, seen, interfaceReach(t));
@@ -2285,7 +2262,7 @@ function attachReadHelpers(store, db, hasFts) {
   store.gapsAround = (name) => {
     if (!hasBare) return [];
     const targets = targetsFor(name);
-    if (!targets.length) return collectGaps([symbolOf(name, null)], []);
+    if (!targets.length) return collectGaps([symbolOf(name, null)]);
     const targetIds = new Set(targets.map((t) => t.id));
     const reachedById = new Map();
     for (const t of targets) {
@@ -2295,15 +2272,15 @@ function attachReadHelpers(store, db, hasFts) {
     }
     const reached = [...reachedById.values()];
     const symbols = [...targets.map((t) => symbolOf(name, t)), ...reached.map((n) => symbolOf(n.qname, n))];
-    // No caller-less ids to check, the same reason as gapsFor: `store.impact`
-    // now returns a `kind: 'file'` row for every file that holds such a call, so
+    // No file-scope call is reported here, the same reason as gapsFor:
+    // `store.impact` returns a `kind: 'file'` row for every such file, so
     // those call sites are IN the answer. Naming them again under ⚠ made `impact`
     // print `(no impact)` and then list two lines that really do break — a false
     // headline rescued by a banner, and a flat disagreement with `callers` on the
     // same symbol. A GUESSED file-scope call is not listed, because the walk
     // refuses guesses; store.impactSkippedGuesses counts it, which blocks
     // ✓ complete just as firmly as a gap row did.
-    const rows = collectGaps(symbols, []);
+    const rows = collectGaps(symbols);
     // The same interface and implementation lines the direct question gets. An
     // impact walk that stops at a concrete method — or that asks about an
     // interface method directly — has to say what reaches it, or the set reads
