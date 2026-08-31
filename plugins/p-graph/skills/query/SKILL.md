@@ -95,6 +95,16 @@ where no type is recorded at all.
 `context` uses the same split, indented under its own `callers:` and `callees:` headers. With
 `--json`, each `callers`/`callees` row carries `guess`: 0 is certain, 1 is a guess.
 
+A row that begins with `file` is a call written outside any function — a module's top level, a Go
+package-level `var x = pkg.New()`, a `@Injectable()` on a class. There is no enclosing symbol to
+name, so the row names the file and carries every line on it: `file app/boot.js  3, 4`. Those are
+call sites of the symbol you asked about, and the line numbers are already on the row — never grep
+for them. The row obeys the same split as any other: plain is certain, and under `UNVERIFIED` it is
+a guess you open and judge like any other guess. `impact` is stricter: it lists only the certain
+ones and adds a guessed
+one to `skipped_guesses`, which blocks `✓ complete`. Across ten repos 4,672 of 4,998 resolved
+file-scope calls (93%) are certain, so 326 are counted instead of listed.
+
 ### 3b — `impact` is a floor, not a ceiling
 
 `impact` follows certain edges only. It never walks a guess, so a real dependency can be missing
@@ -116,7 +126,7 @@ missing:
 ⚠ 3 call sites missing from this answer:
     internal/api/server.go:41  api.Server.HandleList -> ListGroups
     internal/api/server.go:58  api.Serve -> bp.ListGroups
-    web/boot.ts:12  outside any indexed symbol -> start
+    web/boot.ts:12  file scope -> start
   + 12 same-name call sites in files that do not import the target's package — likely unrelated, not listed.
   + 365 calls the graph found nothing to link to (stdlib, third party, builtins, or a repo call it never indexed).
   Confirm with a text search before treating this answer as complete.
@@ -126,6 +136,10 @@ missing:
 counts. Never present a list as complete while the banner is there. The listed rows are worth
 checking by hand; the two counted groups are for scale, and you should say what they are rather
 than hiding them.
+
+Every listed row is a candidate the graph could not settle, so open its line and judge it. The
+middle column names the code the call sits in. `file scope` there means the call is written outside
+any function — that changes nothing about how you treat it, it is still a candidate.
 
 `status` ends with `unattributed calls N/M`. A high share means treat every structural answer in
 that repo as a lead, not as proof.

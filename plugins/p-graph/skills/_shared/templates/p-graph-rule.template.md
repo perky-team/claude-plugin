@@ -17,7 +17,7 @@ endings mean opposite things:
 |---|---|---|
 | `✓ complete — …` | the graph found nothing missing | **stop. Do not grep. Report the list as it stands.** |
 | `✓ no gaps — but every row above is a guess …` | nothing is missing, and nothing is settled either | do not grep for more rows; **open the rows you have** and say which survived |
-| `⚠ N call sites missing from this answer` | the graph knows it is short, and it prints every missing row with its own `file:line` | **read the middle column of each printed row.** `outside any indexed symbol` means the graph DID resolve that call to your symbol and only lacks a name for the code around it — put the line straight in your list, do not go looking for it. Any other middle column is a candidate the graph could not settle: open that line and judge it. Either way, never grep for a line the banner has already named |
+| `⚠ N call sites missing from this answer` | the graph knows it is short, and it prints every missing row with its own `file:line` | **every printed row is a candidate the graph could not settle: open that line and judge it.** The middle column names the code the call sits in; `file scope` means the call is written outside any function, and that is still a candidate, not a confirmed call site. Never grep for a line the banner has already named |
 | `no symbol named X in the graph` | nothing carries that name | check the spelling with `pgraph search X` — this is **not** "nothing calls it" |
 | `ℹ N call sites reach this method through I` | the calls are written on an interface, so no call names this method | **do not grep.** Report both: this method has no direct callers, and N calls reach it through `I`. Which implementation runs is a run-time decision |
 | `ℹ N call sites of this method — on I, which implements it` | these ARE call sites of the method you asked about — `I` is the concrete type the graph resolved each one to | **do not grep.** Put them in your main list of call sites, and name `I` as the implementing type. Nothing here is missing or needs a text search |
@@ -73,11 +73,28 @@ look for it costs money and finds nothing. **Relay the banner to the user and se
 the LISTED rows — never present a list as complete while they are there.**
 
 **Settle a listed row by reading it, not by searching for it.** The banner already
-gives every listed row a `file:line`. Measured on axios: `callers
-InterceptorManager.eject` lists 17 call sites and then names the other 8 in the
-banner, all marked `outside any indexed symbol`. Those 8 are resolved calls to that
-exact method, so the answer and its banner hold all 25 between them. A text search
-there buys nothing and costs a whole extra pass.
+gives every listed row a `file:line`, so open that line. A text search for a line the
+banner has already named buys nothing and costs a whole extra pass.
+
+**A `file` row is a call site, not a gap.** A call written outside any function — a
+module's top level, a Go package-level `var x = pkg.New()`, a `@Injectable()` on a
+class — has no enclosing symbol to name, so `callers`, `context` and `impact` name the
+**file** that holds it and put every line on one row: `file app/boot.js  3, 4`. The
+line numbers are already on the row, so never grep for them. Such a row is marked like
+any other: printed plainly it is certain and you report it as it stands; printed under
+`UNVERIFIED: … (guess)` it is a guess, so open it and judge it as you would any other
+guess. `impact` is stricter — it lists only the certain ones and adds a guessed one to
+its `guessed edge … not followed` count, which also stops it saying `✓ complete`.
+Across ten repos 4,672 of 4,998 resolved file-scope calls (93%) are certain, so 326
+are counted instead of listed.
+
+These calls used to be named one per line in the `⚠` banner, and that banner stops at
+20 rows. Measured on hugo: `callers parse.mkItem` named 20 of its 120 file-scope call
+sites and replaced the rest with `… and 100 more`. Across axios, nest, got and hugo,
+13 symbols were over that cap and 1,500 call sites were named nowhere at all. Now
+`parse.mkItem` is one row carrying all 120 lines, and it says `✓ complete`. On axios,
+`callers InterceptorManager.eject` listed 17 call sites and named 8 in the banner; it
+now lists all 25 — 11 certain and 14 guesses — and says `✓ complete`.
 
 **Ask by bare name — one call, not two.** The first line of the answer says which
 symbol it resolved (`target: function svc.Get  svc/get.go:12`). If the name is shared

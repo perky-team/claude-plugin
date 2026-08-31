@@ -33,6 +33,11 @@ dependencies. No schema change.
 
 ## What was measured
 
+> Everything down to "What it buys on the study's worst question" is the analysis done
+> **before** any code was written. The `>` callouts at the end of the section record
+> what the finished branch actually printed, and where the analysis was wrong. Read
+> those before quoting a number from here.
+
 A call written outside any function — `axios.interceptors.request.eject(id)` at the top
 of a module, a Go package-level `var x = pkg.New()`, a nest `@Injectable()` on a class —
 has no enclosing symbol, so its edge carries `src_id = NULL`. `store.callers` inner-joins
@@ -54,9 +59,10 @@ hugo is Go, so this is not a TypeScript problem.
 ### These rows are not lost — that claim was wrong
 
 An earlier note on this work said the 2,429 resolved rows "can never appear in an
-answer". They do appear. `collectGaps` has a reason for exactly this shape —
+answer". They did appear. `collectGaps` had a reason for exactly this shape —
 `'no-caller' — a RESOLVED call to the target made outside any indexed symbol` — and it
-prints in the `⚠` banner of `callers`, `callees`, `impact` and `context`:
+printed in the `⚠` banner of `callers`, `callees`, `impact` and `context`. This is the
+output from **before** the branch; no command prints that phrase any more:
 
 ```
 $ pgraph callers InterceptorManager.eject
@@ -106,6 +112,74 @@ That is the whole change: same facts, listed instead of bannered.
 this plan it goes from *17 listed + 8 bannered + `⚠`* to *25 listed + `✓ complete`* —
 and `✓ complete` is then true, which it was not before this branch started.
 
+> **The count landed. The strength did not: 14 of axios's 25 call sites are guesses,
+> and all 8 on the new file rows are among them.** The line above reads as 25 settled
+> call sites. Measured after the code landed, on the study's own axios clone,
+> `callers InterceptorManager.eject --json`:
+>
+> | | rows | call sites |
+> |---|---:|---:|
+> | caller rows, certain | 6 | 11 |
+> | caller rows, guessed | 5 | 6 |
+> | **file rows, certain** | **0** | **0** |
+> | **file rows, guessed** | **2** | **8** |
+> | total | 13 | **25** |
+>
+> `gaps: []` and `complete: true`, so the banner is empty and `✓ complete` prints. All
+> 25 call sites are in the list, but only 11 are settled — both axios file rows land
+> under `UNVERIFIED: 7 more callers, matched by name only (guess)`. Nothing lied: the
+> guess heading sits right above the rows, and `✓ complete` claims that nothing is
+> *missing*, not that everything is certain. But a reader of this plan would have
+> expected 25 plain rows, so the rule now spells out the difference.
+>
+> The other two symbols came out as predicted, and hugo's came out stronger:
+>
+> | symbol | before | after |
+> |---|---|---|
+> | hugo `parse.mkItem` | 2 caller rows, 11 sites; 20 of its 120 file-scope sites named in the banner, then `… and 100 more`, then `⚠` | + 1 **certain** file row carrying all 120 lines — 131 sites, empty banner, `✓ complete` |
+> | nest `Injectable` | 152 caller rows; 199 file-scope sites in the banner plus 1 unresolved one, 20 named, the rest behind `… and N more` | + 196 **certain** file rows carrying all 199 sites; 1 gap row left, `⚠ 1 call site missing` |
+> | axios `InterceptorManager.eject` | 17 listed, 8 in the banner, `⚠` | 25 listed (11 certain, 14 guessed), empty banner, `✓ complete` |
+>
+> nest's one remaining gap is a real unresolved call at file scope, in
+> `sample/09-babel-example/src/cats/cats.service.js:3`. The banner labels it
+> `file scope` — the middle column falls back to that when a gap row has no enclosing
+> symbol — so `⚠ 1 call site missing` there is honest, and `complete: false` is right.
+>
+> **"Rows named nowhere" is 0 by construction, not by luck.** `collectGaps` produces a
+> `no-caller` row only inside `if (callerCheckIds.length)`, and both of its callers —
+> `gapsFor` (callers, context) and `gapsAround` (impact) — now pass an empty list. A
+> file-scope call can therefore never reach a gap list, so the `… and N more` tail can
+> never hide one. The 1,500 counted above is 0.
+>
+> The six-repo table further up counts 2,429 resolved file-scope calls; the ten-clone
+> figure quoted below is 4,998. Those are different repo sets, not a correction.
+
+> **Task 2 was not a rendering fix, and `impact` needed a task this plan does not
+> have.** Three corrections to the plan's own shape, all found while executing it.
+>
+> - **The CLI already rendered a file row, and rendered it correctly.** `fmtSites`
+>   falls back to `${n.file}:${n.start_line}` only when `call_sites` is EMPTY, and a
+>   file row's site list is never empty — so the line already printed as
+>   `file app/boot.js  app/boot.js:3, 4`, with no crash and no `:null`. Task 2 shrank to
+>   one thing: stop printing the path twice. `fmtSites` now seeds its "a repeated file
+>   is written once" rule with the row's own path, so the line reads
+>   `file app/boot.js  3, 4`. That is one formatter line and does not earn its own
+>   review round, so tasks 2 and 3 were dispatched together (commits `fe8115c`,
+>   `724e5d8`).
+> - **`impact` needed its own task** (commit `a63cf45`). `store.impact` walks
+>   `src_id IS NOT NULL`, so it could not carry a file-scope call either. Once tasks 2
+>   and 3 landed, `impact Manager.eject` printed `(no impact)` and then named the two
+>   call sites under `⚠`: the headline was false, the banner rescued it, and `callers`
+>   on the same symbol already listed them — the two commands disagreed about one
+>   symbol. A call at file scope really does break when the target changes, so `impact`
+>   now carries it as a **leaf**: nothing calls a top-level statement, so it ends the
+>   chain instead of extending it.
+> - **`impact` lists only the file-scope calls it is certain of.** A guessed one would
+>   sit in a flat list with nothing to mark it, directly under `✓ complete`, so it goes
+>   into `skipped_guesses` instead — and a non-zero `skipped_guesses` blocks
+>   `✓ complete`. Measured across ten clones: 4,672 of 4,998 resolved file-scope calls
+>   (93%) are certain and move into the list; 326 are guesses and move into the count.
+
 ## Why not a file node
 
 The obvious design is a node per file that owns its top-level calls. It is wrong here,
@@ -132,6 +206,15 @@ against zero benefit — the read path can produce the same rows with none of th
 | `tools/__tests__/file-scope-callers.test.ts` | Create — the store returns file-scope rows, grouped, and never invents one |
 | `tools/__tests__/cli-file-scope.test.ts` | Create — the printed answer lists them and says `✓ complete` |
 | `tools/__tests__/cli-unresolved.test.ts` | Modify — the `no-caller` cases move from the banner to the list |
+
+Five more files turned out to need changing, and none of them is in the table above:
+
+| File | Why it was missed |
+|---|---|
+| `tools/__tests__/store-unresolved.test.ts` | Asserted `store.callers('Engine.start')` returns `[]`. Task 1 broke it and shipped red, because the plan's Task 1 named seven test files to run and this was not one of them. The fix strengthened the assertion: it now pins `kind === 'file'`, the exact line, and that the row is no longer a gap. |
+| `tools/__tests__/impact-skipped-guesses.test.ts` | Pinned `reason === 'no-caller'` surviving in `impact`'s JSON gaps. `impact` had no task, so nothing in the plan flipped it. |
+| `skills/_shared/templates/p-graph-rule.template.md` | In the plan (Task 4), but for one paragraph. Its `⚠` table row also had to change. |
+| `README.md`, `skills/query/SKILL.md` | Both print a sample gap banner containing an `outside any indexed symbol` row, and `README.md` has a paragraph saying `callers` cannot show these rows at all. Outside the plan's stated file list, found while running the tasks. |
 
 ---
 
