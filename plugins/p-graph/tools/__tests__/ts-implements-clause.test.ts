@@ -208,4 +208,56 @@ export class K { }
     expect(extendsUnknownOf(store, 'L')).toBe('1');
     store.close();
   }, 30000);
+
+  // A clause on an unbound class expression is not the enclosing class's clause.
+  // `ts.scm` makes a class expression a definition only when a variable declarator
+  // binds it, so this one has no definition and the innermost enclosing one is the
+  // class around it. Writing the clause there made a class that declares nothing
+  // look as if it declares, and the reader then refused every true row it had.
+  it('does not put a clause from an unbound class expression on the class around it', async () => {
+    write('lib/m.ts', `export class M {
+  serialize(v: unknown) { return ''; }
+  make() { return class implements Other { other() { } }; }
+  static readonly Proxy = class implements Second { second() { } };
+}
+`);
+    const store = await indexed();
+
+    expect(implementsOf(store, 'M')).toEqual([]);
+    expect(implementsFileScoped(store, 'lib/m.ts', 'M')).toEqual([]);
+    store.close();
+  }, 30000);
+
+  // The bound one still counts. `const W = class implements Serializer {}` IS a
+  // definition — ts.scm anchors it on the declarator — so its clause is its own and
+  // must keep being recorded under the name the declarator gives it.
+  it('records the clause of a class expression bound to a name', async () => {
+    write('lib/n.ts', `export const W = class implements Serializer {
+  serialize(v: unknown) { return ''; }
+};
+`);
+    const store = await indexed();
+
+    expect(implementsOf(store, 'W')).toEqual(['Serializer']);
+    expect(implementsFileScoped(store, 'lib/n.ts', 'W')).toEqual(['Serializer']);
+    store.close();
+  }, 30000);
+
+  // The same rule for the base class. `return class extends Base {}` used to record
+  // `Base` as the ENCLOSING class's base, which sent the base-chain walk into a
+  // class the outer one never extends, and an unnameable base there would have
+  // silenced the whole check for the outer class.
+  it('does not put a base class from an unbound class expression on the class around it', async () => {
+    write('lib/o.ts', `export class O {
+  serialize(v: unknown) { return ''; }
+  make() { return class extends Base { }; }
+  other() { return class extends Mix() { }; }
+}
+`);
+    const store = await indexed();
+
+    expect(extendsOf(store, 'O')).toBe(null);
+    expect(extendsUnknownOf(store, 'O')).toBe(null);
+    store.close();
+  }, 30000);
 });

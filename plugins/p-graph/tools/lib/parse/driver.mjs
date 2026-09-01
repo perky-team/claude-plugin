@@ -2069,9 +2069,41 @@ export async function extract({ file, lang, langId, scm, source, pyRepoModules =
       if (type) fieldTypes.push({ key: `${d.qname}#ret`, type, file });
     }
 
+    // The definition a heritage clause really belongs to, or null when it belongs
+    // to no definition at all.
+    //
+    // The innermost enclosing class definition is NOT the answer on its own. A
+    // class expression is a definition only when a variable declarator binds it
+    // (ts.scm), so `return class implements X {}`, `foo(class implements X {})` and
+    // a static field holding a class expression have no definition of their own —
+    // and the innermost one containing them is the class AROUND them. The clause
+    // landed there, and a class that declares nothing then looked as if it
+    // declares, which refused every true row it had. Measured through the real
+    // indexer: `class C { serialize(v){…} make(){ return class implements Other {} } }`
+    // answered `["C.serialize"]` before this branch and `[]` with the clause
+    // misattributed. nest writes the shape at
+    // `packages/core/middleware/builder.ts:44`; it is harmless there only because
+    // that class already declares an interface of its own.
+    //
+    // So walk up to the class the clause is written on and check it IS the chosen
+    // definition. Start position is the whole comparison: the class node is the
+    // definition itself for a declaration, and the definition's own child for
+    // `const W = class {}`, where ts.scm anchors the definition on the declarator.
+    const TS_CLASS_NODES = new Set(['class_declaration', 'abstract_class_declaration', 'class']);
+    const heritageOwner = (cap) => {
+      let n = cap.node?.parent;
+      while (n && !TS_CLASS_NODES.has(n.type)) n = n.parent;
+      if (!n) return null;
+      const cls = defs.filter((d) => d.kind === 'class' && within(cap, d)).sort(innermostFirst)[0];
+      if (!cls) return null;
+      const isDef = (x) => !!x && x.startPosition.row + 1 === cls.startLine &&
+        x.startPosition.column === cls.startCol;
+      return isDef(n) || isDef(n.parent) ? cls : null;
+    };
+
     for (const c of caps) {
       if (c.name !== 'ts.extends') continue;
-      const cls = defs.filter((d) => d.kind === 'class' && within(c, d)).sort(innermostFirst)[0];
+      const cls = heritageOwner(c);
       if (!cls) continue;
       const value = c.node.namedChild(0);
       // A dotted path and nothing else. `new Foo().Bar` is a `member_expression`
@@ -2113,7 +2145,9 @@ export async function extract({ file, lang, langId, scm, source, pyRepoModules =
     // only the last segment can match a stored qname.
     for (const c of caps) {
       if (c.name !== 'ts.implements') continue;
-      const cls = defs.filter((d) => d.kind === 'class' && within(c, d)).sort(innermostFirst)[0];
+      // The class the clause is written ON, not the innermost class around it. See
+      // heritageOwner above for the row this used to put on the wrong class.
+      const cls = heritageOwner(c);
       if (!cls) continue;
       for (let i = 0; i < c.node.namedChildCount; i++) {
         const n = c.node.namedChild(i);

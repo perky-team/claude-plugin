@@ -846,4 +846,68 @@ export function run(c: C) { return c.serialize(1); }
     expect(implementationVia(store, 'Serializer.serialize')).toEqual(['C.serialize']);
     store.close();
   }, 30000);
+
+  // A clause written on a class EXPRESSION belongs to that expression, not to the
+  // class around it. `ts.scm` makes a class expression a definition only when a
+  // variable declarator binds it, so `return class implements Other {}` has no
+  // definition of its own and the innermost enclosing one is the outer class — the
+  // clause landed there and made a class that declares NOTHING look as if it
+  // declares. That bypasses the "declares nothing, keep the old rule" case and
+  // refuses every true row the outer class has.
+  //
+  // Reproduced through the real indexer: this fixture answered `["C.serialize"]`
+  // before this branch and `[]` while the clause was misattributed.
+  it('keeps a class when the clause is on a class expression inside it', async () => {
+    write('src/i.ts', `export interface Serializer {
+  serialize(value: unknown): string;
+}
+export interface Other {
+  other(): void;
+}
+`);
+    write('src/c.ts', `import { Other } from './i';
+export class C {
+  serialize(value: unknown) { return String(value); }
+  make() {
+    return class implements Other {
+      other() { }
+    };
+  }
+}
+export function run(c: C) { return c.serialize(1); }
+`);
+    const store = await indexed();
+
+    expect(implementationVia(store, 'Serializer.serialize')).toEqual(['C.serialize']);
+    store.close();
+  }, 30000);
+
+  // The same shape as nest writes it, and the reason the repo-wide sweep could not
+  // catch this: `packages/core/middleware/builder.ts:44` holds `private static
+  // readonly ConfigProxy = class implements MiddlewareConfigProxy {` inside `class
+  // MiddlewareBuilder implements MiddlewareConsumer`. There the stray clause only
+  // ADDS to a class that already declares, so it can only keep rows. It turns
+  // harmful the moment the class around it declares nothing of its own.
+  it('keeps a class when a static field holds a class expression with a clause', async () => {
+    write('src/i.ts', `export interface Serializer {
+  serialize(value: unknown): string;
+}
+export interface Other {
+  other(): void;
+}
+`);
+    write('src/c.ts', `import { Other } from './i';
+export class C {
+  private static readonly Proxy = class implements Other {
+    other() { }
+  };
+  serialize(value: unknown) { return String(value); }
+}
+export function run(c: C) { return c.serialize(1); }
+`);
+    const store = await indexed();
+
+    expect(implementationVia(store, 'Serializer.serialize')).toEqual(['C.serialize']);
+    store.close();
+  }, 30000);
 });
