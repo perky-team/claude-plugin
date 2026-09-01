@@ -19,12 +19,26 @@ const indexed = async () => {
   return store;
 };
 
-// One `<Class>#implements:<Iface>` row per pair — the key carries the fact, the
-// value is a marker. This reads every such row for one class and returns the
-// interface names, so a test can assert on the set without caring which of the
-// two keys (class-wide or file-scoped) it came from.
+// Each pair is written twice, under a class-wide key and a file-scoped one, the
+// same as `#field:` and `#extends`. The key carries the fact and the value is only
+// a marker.
+//
+// This reads the CLASS-WIDE key alone. The `LIKE` pattern has no leading wildcard,
+// so it cannot match `<file>|<Class>#implements:<Iface>` — that row has its own
+// helper and its own case below. An earlier version of this comment claimed the
+// helper covered both keys; it never could, and nothing asserted the twin.
 const implementsOf = (store, cls) => {
   const prefix = `${cls}#implements:`;
+  return store.db.prepare('SELECT key FROM field_types WHERE key LIKE ?')
+    .all(`${prefix}%`)
+    .map((r) => r.key.slice(prefix.length));
+};
+
+// The file-scoped twin. `resolveTsFieldTypes` prefers a file's own declaration over
+// the class-wide one, so a repo with two classes of the same name needs this key to
+// tell them apart. Without a test on it, dropping it would pass the whole suite.
+const implementsFileScoped = (store, file, cls) => {
+  const prefix = `${file}|${cls}#implements:`;
   return store.db.prepare('SELECT key FROM field_types WHERE key LIKE ?')
     .all(`${prefix}%`)
     .map((r) => r.key.slice(prefix.length));
@@ -42,6 +56,23 @@ export class A implements Serializer {
 `);
     const store = await indexed();
     expect(implementsOf(store, 'A')).toEqual(['Serializer']);
+    store.close();
+  }, 30000);
+
+  it('writes the file-scoped twin as well as the class-wide key', async () => {
+    // Two rows per pair, not one. Two classes of one name in a repo share the
+    // class-wide key, so the file-scoped one is what tells them apart — the same
+    // reason `#field:` and `#extends` are written twice.
+    write('lib/a.ts', `export interface Serializer { serialize(v: unknown): string; }
+export class A implements Serializer {
+  serialize(v: unknown) { return ''; }
+}
+`);
+    const store = await indexed();
+
+    expect(implementsFileScoped(store, 'lib/a.ts', 'A')).toEqual(['Serializer']);
+    expect(store.db.prepare('SELECT type FROM field_types WHERE key = ?')
+      .get('lib/a.ts|A#implements:Serializer')?.type).toBe('1');
     store.close();
   }, 30000);
 
