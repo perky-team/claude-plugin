@@ -486,4 +486,107 @@ export function run(r: R) { return r.serialize(1); }
     expect(rows.map((r) => `${r.file}:${r.line}`)).toEqual(['one/dup.ts:4', 'three/dup.ts:4']);
     store.close();
   }, 30000);
+
+  // The clause can sit on the BASE class. `class C extends BaseSerializer
+  // implements Other` really does implement `Serializer` — nominally, through its
+  // base, not merely structurally — so that row is true, and reading only the
+  // class's own clause threw it away silently. A false row is at least visible; a
+  // lost true row is not.
+  //
+  // Reproduced through the real indexer: the base class in another file, a plain
+  // override. The code before this branch answered `["C.serialize"]`; reading the
+  // own clause alone answered `[]`.
+  //
+  // The data was already stored and this file already walks it: `<Class>#extends`
+  // is the same row `resolveTsFieldTypes` follows to find a field declared on a
+  // base class. So the clause of every class up the base chain is unioned with the
+  // class's own.
+  //
+  // nest could not have shown this: it holds exactly ONE `class … extends …
+  // implements …` under `packages/`, and that one's base is a Node library class.
+  it('accepts a class that inherits the clause from its base class', async () => {
+    write('src/serializer.interface.ts', `export interface Serializer {
+  serialize(value: unknown): string;
+}
+export interface Other {
+  other(): void;
+}
+`);
+    write('src/base.ts', `import { Serializer } from './serializer.interface';
+export class BaseSerializer implements Serializer {
+  serialize(value: unknown) { return String(value); }
+}
+`);
+    write('src/c.ts', `import { BaseSerializer } from './base';
+import { Other } from './serializer.interface';
+export class C extends BaseSerializer implements Other {
+  serialize(value: unknown) { return 'c' + String(value); }
+  other() { }
+}
+export function run(c: C) { return c.serialize(1); }
+`);
+    const store = await indexed();
+
+    expect(implementationVia(store, 'Serializer.serialize')).toEqual(['C.serialize']);
+    store.close();
+  }, 30000);
+
+  // Two steps up the base chain, and the base of the base is the one that
+  // declares. The walk is capped by a `seen` set rather than a hop count, so a
+  // deep hierarchy costs nothing and a cycle cannot spin.
+  it('walks the base class chain further than one step', async () => {
+    write('src/serializer.interface.ts', `export interface Serializer {
+  serialize(value: unknown): string;
+}
+export interface Other {
+  other(): void;
+}
+`);
+    write('src/root.ts', `import { Serializer } from './serializer.interface';
+export class Root implements Serializer {
+  serialize(value: unknown) { return String(value); }
+}
+`);
+    write('src/mid.ts', `import { Root } from './root';
+export class Mid extends Root { }
+`);
+    write('src/c.ts', `import { Mid } from './mid';
+import { Other } from './serializer.interface';
+export class C extends Mid implements Other {
+  serialize(value: unknown) { return 'c'; }
+  other() { }
+}
+export function run(c: C) { return c.serialize(1); }
+`);
+    const store = await indexed();
+
+    expect(implementationVia(store, 'Serializer.serialize')).toEqual(['C.serialize']);
+    store.close();
+  }, 30000);
+
+  // A base class the graph has never seen — a library class. Whatever it declares,
+  // the graph cannot read it, so the picture is half-read and the old rule decides.
+  // The keep direction, the same as an unresolvable interface name.
+  //
+  // nest writes exactly this shape once: `class Sink extends Writable implements
+  // HeaderStream`, and `Writable` comes from node's `stream`.
+  it('keeps a class whose base class is outside the graph', async () => {
+    write('src/a.ts', `import { Writable } from 'stream';
+export interface Serializer {
+  serialize(value: unknown): string;
+}
+export interface Other {
+  other(): void;
+}
+export class Sink extends Writable implements Other {
+  serialize(value: unknown) { return String(value); }
+  other() { }
+}
+export function run(s: Sink) { return s.serialize(1); }
+`);
+    const store = await indexed();
+
+    expect(implementationVia(store, 'Serializer.serialize')).toEqual(['Sink.serialize']);
+    store.close();
+  }, 30000);
 });

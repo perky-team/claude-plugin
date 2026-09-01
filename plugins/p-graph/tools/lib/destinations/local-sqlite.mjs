@@ -2225,13 +2225,27 @@ function attachReadHelpers(store, db, hasFts) {
     let declaredBy = null;   // "<Class>" or "<file>|<Class>" -> Set of declared names
     let aliasTarget = null;  // alias name -> the one name it points at, or null
     let ifaceInfo = null;    // interface name -> what it extends, and whether that could be read
+    let baseOf = null;       // "<file>|<Class>" -> the class it extends, or null
+    let classFiles = null;   // class name -> every file that declares a class of that name
     const readDeclarations = () => {
       declaredBy = new Map();
       aliasTarget = new Map();
+      baseOf = new Map();
       const MARK = '#implements:';
       for (const r of db.prepare(
-        `SELECT key, type FROM field_types WHERE key LIKE '%${MARK}%' OR key LIKE '#alias:%'`)
+        `SELECT key, type, file FROM field_types
+          WHERE key LIKE '%${MARK}%' OR key LIKE '#alias:%' OR key LIKE '%#extends'`)
         .all()) {
+        if (r.key.endsWith('#extends')) {
+          // `<Class>#extends` is written with no file-scoped twin (driver.mjs), so
+          // the row's own `file` column is the only thing that tells two classes of
+          // one name apart. Two rows under one file and name cancel out, the same
+          // rule the aliases follow right below.
+          const k = `${r.file}|${r.key.slice(0, -'#extends'.length)}`;
+          if (!baseOf.has(k)) baseOf.set(k, r.type);
+          else if (baseOf.get(k) !== r.type) baseOf.set(k, null);
+          continue;
+        }
         if (r.key.startsWith('#alias:')) {
           // Two aliases of one name pointing different ways cancel out, the same
           // rule every other field_types reader in this file follows.
@@ -2246,9 +2260,18 @@ function attachReadHelpers(store, db, hasFts) {
         declaredBy.get(scope).add(r.key.slice(at + MARK.length));
       }
       ifaceInfo = new Map();
+      classFiles = new Map();
       for (const n of db.prepare(
-        `SELECT name, signature FROM nodes
-          WHERE kind = 'interface' AND lang IN ('ts','js')`).all()) {
+        `SELECT name, signature, file, kind FROM nodes
+          WHERE kind IN ('class','interface') AND lang IN ('ts','js')`).all()) {
+        if (n.kind === 'class') {
+          // Which file declares the class of a given name. One file means the base
+          // of an `extends` is pinned down and its clause can be read; anything else
+          // means the graph cannot say, and then the old rule decides.
+          if (!classFiles.has(n.name)) classFiles.set(n.name, []);
+          classFiles.get(n.name).push(n.file);
+          continue;
+        }
         let info = ifaceInfo.get(n.name);
         if (!info) ifaceInfo.set(n.name, info = { readable: true, bases: new Set() });
         // Two interfaces of one name: a class naming it could mean either, so it
@@ -2297,6 +2320,44 @@ function attachReadHelpers(store, db, hasFts) {
       }
       return seen;
     };
+    // Every interface name the owner writes down, its own clause together with the
+    // clause of every class up its base chain. Null means "no opinion" — either the
+    // class writes no clause at all, or the chain cannot be read whole.
+    //
+    // The base chain matters and the loss it caused was silent. `class C extends
+    // BaseSerializer implements Other`, where `BaseSerializer implements
+    // Serializer`, really does implement `Serializer` — nominally, through its
+    // base — and reading only C's own clause dropped that true row. Reproduced
+    // through the real indexer: the code before this branch answered
+    // `["C.serialize"]`, the own-clause-only reading answered `[]`. nest could not
+    // show it: it holds exactly ONE `class … extends … implements …` under
+    // `packages/`, and that one's base is a Node library class.
+    //
+    // The chain is only walked for a class that writes a clause ITSELF. A class
+    // with no clause of its own keeps rule 2 exactly as it was, so this walk can
+    // only ADD names and therefore only turn a skip into a keep. That is the safe
+    // direction: a false row is visible, a lost true row is not.
+    const declaredNamesOf = (owner) => {
+      const own = declaredBy.get(`${owner.file}|${owner.name}`);
+      if (!own) return null; // writes no clause: rule 2, the old rule decides
+      const names = new Set(own);
+      const seen = new Set([owner.name]); // stops a cycle, and needs no hop cap
+      for (let cur = owner; ;) {
+        const base = baseOf.get(`${cur.file}|${cur.name}`);
+        if (base === undefined) return names; // extends nothing: the chain ends here
+        if (base === null) return null; // two rows disagree about the base
+        const bare = base.split('.').pop();
+        if (seen.has(bare)) return names;
+        seen.add(bare);
+        const files = classFiles.get(bare) ?? [];
+        // A base the graph does not hold — a library class such as node's
+        // `Writable` — or a name several files declare. Either way its clause
+        // cannot be read, so the picture is half-read and the old rule decides.
+        if (files.length !== 1) return null;
+        for (const n of declaredBy.get(`${files[0]}|${bare}`) ?? []) names.add(n);
+        cur = { file: files[0], name: bare };
+      }
+    };
     // Every interface the owner declares, walked out — or null meaning "no
     // opinion, let the old rule decide". Cached per owner, because two methods of
     // one class can both be candidates.
@@ -2319,7 +2380,7 @@ function attachReadHelpers(store, db, hasFts) {
       // those files declare a clause — `TestModule` in 20 files, 2 of them
       // declaring — and every plain one would have been judged by a clause written
       // somewhere else.
-      const written = declaredBy.get(`${owner.file}|${owner.name}`);
+      const written = declaredNamesOf(owner);
       let out = null;
       if (written) {
         out = new Set();
