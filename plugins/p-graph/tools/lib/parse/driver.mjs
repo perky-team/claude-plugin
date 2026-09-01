@@ -1944,6 +1944,19 @@ export async function extract({ file, lang, langId, scm, source, pyRepoModules =
   const pushImportRenamed = (name) => {
     fieldTypes.push({ key: `#importRenamed:${name}`, type: '1', file });
   };
+  // The same fact, told by an EXPORT rather than an import, and it has to be read
+  // repo-wide. `export { RealBase as Base } from './real'` hands the name `Base` to
+  // every file that imports it, and those files write a plain `import { Base }` and
+  // rename nothing themselves — so a per-file reading finds no rename anywhere the
+  // name is actually written, matches `Base` against an unrelated `class Base` and
+  // reads ITS clause. Reproduced through the real indexer: the barrel fixture
+  // answered `["C.serialize"]` before this branch and `[]` while the rename went
+  // unread. The row's `file` column is therefore not part of the fact; the reader
+  // ignores it. Measured by scanning the sources: nest writes 1 renaming export in
+  // 1,728 files, axios 2, got 4, so reading it repo-wide costs almost nothing.
+  const pushExportRenamed = (name) => {
+    fieldTypes.push({ key: `#exportRenamed:${name}`, type: '1', file });
+  };
   if (lang === 'ts' || lang === 'js') {
     for (const c of caps) {
       if (c.name !== 'import.binding') continue;
@@ -1968,6 +1981,23 @@ export async function extract({ file, lang, langId, scm, source, pyRepoModules =
           }
         }
       }
+    }
+    // `import Base = require('./eq')` and `import Alias = Ns.Inner`. Both let the
+    // importing file pick the name, exactly as a default import does, and neither
+    // holds an `import_clause` — so the loop above never saw them. The bound name is
+    // the clause's own first identifier; a `nested_identifier` on the right-hand
+    // side is a child of its own and cannot be mistaken for it.
+    for (const c of caps) {
+      if (c.name !== 'import.equals') continue;
+      const id = (c.node.namedChildren ?? []).find((n) => n.type === 'identifier');
+      if (id?.text) pushImportRenamed(id.text);
+    }
+    // `export { RealBase as Base }`. The query captures the ALIAS identifier itself,
+    // so there is nothing to parse here — see pushExportRenamed for why this one is
+    // read repo-wide and the import renames are not.
+    for (const c of caps) {
+      if (c.name !== 'export.renamed') continue;
+      if (c.node.text) pushExportRenamed(c.node.text);
     }
   }
 

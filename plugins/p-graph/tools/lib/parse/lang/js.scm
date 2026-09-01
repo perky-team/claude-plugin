@@ -48,3 +48,10 @@
 (import_statement source: (string) @reference.import)
 ;; The NAMES an import binds — see the same rule in ts.scm.
 (import_statement (import_clause) @import.binding)
+
+;; `export { RealBase as Base }` — see the same rule in ts.scm. A `.js` barrel can
+;; rename a class a `.ts` file declares, and the name it hands out is then written
+;; in files that rename nothing. Only this half of the rule exists here: the
+;; JavaScript grammar has no `import_alias` and no `import_require_clause` node, and
+;; both were tried against the real grammar and fail to compile.
+(export_specifier alias: (identifier) @export.renamed)

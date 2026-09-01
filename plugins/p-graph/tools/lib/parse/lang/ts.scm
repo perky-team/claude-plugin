@@ -70,6 +70,29 @@
 ;; cannot express "the alias if there is one, otherwise the name".
 (import_statement (import_clause) @import.binding)
 
+;; Two more ways a file picks its own name for something declared somewhere else:
+;; `import Base = require('./eq')` against an `export = RealEq`, and
+;; `import Alias = Ns.Inner`. Neither holds an `import_clause`, so the capture above
+;; never saw them — and then `class C extends Base` was matched against whatever
+;; class in the repo happens to be called `Base`, read THAT class's implements
+;; clause, and refused a row `C` really carries. Reproduced through the real
+;; indexer: the `import Base = require` fixture answered `["C.serialize"]` before
+;; this branch and `[]` while the binding went unread.
+;;
+;; Both node names were compiled against the real grammar before being written
+;; here. A pattern that does not compile takes every capture in this file with it.
+(import_statement (import_require_clause) @import.equals)
+(import_alias) @import.equals
+
+;; `export { RealBase as Base }` — a renaming re-export. This one is read repo-wide,
+;; not per file: it hands the name `Base` to every file that imports it, and those
+;; files write a plain `import { Base }` and rename nothing themselves, so a
+;; per-file reading finds no rename anywhere the name is actually used. Measured by
+;; scanning the sources: nest writes 1 renaming export in 1,728 files, axios 2,
+;; got 4 — so reading it repo-wide switches the base-chain walk off for almost
+;; nothing.
+(export_specifier alias: (identifier) @export.renamed)
+
 ;; Names a TypeScript/JavaScript scope binds to a value. A call written on one of
 ;; these can only be resolved once we know what the name holds, so the binding has
 ;; to be recorded even when its type is not — see the driver, which keys the call on
