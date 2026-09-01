@@ -144,12 +144,23 @@ Each symbol carries a bare `name` (used for search) and a qualified `qname`. A c
   reach and trace questions.) The same clause governs the other direction, the `ℹ N call sites
   reach this method through I` line reported for a class method, so the graph cannot name an
   interface when asked about the class and then leave the class out when asked about the interface.
-  The clause is read together with what each interface it names extends and what each base class of
-  its own declares, and only a clause the graph can read WHOLE may refuse anything: a declared name
-  it cannot resolve, a base class it does not hold, a base class written as an expression it cannot
-  name (`extends Mix()`), or a base name the file imports under a new name — each of those leaves
-  the row alone. The check does not apply to Go or JavaScript, which have no `implements` keyword at
-  all, nor to a TypeScript class that declares nothing — TypeScript is structurally typed, so such a
+  The clause is read together with three more things the source writes down: what each interface it
+  names extends, what each class up its own `extends` chain declares, and — because TypeScript
+  merges the two — what a same-file `interface` of the class's own name extends. Only a clause the
+  graph can read WHOLE may refuse anything. Anything short of that leaves the row alone, and this is
+  the full list of what falls short: a declared name it cannot resolve; a base class it does not
+  hold, such as a library class; a name several files declare; a base class written as an expression
+  it cannot name (`extends Mix()`, `extends (Base as any)`); a link in the chain written in
+  JavaScript, whose heritage the graph does not read at all; a name the file itself binds anew
+  (`import { RealBase as Base }`, a default import, `import Base = require('./eq')`); a name a
+  renaming re-export hands out (`export { RealBase as Base }`, which is read repo-wide because the
+  file that writes the base name renames nothing itself); a heritage line the graph cannot parse
+  whole, such as one that wraps on to the next line; and two classes of one name in one file. Two
+  ways of binding a name are still NOT read, and each can drop a true row: a plain value alias
+  (`const Base = Other`), and a `declare module` augmentation in another file.
+
+  The check does not apply to Go or JavaScript, which have no `implements` keyword at all, nor to a
+  TypeScript class that declares nothing — TypeScript is structurally typed, so such a
   class really can implement an interface without saying so, and there the other two checks decide
   on their own. Those two: the type must carry a method of every name the interface declares, and —
   for the one method asked about — that method's shape must match the interface's (`sigShape` in
