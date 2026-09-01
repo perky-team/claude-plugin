@@ -134,15 +134,21 @@ Each symbol carries a bare `name` (used for search) and a qualified `qname`. A c
   The other direction works too: ask about the interface method itself, and `callers` also reports
   the calls that run a type which implements it — `ℹ N call sites of this method — on
   config.Postgres.Set, which implements it:`, one such line per implementing type. In TypeScript
-  "implements" takes THREE checks, not two, and the new one can remove a row: what the class writes
+  "implements" takes THREE checks, not two, and the third can remove a row: what the class writes
   down beats what its shape suggests. `class C implements Other` is not an implementation of
   `Serializer`, however well its `serialize` fits. Measured on nestjs/nest:
   `ClassSerializerInterceptor` declares `implements NestInterceptor`, sits in another package, and
-  used to be reported on 13 call sites of `Serializer.serialize` — the only invented rows in the
-  whole four-language study. The clause is read together with what each interface it names extends
-  and what each base class of its own declares, and only a clause the graph can read WHOLE may
-  refuse anything: a declared name it cannot resolve, or a base class it does not hold, leaves the
-  row alone. The check does not apply to Go or JavaScript, which have no `implements` keyword at
+  used to be reported on 13 call sites of `Serializer.serialize` — 39 rows over three runs, and
+  every invented row in the 36 "who calls X" questions the published tables measure. (Counted over
+  all 52 questions of the study, the graph arm recorded 43 invented rows; the other four sit on
+  reach and trace questions.) The same clause governs the other direction, the `ℹ N call sites
+  reach this method through I` line reported for a class method, so the graph cannot name an
+  interface when asked about the class and then leave the class out when asked about the interface.
+  The clause is read together with what each interface it names extends and what each base class of
+  its own declares, and only a clause the graph can read WHOLE may refuse anything: a declared name
+  it cannot resolve, a base class it does not hold, a base class written as an expression it cannot
+  name (`extends Mix()`), or a base name the file imports under a new name — each of those leaves
+  the row alone. The check does not apply to Go or JavaScript, which have no `implements` keyword at
   all, nor to a TypeScript class that declares nothing — TypeScript is structurally typed, so such a
   class really can implement an interface without saying so, and there the other two checks decide
   on their own. Those two: the type must carry a method of every name the interface declares, and —

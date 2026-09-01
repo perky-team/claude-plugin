@@ -52,8 +52,10 @@ describe('a class implements what it says it implements', () => {
   // The measured case. `ClassSerializerInterceptor` in nest declares
   // `implements NestInterceptor` and lives in another package; the only thing it
   // shares with `Serializer` is a method named `serialize`. Its 13 call sites per
-  // run were the only source of invented rows in the whole four-language study
-  // (TypeScript 39, Go 0, Python 0, C++ 0).
+  // run — 39 over three runs — were every invented row in the 36 "who calls X"
+  // questions the published tables measure (TypeScript 39, Go 0, Python 0, C++ 0).
+  // Counted over all 52 questions, the graph arm recorded 43; the other 4 sit on
+  // reach and trace questions.
   it('does not call a class an implementation when it declares another interface', async () => {
     write('micro/serializer.interface.ts', `export interface Serializer {
   serialize(value: unknown, options?: Record<string, any>): string;

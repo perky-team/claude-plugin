@@ -2371,7 +2371,12 @@ function attachReadHelpers(store, db, hasFts) {
     };
     return declaredIfacesOf;
   };
-  const interfaceReach = (node, declaresOf = declarationReader()) => {
+  // `declaresOf` is required, not defaulted. With a default a caller that forgot to
+  // pass one would still work, and would quietly pay for two full table scans of its
+  // own on every call — about 90 ms each on nest — with nothing on screen to show it.
+  // gapsFor and gapsAround build ONE reader and hand the same one to both
+  // directions, which is also what makes the two directions agree by construction.
+  const interfaceReach = (node, declaresOf) => {
     if (!node?.name) return [];
     const owner = ownerOf(node);
     if (!owner || owner.kind === 'interface') return [];
@@ -2455,7 +2460,8 @@ function attachReadHelpers(store, db, hasFts) {
   // two-parameter form that returns an error is not a question about the
   // three-parameter middleware form or about the standard library's form that
   // returns nothing.
-  const implementationReach = (node, declaresOf = declarationReader()) => {
+  // `declaresOf` is required here too — see interfaceReach above.
+  const implementationReach = (node, declaresOf) => {
     if (!node?.name || !node.container_id) return [];
     const iface = db.prepare('SELECT id, qname, kind, name FROM nodes WHERE id = ?')
       .get(node.container_id);
@@ -2504,9 +2510,11 @@ function attachReadHelpers(store, db, hasFts) {
       // `callers Serializer.serialize` reported 13 call sites on
       // `ClassSerializerInterceptor.serialize`, a class in a different package that
       // declares `implements NestInterceptor` and shares nothing with `Serializer`
-      // but a method named `serialize`. Those 13 rows per run were the ONLY source
-      // of invented rows in the whole four-language study — TypeScript 39, Go 0,
-      // Python 0, C++ 0.
+      // but a method named `serialize`. Those 13 rows per run — 39 over three runs —
+      // were every invented row in the 36 "who calls X" questions the published
+      // tables measure: TypeScript 39, Go 0, Python 0, C++ 0. Counted over all 52
+      // questions of the study, the graph arm recorded 43 invented rows; the other 4
+      // sit on reach and trace questions, in hugo, caddy and django.
       //
       // Only a clause the graph can read WHOLE is allowed to refuse, and the clause
       // includes what each named interface itself extends. `implements X` where

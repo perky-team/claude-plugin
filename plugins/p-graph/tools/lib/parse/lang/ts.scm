@@ -113,7 +113,9 @@
 ;; graph guessed, and it guessed wrong: `callers Serializer.serialize` on nest reported
 ;; 13 call sites "on ClassSerializerInterceptor.serialize, which implements it", and that
 ;; class declares `implements NestInterceptor`, in another package. Those 13 rows per run
-;; were the ONLY source of invented rows in the whole four-language study.
+;; — 39 over three runs — were every invented row in the 36 "who calls X" questions the
+;; published tables measure. Counted over all 52 questions of the study, the graph arm
+;; recorded 43 invented rows; the other 4 sit on reach and trace questions.
 (class_heritage (implements_clause) @ts.implements)
 
 ;; `type ProducerSerializer = Serializer<…>`. No class is called ProducerSerializer,
