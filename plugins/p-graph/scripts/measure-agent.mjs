@@ -37,6 +37,7 @@ import { existsSync, mkdirSync, rmSync, writeFileSync, appendFileSync, readFileS
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir, homedir } from 'node:os';
+import { createHash } from 'node:crypto';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PLUGIN = join(HERE, '..');
@@ -1613,7 +1614,13 @@ function doScore() {
   let spent = 0;
   const scored = rows.map((r) => {
     const q = QUESTIONS.find((x) => x.id === r.id);
-    const k = `${r.arm} ${r.id} ${r.run}`;
+    // The ANSWER decides the key, not the run number. Keyed on `arm id run` alone,
+    // a re-measured question reuses the extraction of the answer it replaced, and
+    // the score comes back as if nothing had changed. That happened: the first
+    // score of a full graph-arm re-run returned the previous numbers verbatim,
+    // including 51/75 on a question whose new answer names all 25 call sites. The
+    // hash is short because it only has to tell two answers apart, not be secure.
+    const k = `${r.arm} ${r.id} ${r.run} ${createHash('sha1').update(r.answer ?? '').digest('hex').slice(0, 12)}`;
     if (!cache[k]) {
       process.stderr.write(`  extracting ${k}\n`);
       const e = extractSites(q.question, r.answer);
