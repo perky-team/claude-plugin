@@ -109,6 +109,13 @@
 ;; subclass.
 (class_heritage (extends_clause) @ts.extends)
 
+;; `class C implements Serializer` — what the class SAYS it implements. Without it the
+;; graph guessed, and it guessed wrong: `callers Serializer.serialize` on nest reported
+;; 13 call sites "on ClassSerializerInterceptor.serialize, which implements it", and that
+;; class declares `implements NestInterceptor`, in another package. Those 13 rows per run
+;; were the ONLY source of invented rows in the whole four-language study.
+(class_heritage (implements_clause) @ts.implements)
+
 ;; `type ProducerSerializer = Serializer<…>`. No class is called ProducerSerializer,
 ;; so without following the alias a field declared with it has no type at all.
 (type_alias_declaration) @ts.alias

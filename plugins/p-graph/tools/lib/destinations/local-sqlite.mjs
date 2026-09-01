@@ -88,7 +88,10 @@ function loadDatabaseSync() {
 // 14: a node extracted from a TypeScript declaration file (`.d.ts`, `.d.cts`,
 // `.d.mts`) is marked `decl = 1`. Stored values change for every repo that ships
 // one, so the graph is rebuilt rather than read as current.
-export const SCHEMA_VERSION = 14;
+// 15: a TypeScript class records what it declares it implements, as one
+// `<Class>#implements:<Iface>` field_types row per pair. Stored rows change for
+// every repo with an implements clause, so the graph is rebuilt.
+export const SCHEMA_VERSION = 15;
 
 // `ts` and `js` are one language for resolution. A repository that ships
 // JavaScript, writes its tests in TypeScript and publishes an `index.d.ts` is not

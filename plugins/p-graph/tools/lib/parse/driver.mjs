@@ -2079,6 +2079,29 @@ export async function extract({ file, lang, langId, scm, source, pyRepoModules =
         fieldTypes.push({ key: `${cls.name}#extends`, type: base, file });
       }
     }
+    // Every interface the clause names, one row per pair. `implements A, B` is
+    // ordinary code, and a single `<Class>#implements` key holding a name would
+    // cancel itself out — every field_types reader folds a key to one value and
+    // poisons it when two rows disagree. So the fact lives in the KEY and the value
+    // is a marker.
+    //
+    // Three node shapes, all measured against the grammar: `type_identifier` for a
+    // plain name, `generic_type` whose first named child is the name for
+    // `Serializer<X, Y>`, and `nested_type_identifier` for `ns.Outer.Iface`, where
+    // only the last segment can match a stored qname.
+    for (const c of caps) {
+      if (c.name !== 'ts.implements') continue;
+      const cls = defs.filter((d) => d.kind === 'class' && within(c, d)).sort(innermostFirst)[0];
+      if (!cls) continue;
+      for (let i = 0; i < c.node.namedChildCount; i++) {
+        const n = c.node.namedChild(i);
+        const raw = n.type === 'generic_type' ? n.namedChild(0)?.text : n.text;
+        const name = raw ? raw.split('.').pop() : null;
+        if (!name || name === cls.name) continue;
+        fieldTypes.push({ key: `${cls.name}#implements:${name}`, type: '1', file });
+        fieldTypes.push({ key: `${file}|${cls.name}#implements:${name}`, type: '1', file });
+      }
+    }
     // A value declared at the TOP of a module, keyed by its name alone so another
     // file can look it up. `export const NestFactory = new NestFactoryStatic();` is
     // declared once and called from everywhere, and the call site has no local of
