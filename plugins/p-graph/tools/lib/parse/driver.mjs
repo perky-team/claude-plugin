@@ -2071,13 +2071,35 @@ export async function extract({ file, lang, langId, scm, source, pyRepoModules =
 
     for (const c of caps) {
       if (c.name !== 'ts.extends') continue;
-      const value = c.node.namedChild(0);
-      const base = value?.type === 'identifier' ? value.text
-        : value?.type === 'member_expression' ? value.childForFieldName?.('property')?.text : null;
       const cls = defs.filter((d) => d.kind === 'class' && within(c, d)).sort(innermostFirst)[0];
-      if (base && cls && base !== cls.name) {
+      if (!cls) continue;
+      const value = c.node.namedChild(0);
+      // A dotted path and nothing else. `new Foo().Bar` is a `member_expression`
+      // too, and its `property` is `Bar` — a name the source never wrote as a base
+      // class. Recording it would send the reader below to whatever class in the
+      // repo happens to be called `Bar` and let that class's clause refuse rows.
+      const dotted = value?.type === 'member_expression' &&
+        /^[\w$]+(\.[\w$]+)*$/.test(value.text);
+      const base = value?.type === 'identifier' ? value.text
+        : dotted ? value.childForFieldName?.('property')?.text : null;
+      if (base && base !== cls.name) {
         fieldTypes.push({ key: `${cls.name}#extends`, type: base, file });
+        continue;
       }
+      // There IS a base class and the extractor could not name it. That is a
+      // DIFFERENT fact from "this class has no extends clause", and the two must
+      // not look alike in the graph: local-sqlite.mjs walks the base chain to
+      // collect what a class declares it implements, and reading this as "extends
+      // nothing" ends the walk and lets it refuse a row the base really carries.
+      // Measured through the real indexer: `class C extends Mix() implements
+      // Other`, where the mixin's class implements `Serializer`, answered
+      // `["C.serialize"]` before this branch and `[]` while the marker was missing.
+      //
+      // `class C extends C` — or `extends ns.C` — counts as unnameable as well: the
+      // only name available is the class's own, which says nothing about which
+      // class the base really is.
+      fieldTypes.push({ key: `${cls.name}#extendsUnknown`, type: '1', file });
+      fieldTypes.push({ key: `${file}|${cls.name}#extendsUnknown`, type: '1', file });
     }
     // Every interface the clause names, one row per pair. `implements A, B` is
     // ordinary code, and a single `<Class>#implements` key holding a name would

@@ -47,6 +47,17 @@ const implementsFileScoped = (store, file, cls) => {
 const extendsOf = (store, cls) =>
   store.db.prepare('SELECT type FROM field_types WHERE key = ?').get(`${cls}#extends`)?.type ?? null;
 
+// "There IS a base class and the extractor could not name it." A different fact
+// from "there is no extends clause", and the reader has to tell them apart: the
+// second one ends the base-class walk, the first one must stop the walk from
+// deciding anything.
+const extendsUnknownOf = (store, cls) => store.db
+  .prepare('SELECT type FROM field_types WHERE key = ?').get(`${cls}#extendsUnknown`)?.type ?? null;
+
+const extendsUnknownFileScoped = (store, file, cls) => store.db
+  .prepare('SELECT type FROM field_types WHERE key = ?')
+  .get(`${file}|${cls}#extendsUnknown`)?.type ?? null;
+
 describe('a class records what it says it implements', () => {
   it('records a plain implements clause', async () => {
     write('lib/a.ts', `export interface Serializer { serialize(v: unknown): string; }
@@ -130,6 +141,71 @@ export class A implements Serializer {
     const store = await indexed();
     expect(implementsOf(store, 'F')).toEqual(['Serializer']);
     expect(extendsOf(store, 'F')).toBe('Base');
+    store.close();
+  }, 30000);
+
+  // A base the extractor cannot name gets a marker row, so the reader can tell
+  // "there is a base I could not read" from "there is no extends clause". Reading
+  // the second where the first is true ends the base-class walk early and refuses
+  // a row the base really does carry — measured through the real indexer, a mixin
+  // base turned `["C.serialize"]` into `[]`.
+  it('records that a base class could not be named', async () => {
+    write('lib/g.ts', `export class G extends Mix() implements Serializer {
+  serialize(v: unknown) { return ''; }
+}
+`);
+    const store = await indexed();
+
+    expect(extendsOf(store, 'G')).toBe(null);
+    expect(extendsUnknownOf(store, 'G')).toBe('1');
+    expect(extendsUnknownFileScoped(store, 'lib/g.ts', 'G')).toBe('1');
+    expect(implementsOf(store, 'G')).toEqual(['Serializer']);
+    store.close();
+  }, 30000);
+
+  it('records that a base class written as a cast could not be named', async () => {
+    write('lib/h.ts', `export class H extends (Base as any) {
+  serialize(v: unknown) { return ''; }
+}
+`);
+    const store = await indexed();
+
+    expect(extendsOf(store, 'H')).toBe(null);
+    expect(extendsUnknownOf(store, 'H')).toBe('1');
+    store.close();
+  }, 30000);
+
+  // A base name the extractor CAN read gets no marker. The marker means "a base is
+  // there and I could not name it", so a class that names its base must not carry
+  // one — otherwise the walk would refuse to read a chain it can read perfectly.
+  it('records no marker when the base class has a plain name', async () => {
+    write('lib/i.ts', `export class I extends Base implements Serializer {
+  serialize(v: unknown) { return ''; }
+}
+export class J extends ns.Outer.Base { }
+export class K { }
+`);
+    const store = await indexed();
+
+    expect(extendsUnknownOf(store, 'I')).toBe(null);
+    expect(extendsOf(store, 'I')).toBe('Base');
+    expect(extendsUnknownOf(store, 'J')).toBe(null);
+    expect(extendsOf(store, 'J')).toBe('Base');
+    expect(extendsUnknownOf(store, 'K')).toBe(null);
+    store.close();
+  }, 30000);
+
+  // `extends new Foo().Bar` is a `member_expression` too, and its `property` is
+  // `Bar` — a name the source never wrote as a base class. Naming it would send
+  // the walk to whatever class in the repo happens to be called `Bar` and let it
+  // refuse rows on that class's clause, so the base counts as unnameable.
+  it('records that a computed base class could not be named', async () => {
+    write('lib/l.ts', `export class L extends new Foo().Bar { }
+`);
+    const store = await indexed();
+
+    expect(extendsOf(store, 'L')).toBe(null);
+    expect(extendsUnknownOf(store, 'L')).toBe('1');
     store.close();
   }, 30000);
 });

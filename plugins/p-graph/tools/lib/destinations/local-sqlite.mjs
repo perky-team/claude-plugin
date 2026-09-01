@@ -89,8 +89,12 @@ function loadDatabaseSync() {
 // `.d.mts`) is marked `decl = 1`. Stored values change for every repo that ships
 // one, so the graph is rebuilt rather than read as current.
 // 15: a TypeScript class records what it declares it implements, as one
-// `<Class>#implements:<Iface>` field_types row per pair. Stored rows change for
-// every repo with an implements clause, so the graph is rebuilt.
+// `<Class>#implements:<Iface>` field_types row per pair. It also records a
+// `<Class>#extendsUnknown` marker when it HAS a base class the extractor could not
+// name (`extends Mix()`, `extends (Base as any)`), because the reader must tell
+// that apart from "no extends clause" — the second one ends the base-chain walk
+// and the first one must not. Stored rows change for every repo with an implements
+// clause, so the graph is rebuilt.
 export const SCHEMA_VERSION = 15;
 
 // `ts` and `js` are one language for resolution. A repository that ships
@@ -2128,16 +2132,34 @@ function attachReadHelpers(store, db, hasFts) {
     let aliasTarget = null;  // alias name -> the one name it points at, or null
     let ifaceInfo = null;    // interface name -> what it extends, and whether that could be read
     let baseOf = null;       // "<file>|<Class>" -> the class it extends, or null
+    let baseUnknown = null;  // "<file>|<Class>" -> it HAS a base that could not be named
     let classFiles = null;   // class name -> every file that declares a class of that name
     const readDeclarations = () => {
       declaredBy = new Map();
       aliasTarget = new Map();
       baseOf = new Map();
+      baseUnknown = new Set();
       const MARK = '#implements:';
+      const UNKNOWN = '#extendsUnknown';
       for (const r of db.prepare(
         `SELECT key, type, file FROM field_types
-          WHERE key LIKE '%${MARK}%' OR key LIKE '#alias:%' OR key LIKE '%#extends'`)
+          WHERE key LIKE '%${MARK}%' OR key LIKE '#alias:%' OR key LIKE '%#extends'
+             OR key LIKE '%${UNKNOWN}'`)
         .all()) {
+        if (r.key.endsWith(UNKNOWN)) {
+          // "This class extends something the extractor could not name" — a mixin
+          // call, a cast. Read as "extends nothing" it ends the base-chain walk
+          // below and lets a half-read picture refuse a row; see driver.mjs, where
+          // the marker is written, for the measured loss.
+          //
+          // Written under both keys, the class-wide one and the file-scoped twin,
+          // the same as `#implements:`. Adding the row's own `file` column to the
+          // class-wide key names the same scope as the twin does, so either row on
+          // its own is enough and reading both costs nothing.
+          const scope = r.key.slice(0, -UNKNOWN.length);
+          baseUnknown.add(scope.includes('|') ? scope : `${r.file}|${scope}`);
+          continue;
+        }
         if (r.key.endsWith('#extends')) {
           // `<Class>#extends` is written with no file-scoped twin (driver.mjs), so
           // the row's own `file` column is the only thing that tells two classes of
@@ -2260,6 +2282,14 @@ function attachReadHelpers(store, db, hasFts) {
       const names = new Set(own);
       const seen = new Set([owner.name]); // stops a cycle, and needs no hop cap
       for (let cur = owner; ;) {
+        // A base the extractor could not name — `extends Mix()`, `extends (Base as
+        // any)`. There IS a base, so the chain does not end here and its clause
+        // cannot be read: the picture is half-read and the old rule decides.
+        // Reading this as "extends nothing" lost the row: measured through the real
+        // indexer, `class C extends Mix() implements Other` where the mixin's class
+        // implements `Serializer` answered `["C.serialize"]` before this branch and
+        // `[]` without this check.
+        if (baseUnknown.has(`${cur.file}|${cur.name}`)) return null;
         const base = baseOf.get(`${cur.file}|${cur.name}`);
         if (base === undefined) return names; // extends nothing: the chain ends here
         if (base === null) return null; // two rows disagree about the base

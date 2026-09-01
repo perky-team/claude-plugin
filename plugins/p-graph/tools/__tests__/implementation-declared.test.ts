@@ -775,4 +775,75 @@ export function run(c: C) { return c.serialize(1); }
     expect(rows.map((r) => `${r.file}:${r.line}`)).toEqual(['src/dup.ts:10', 'src/dup.ts:11']);
     store.close();
   }, 30000);
+
+  // A base class the extractor could not NAME is not a class with no base. The
+  // extractor writes `<Class>#extends` only when the base is a bare name or a
+  // dotted one — `extends Mix()` names no single class and guessing one would
+  // invent a whole method set — so for any other expression it writes a
+  // `<Class>#extendsUnknown` marker instead. Without that marker the reader saw no
+  // row and read it as "extends nothing", ended the walk, and refused a row the
+  // base really does carry.
+  //
+  // Reproduced through the real indexer: the code before this branch answered
+  // `["C.serialize"]` and the reading that ends the walk answered `[]`. A mixin
+  // factory is everyday TypeScript, and no clone in the study writes it, so no
+  // sweep could have caught this.
+  it('keeps a class whose base class the extractor could not name', async () => {
+    write('src/serializer.interface.ts', `export interface Serializer {
+  serialize(value: unknown): string;
+}
+export interface Other {
+  other(): void;
+}
+`);
+    write('src/mix.ts', `import { Serializer } from './serializer.interface';
+export function Mix() {
+  return class implements Serializer {
+    serialize(value: unknown) { return String(value); }
+  };
+}
+`);
+    write('src/c.ts', `import { Mix } from './mix';
+import { Other } from './serializer.interface';
+export class C extends Mix() implements Other {
+  serialize(value: unknown) { return 'c'; }
+  other() { }
+}
+export function run(c: C) { return c.serialize(1); }
+`);
+    const store = await indexed();
+
+    expect(implementationVia(store, 'Serializer.serialize')).toEqual(['C.serialize']);
+    store.close();
+  }, 30000);
+
+  // The same fact written a second way: a cast around the base name. The
+  // expression is a `parenthesized_expression`, not a name, so the extractor
+  // cannot name the base and says so with the marker.
+  it('keeps a class whose base class is written as a cast', async () => {
+    write('src/serializer.interface.ts', `export interface Serializer {
+  serialize(value: unknown): string;
+}
+export interface Other {
+  other(): void;
+}
+`);
+    write('src/base.ts', `import { Serializer } from './serializer.interface';
+export class BaseSerializer implements Serializer {
+  serialize(value: unknown) { return String(value); }
+}
+`);
+    write('src/c.ts', `import { BaseSerializer } from './base';
+import { Other } from './serializer.interface';
+export class C extends (BaseSerializer as any) implements Other {
+  serialize(value: unknown) { return 'c'; }
+  other() { }
+}
+export function run(c: C) { return c.serialize(1); }
+`);
+    const store = await indexed();
+
+    expect(implementationVia(store, 'Serializer.serialize')).toEqual(['C.serialize']);
+    store.close();
+  }, 30000);
 });
