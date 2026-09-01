@@ -23,6 +23,11 @@ const indexed = async () => {
 // prints. One row per call site, so the list is de-duplicated.
 const implementationVia = (store, name) => [...new Set(store.gapsFor(name)
   .filter((r) => r.reason === 'implementation').map((r) => r.via))].sort();
+// The `via` of every "this call runs through an interface method" row — the
+// MIRROR direction, asked about a class method rather than an interface one. It
+// prints as `ℹ N call site reaches this method through X`.
+const interfaceVia = (store, name) => [...new Set(store.gapsFor(name)
+  .filter((r) => r.reason === 'interface').map((r) => r.via))].sort();
 
 // Asked about a method an interface declares, p-graph reports the call sites of
 // every type that implements the interface. Until now "implements" was guessed
@@ -587,6 +592,64 @@ export function run(s: Sink) { return s.serialize(1); }
     const store = await indexed();
 
     expect(implementationVia(store, 'Serializer.serialize')).toEqual(['Sink.serialize']);
+    store.close();
+  }, 30000);
+
+  // The two directions have to give the same answer about one class. Asked about
+  // an INTERFACE method, p-graph reports the classes that implement it; asked
+  // about a CLASS method, it reports the interface the call runs through. The
+  // second path had no declaration check at all, so the graph contradicted itself
+  // on the measured fixture:
+  //
+  //   callers ClassSerializerInterceptor.serialize -> through Serializer.serialize
+  //   callers Serializer.serialize                 -> does not list it
+  //
+  // One of those two answers had to be wrong, and it was the same wrong claim in
+  // both cases — the class declares `implements NestInterceptor` and shares
+  // nothing with `Serializer` but a method name. Both directions now read the same
+  // clause, so they agree.
+  it('agrees in both directions about a class that declares another interface', async () => {
+    write('micro/serializer.interface.ts', `export interface Serializer {
+  serialize(value: unknown, options?: Record<string, any>): string;
+}
+`);
+    write('micro/identity.serializer.ts', `import { Serializer } from './serializer.interface';
+export class IdentitySerializer implements Serializer {
+  serialize(value: unknown) { return String(value); }
+}
+`);
+    write('common/nest-interceptor.interface.ts', `export interface NestInterceptor {
+  intercept(context: unknown, next: unknown): unknown;
+}
+`);
+    write('common/class-serializer.interceptor.ts', `import { NestInterceptor } from './nest-interceptor.interface';
+export class ClassSerializerInterceptor implements NestInterceptor {
+  intercept(context: unknown, next: unknown) { return next; }
+  serialize(value: unknown) { return String(value); }
+}
+`);
+    write('common/use.ts', `import { ClassSerializerInterceptor } from './class-serializer.interceptor';
+export function run(i: ClassSerializerInterceptor) { return i.serialize(1); }
+`);
+    write('micro/use.ts', `import { IdentitySerializer } from './identity.serializer';
+export function run(s: IdentitySerializer) { return s.serialize(1); }
+`);
+    // A call written on a `Serializer`-typed value, so it lands on the INTERFACE
+    // method. Without it neither direction has an interface row to report and the
+    // check would pass on an empty list.
+    write('micro/use-iface.ts', `import { Serializer } from './serializer.interface';
+export function runIface(s: Serializer) { return s.serialize(1); }
+`);
+    const store = await indexed();
+
+    // Direction one: asked about the interface method.
+    expect(implementationVia(store, 'Serializer.serialize'))
+      .toEqual(['IdentitySerializer.serialize']);
+    // Direction two: asked about the class method. The same clause, the same answer.
+    expect(interfaceVia(store, 'ClassSerializerInterceptor.serialize')).toEqual([]);
+    // And the class that really does implement it still reads that way both ways.
+    expect(interfaceVia(store, 'IdentitySerializer.serialize'))
+      .toEqual(['Serializer.serialize']);
     store.close();
   }, 30000);
 });

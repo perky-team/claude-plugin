@@ -2109,119 +2109,21 @@ function attachReadHelpers(store, db, hasFts) {
     return implShape.params <= ifaceShape.params;
   };
 
-  const interfaceReach = (node) => {
-    if (!node?.name) return [];
-    const owner = ownerOf(node);
-    if (!owner || owner.kind === 'interface') return [];
-    const ownNames = new Set(owner.names);
-    const implShape = sigShape(node.signature, node.name);
-    // Only interfaces that declare a method of this name can be relevant.
-    // ORDER BY o.qname: when two interfaces both carry a method of this name,
-    // this decides which one's "ℹ" group is reported first, and that must
-    // not depend on SQLite's unordered row delivery.
-    const ifaces = db.prepare(`
-      SELECT DISTINCT o.id, o.qname FROM nodes n JOIN nodes o ON n.container_id = o.id
-      WHERE o.kind = 'interface' AND o.lang = ? AND n.name = ? AND o.id <> ?
-      ORDER BY o.qname`)
-      .all(node.lang, node.name, owner.id);
-    const out = [];
-    for (const iface of ifaces) {
-      // ORDER BY start_line: a stable order for the members of one interface,
-      // and the same order the overload scan below relies on being stable.
-      const members = db.prepare(
-        'SELECT name, signature FROM nodes WHERE container_id = ? ORDER BY start_line')
-        .all(iface.id);
-      // An optional member does not have to be there, so it is not demanded.
-      const need = members.filter((m) => !isOptionalMember(m)).map((m) => m.name);
-      if (!need.length || !need.every((n) => ownNames.has(n))) continue;
-      // Compared with shapeSatisfies — see its comment for the Go/TypeScript
-      // split and why an unreadable shape falls back to name-only instead of
-      // refusing. Without some shape check at all, a one-parameter
-      // `Cache.ListGroups(reset bool)` read as satisfying a zero-parameter
-      // `Store.ListGroups() []string`, on name alone.
-      //
-      // A TypeScript interface can declare one name more than once — overloads.
-      // A type that implements ANY of the declared shapes satisfies the
-      // interface, so compare against every same-named member and stop at the
-      // first that agrees. Taking only the first member refused a class that
-      // implemented the second overload, and then reported "no callers,
-      // complete" for a method that every call reaches.
-      const candidates = members.filter((m) => m.name === node.name);
-      const matches = candidates.some((m) => shapeSatisfies(node.lang, sigShape(m.signature, m.name), implShape));
-      if (!matches) continue;
-      for (const r of db.prepare(`
-        SELECT e.file, e.line, e.dst_name, s.qname AS src_qname, n.qname AS via
-        FROM edges e JOIN nodes n ON n.id = e.dst_id
-        LEFT JOIN nodes s ON s.id = e.src_id
-        WHERE e.kind = 'call' AND n.container_id = ? AND n.name = ?
-        ORDER BY e.file, e.line`).all(iface.id, node.name)) {
-        out.push({ file: r.file, line: r.line, dst_name: r.dst_name, src_qname: r.src_qname,
-          reason: 'interface', reachable: 1, via: r.via });
-      }
-    }
-    return out;
-  };
-
-  // The mirror of interfaceReach. Asked about a method an INTERFACE declares,
-  // find the types that implement the interface and report the calls that land on
-  // their method. Those calls resolve certainly — the receiver's type is written
-  // at the call site — so they are knowledge the reader would otherwise have to
-  // grep for.
+  // Reads what each class SAYS it implements — the `<Class>#implements:<Iface>`
+  // rows — and everything needed to make sense of a declared name: the type
+  // aliases, the interfaces this repo declares and what each of them extends, and
+  // which class each `extends` names. Shared by both reach functions below, which
+  // ask the same question in mirror directions and must give the same answer.
   //
-  // Measured on caddy: `callers caddyhttp.Handler.ServeHTTP` named 1 of the 18
-  // calls in modules/caddyhttp/metrics_test.go. The other 17 resolve to
-  // `metricsInstrumentedRoute.ServeHTTP`, which is the right answer to "which
-  // method runs" and the wrong answer to the question that was asked.
-  //
-  // Satisfaction is checked two ways: the type must carry every method name the
-  // interface declares (the comment above ownerOf says what this misses with an
-  // embedded interface), PLUS the one method being asked about must match the
-  // interface's shape for it. The name alone is not enough here: caddy holds 34
-  // methods named `ServeHTTP` in three shapes, and a question about the
-  // two-parameter form that returns an error is not a question about the
-  // three-parameter middleware form or about the standard library's form that
-  // returns nothing.
-  const implementationReach = (node) => {
-    if (!node?.name || !node.container_id) return [];
-    const iface = db.prepare('SELECT id, qname, kind, name FROM nodes WHERE id = ?')
-      .get(node.container_id);
-    if (!iface || iface.kind !== 'interface') return [];
-    // Loop-invariant, so read once before the candidate scan runs. May be
-    // `null` — an unreadable interface shape no longer means "refuse every
-    // candidate"; shapeSatisfies falls back to name-only for it below.
-    const ifaceShape = sigShape(node.signature, node.name);
-    // Before the optional filter below, `need` always held at least
-    // `node.name`, because `node.container_id` is `iface.id` — node is one
-    // of the rows this query selects. That stopped being true the moment
-    // optional members started being filtered out: `need` comes back empty
-    // whenever EVERY member is optional. The common case is `node` being the
-    // interface's only member, but nest has 28 all-optional interfaces
-    // carrying 36 members between them, so some of them declare several.
-    // An empty `need` must never mean "every candidate implements" —
-    // `[].every(...)` is always true, so without the check right below,
-    // every same-named method anywhere would pass the name-set gate. The
-    // guard mirrors interfaceReach's own `!need.length` check, for the same
-    // reason. An optional member does not have to be there, so it is not
-    // demanded — a type may legally implement the interface without it.
-    const need = db.prepare('SELECT name, signature FROM nodes WHERE container_id = ?')
-      .all(iface.id)
-      .filter((m) => !isOptionalMember(m))
-      .map((m) => m.name);
-    if (!need.length) return [];
-    const rowsFor = db.prepare(`
-      SELECT e.file, e.line, e.dst_name, s.qname AS src_qname
-      FROM edges e LEFT JOIN nodes s ON s.id = e.src_id
-      WHERE e.kind = 'call' AND e.dst_id = ? ORDER BY e.file, e.line`);
-    // What each class SAYS it implements, from the `<Class>#implements:<Iface>`
-    // rows, plus the two things needed to read a declared name: the type aliases
-    // and the set of names this repo declares as an interface.
-    //
-    // Read ONCE for the whole candidate scan, not once per candidate. A common
-    // method name reaches hundreds of candidates and a query each would be a real
-    // cost — see impact-perf.test.ts, which exists because a per-candidate query
-    // has bitten this file before. Lazy, so a graph with no candidate at all — and
-    // every Go, Python and C++ graph, none of which holds an `#implements:` row —
-    // never runs these queries.
+  // One reader per query, built by gapsFor and gapsAround and handed to both. The
+  // two table scans it needs are the cost — measured on nest, about 90 ms on a
+  // 330 ms `callers` query — and one reader means they are paid once for the
+  // query instead of once per direction. Lazy on top of that: a graph with no
+  // candidate at all, and every Go, Python and C++ query, never runs them.
+  const declarationReader = () => {
+    // Read once, on the first question asked of this reader, and never per
+    // candidate: a common method name reaches hundreds of candidates, and a query
+    // each is the perf bug impact-perf.test.ts exists to catch.
     let declaredBy = null;   // "<Class>" or "<file>|<Class>" -> Set of declared names
     let aliasTarget = null;  // alias name -> the one name it points at, or null
     let ifaceInfo = null;    // interface name -> what it extends, and whether that could be read
@@ -2362,8 +2264,14 @@ function attachReadHelpers(store, db, hasFts) {
     // opinion, let the old rule decide". Cached per owner, because two methods of
     // one class can both be candidates.
     const declaredCache = new Map();
-    const declaredIfacesOf = (owner) => {
+    const declaredIfacesOf = (owner, lang) => {
+      // Only TypeScript writes a clause down, so no other language can ever be
+      // refused here — and none of them should pay for the two table scans that
+      // read the clauses. Measured on nest: reading them costs about 90 ms on a
+      // 330 ms `callers` query, and a Go or C++ question got nothing for it.
+      if (lang !== 'ts' && lang !== 'js') return null;
       if (declaredCache.has(owner.id)) return declaredCache.get(owner.id);
+      if (!declaredBy) readDeclarations();
       // The FILE-SCOPED key only, and no fall back to the class-wide one. The
       // extractor writes both keys in the same loop, so for a class the graph holds
       // at all, "no file-scoped row" means "this class writes no clause" — and the
@@ -2393,6 +2301,123 @@ function attachReadHelpers(store, db, hasFts) {
       declaredCache.set(owner.id, out);
       return out;
     };
+    return declaredIfacesOf;
+  };
+  const interfaceReach = (node, declaresOf = declarationReader()) => {
+    if (!node?.name) return [];
+    const owner = ownerOf(node);
+    if (!owner || owner.kind === 'interface') return [];
+    const ownNames = new Set(owner.names);
+    const implShape = sigShape(node.signature, node.name);
+    // Only interfaces that declare a method of this name can be relevant.
+    // ORDER BY o.qname: when two interfaces both carry a method of this name,
+    // this decides which one's "ℹ" group is reported first, and that must
+    // not depend on SQLite's unordered row delivery.
+    const ifaces = db.prepare(`
+      SELECT DISTINCT o.id, o.qname, o.name FROM nodes n JOIN nodes o ON n.container_id = o.id
+      WHERE o.kind = 'interface' AND o.lang = ? AND n.name = ? AND o.id <> ?
+      ORDER BY o.qname`)
+      .all(node.lang, node.name, owner.id);
+    // What the owner says it implements — the same clause implementationReach
+    // reads, because these two answer one question from opposite ends and have to
+    // agree. They did not: on the measured fixture the graph said
+    // `ClassSerializerInterceptor` reaches `Serializer.serialize` when asked about
+    // the class, and did not list the class when asked about the interface. One of
+    // those two answers had to be wrong, and both times it was the same wrong
+    // claim. Read once for the whole loop, and only when the loop has work.
+    const declares = ifaces.length ? declaresOf(owner, node.lang) : null;
+    const out = [];
+    for (const iface of ifaces) {
+      // A class implements what it SAYS it implements. See the long comment in
+      // implementationReach for the five-rule guard this is the other half of, and
+      // for why a clause the graph cannot read WHOLE never refuses anything.
+      if (declares && !declares.has(iface.name)) continue;
+      // ORDER BY start_line: a stable order for the members of one interface,
+      // and the same order the overload scan below relies on being stable.
+      const members = db.prepare(
+        'SELECT name, signature FROM nodes WHERE container_id = ? ORDER BY start_line')
+        .all(iface.id);
+      // An optional member does not have to be there, so it is not demanded.
+      const need = members.filter((m) => !isOptionalMember(m)).map((m) => m.name);
+      if (!need.length || !need.every((n) => ownNames.has(n))) continue;
+      // Compared with shapeSatisfies — see its comment for the Go/TypeScript
+      // split and why an unreadable shape falls back to name-only instead of
+      // refusing. Without some shape check at all, a one-parameter
+      // `Cache.ListGroups(reset bool)` read as satisfying a zero-parameter
+      // `Store.ListGroups() []string`, on name alone.
+      //
+      // A TypeScript interface can declare one name more than once — overloads.
+      // A type that implements ANY of the declared shapes satisfies the
+      // interface, so compare against every same-named member and stop at the
+      // first that agrees. Taking only the first member refused a class that
+      // implemented the second overload, and then reported "no callers,
+      // complete" for a method that every call reaches.
+      const candidates = members.filter((m) => m.name === node.name);
+      const matches = candidates.some((m) => shapeSatisfies(node.lang, sigShape(m.signature, m.name), implShape));
+      if (!matches) continue;
+      for (const r of db.prepare(`
+        SELECT e.file, e.line, e.dst_name, s.qname AS src_qname, n.qname AS via
+        FROM edges e JOIN nodes n ON n.id = e.dst_id
+        LEFT JOIN nodes s ON s.id = e.src_id
+        WHERE e.kind = 'call' AND n.container_id = ? AND n.name = ?
+        ORDER BY e.file, e.line`).all(iface.id, node.name)) {
+        out.push({ file: r.file, line: r.line, dst_name: r.dst_name, src_qname: r.src_qname,
+          reason: 'interface', reachable: 1, via: r.via });
+      }
+    }
+    return out;
+  };
+
+  // The mirror of interfaceReach. Asked about a method an INTERFACE declares,
+  // find the types that implement the interface and report the calls that land on
+  // their method. Those calls resolve certainly — the receiver's type is written
+  // at the call site — so they are knowledge the reader would otherwise have to
+  // grep for.
+  //
+  // Measured on caddy: `callers caddyhttp.Handler.ServeHTTP` named 1 of the 18
+  // calls in modules/caddyhttp/metrics_test.go. The other 17 resolve to
+  // `metricsInstrumentedRoute.ServeHTTP`, which is the right answer to "which
+  // method runs" and the wrong answer to the question that was asked.
+  //
+  // Satisfaction is checked two ways: the type must carry every method name the
+  // interface declares (the comment above ownerOf says what this misses with an
+  // embedded interface), PLUS the one method being asked about must match the
+  // interface's shape for it. The name alone is not enough here: caddy holds 34
+  // methods named `ServeHTTP` in three shapes, and a question about the
+  // two-parameter form that returns an error is not a question about the
+  // three-parameter middleware form or about the standard library's form that
+  // returns nothing.
+  const implementationReach = (node, declaresOf = declarationReader()) => {
+    if (!node?.name || !node.container_id) return [];
+    const iface = db.prepare('SELECT id, qname, kind, name FROM nodes WHERE id = ?')
+      .get(node.container_id);
+    if (!iface || iface.kind !== 'interface') return [];
+    // Loop-invariant, so read once before the candidate scan runs. May be
+    // `null` — an unreadable interface shape no longer means "refuse every
+    // candidate"; shapeSatisfies falls back to name-only for it below.
+    const ifaceShape = sigShape(node.signature, node.name);
+    // Before the optional filter below, `need` always held at least
+    // `node.name`, because `node.container_id` is `iface.id` — node is one
+    // of the rows this query selects. That stopped being true the moment
+    // optional members started being filtered out: `need` comes back empty
+    // whenever EVERY member is optional. The common case is `node` being the
+    // interface's only member, but nest has 28 all-optional interfaces
+    // carrying 36 members between them, so some of them declare several.
+    // An empty `need` must never mean "every candidate implements" —
+    // `[].every(...)` is always true, so without the check right below,
+    // every same-named method anywhere would pass the name-set gate. The
+    // guard mirrors interfaceReach's own `!need.length` check, for the same
+    // reason. An optional member does not have to be there, so it is not
+    // demanded — a type may legally implement the interface without it.
+    const need = db.prepare('SELECT name, signature FROM nodes WHERE container_id = ?')
+      .all(iface.id)
+      .filter((m) => !isOptionalMember(m))
+      .map((m) => m.name);
+    if (!need.length) return [];
+    const rowsFor = db.prepare(`
+      SELECT e.file, e.line, e.dst_name, s.qname AS src_qname
+      FROM edges e LEFT JOIN nodes s ON s.id = e.src_id
+      WHERE e.kind = 'call' AND e.dst_id = ? ORDER BY e.file, e.line`);
     const out = [];
     // ORDER BY qname: candidates decide which row wins a dedup key shared with
     // another candidate's row on the same file:line (see addOnce), and that
@@ -2430,8 +2455,7 @@ function attachReadHelpers(store, db, hasFts) {
       // `implements` keyword at all: a type's method set IS the rule, so name-and-
       // shape is correct there and is the only thing available), every JavaScript
       // class, and every structurally typed TypeScript class.
-      if (!declaredBy) readDeclarations();
-      const declares = declaredIfacesOf(owner);
+      const declares = declaresOf(owner, node.lang);
       if (declares && !declares.has(iface.name)) continue;
       const ownNames = new Set(owner.names);
       if (!need.every((n) => ownNames.has(n))) continue;
@@ -2483,9 +2507,14 @@ function attachReadHelpers(store, db, hasFts) {
     // `store.impact` lists these files too, as leaves of its reverse walk.
     const rows = collectGaps(targets.map((t) => symbolOf(name, t)));
     const seen = new Set(rows.map((r) => `${r.file}|${r.line}`));
+    // One declaration reader for the whole answer: a bare name can match several
+    // targets, and both reach functions ask it the same question. Building it here
+    // pays for its two table scans once per query instead of once per target per
+    // direction.
+    const declaresOf = declarationReader();
     for (const t of targets) {
-      addOnce(rows, seen, interfaceReach(t));
-      addOnce(rows, seen, implementationReach(t));
+      addOnce(rows, seen, interfaceReach(t, declaresOf));
+      addOnce(rows, seen, implementationReach(t, declaresOf));
     }
     return rows.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
   };
@@ -2562,9 +2591,14 @@ function attachReadHelpers(store, db, hasFts) {
     // interface method directly — has to say what reaches it, or the set reads
     // as closed.
     const seen = new Set(rows.map((r) => `${r.file}|${r.line}`));
+    // One declaration reader for the whole answer: a bare name can match several
+    // targets, and both reach functions ask it the same question. Building it here
+    // pays for its two table scans once per query instead of once per target per
+    // direction.
+    const declaresOf = declarationReader();
     for (const t of targets) {
-      addOnce(rows, seen, interfaceReach(t));
-      addOnce(rows, seen, implementationReach(t));
+      addOnce(rows, seen, interfaceReach(t, declaresOf));
+      addOnce(rows, seen, implementationReach(t, declaresOf));
     }
     return rows.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
   };
