@@ -1945,16 +1945,23 @@ function attachReadHelpers(store, db, hasFts) {
   //   Go       `store.Postgres.ListGroups` -> no container at all; the receiver is
   //            written into the qname, so the owner is the qname minus its own name
   //            and the method set is every qname under that prefix.
+  //
+  // `name` and `file` come back too, and both are load-bearing for the declaration
+  // check in implementationReach: the `implements` clause is recorded under the
+  // class's own NAME (a TypeScript qname carries no module path), and under the
+  // file that holds it, so two classes of one name can be told apart.
   const ownerOf = (node) => {
     if (node.container_id) {
-      const o = db.prepare('SELECT id, qname, kind FROM nodes WHERE id = ?').get(node.container_id);
+      const o = db.prepare('SELECT id, qname, kind, name, file FROM nodes WHERE id = ?')
+        .get(node.container_id);
       if (!o) return null;
       return { ...o, names: db.prepare('SELECT name FROM nodes WHERE container_id = ?')
         .all(o.id).map((r) => r.name) };
     }
     if (!node.qname?.includes('.')) return null;
     const ownerQname = node.qname.slice(0, node.qname.lastIndexOf('.'));
-    const o = db.prepare('SELECT id, qname, kind FROM nodes WHERE qname = ? AND lang = ? LIMIT 2')
+    const o = db.prepare(
+      'SELECT id, qname, kind, name, file FROM nodes WHERE qname = ? AND lang = ? LIMIT 2')
       .all(ownerQname, node.lang);
     if (o.length !== 1) return null; // two types on one qname: no method set to trust
     // `qname = prefix || name` instead of a LIKE: it picks exactly this type's own
@@ -1992,6 +1999,53 @@ function attachReadHelpers(store, db, hasFts) {
       return /^\s*\?/.test(signature.slice(after));
     }
     return false;
+  };
+
+  // The interfaces a TypeScript interface EXTENDS, read off its own declaration
+  // line. `[]` for an interface that extends nothing; `null` for a line this
+  // reader cannot promise it read WHOLE, which every caller must treat as "the
+  // graph does not know".
+  //
+  // It is read from the text because nothing stores it: `ts.scm` captures an
+  // `extends` clause only inside a `class_heritage`, which an interface does not
+  // have, so there is no `<Iface>#extends` row to walk. Reading a stored
+  // `signature` is what `isOptionalMember` and `sigShape` already do.
+  //
+  // The completeness test is a `{` on the line. `signature` is only the FIRST LINE
+  // of a declaration (see driver.mjs), so `export interface Wide` with `extends
+  // Serializer {` on the next line has no `{` here — and a base named on a line
+  // this reader never sees is exactly the case that must not be mistaken for "no
+  // bases". Anything else it cannot parse cleanly — a `{` inside type arguments, a
+  // function type in them, unbalanced angle brackets — also comes back null rather
+  // than half-read.
+  const heritageOf = (signature) => {
+    if (typeof signature !== 'string') return null;
+    const brace = signature.indexOf('{');
+    if (brace === -1) return null; // the declaration wraps: the heritage may be off-line
+    const head = signature.slice(0, brace);
+    const kw = /\bextends\b/.exec(head);
+    if (!kw) return [];
+    const parts = [];
+    let depth = 0, token = '';
+    for (const ch of head.slice(kw.index + 'extends'.length)) {
+      if (ch === '<') { depth++; continue; }
+      if (ch === '>') { depth--; if (depth < 0) return null; continue; }
+      if (depth > 0) continue; // inside type arguments, which name no base
+      if (ch === ',') { parts.push(token); token = ''; continue; }
+      token += ch;
+    }
+    if (depth !== 0) return null;
+    parts.push(token);
+    const out = [];
+    for (const p of parts) {
+      const name = p.trim();
+      // A plain name, or a dotted one — `ns.Outer.Iface`, of which only the last
+      // segment can match a stored name, the same reduction the extractor makes on
+      // an `implements` clause.
+      if (!/^[\w$]+(\.[\w$]+)*$/.test(name)) return null;
+      out.push(name.split('.').pop());
+    }
+    return out;
   };
 
   // Does an implementation's shape for one method satisfy the interface's shape
@@ -2121,7 +2175,8 @@ function attachReadHelpers(store, db, hasFts) {
   // returns nothing.
   const implementationReach = (node) => {
     if (!node?.name || !node.container_id) return [];
-    const iface = db.prepare('SELECT id, qname, kind FROM nodes WHERE id = ?').get(node.container_id);
+    const iface = db.prepare('SELECT id, qname, kind, name FROM nodes WHERE id = ?')
+      .get(node.container_id);
     if (!iface || iface.kind !== 'interface') return [];
     // Loop-invariant, so read once before the candidate scan runs. May be
     // `null` — an unreadable interface shape no longer means "refuse every
@@ -2149,6 +2204,126 @@ function attachReadHelpers(store, db, hasFts) {
       SELECT e.file, e.line, e.dst_name, s.qname AS src_qname
       FROM edges e LEFT JOIN nodes s ON s.id = e.src_id
       WHERE e.kind = 'call' AND e.dst_id = ? ORDER BY e.file, e.line`);
+    // What each class SAYS it implements, from the `<Class>#implements:<Iface>`
+    // rows, plus the two things needed to read a declared name: the type aliases
+    // and the set of names this repo declares as an interface.
+    //
+    // Read ONCE for the whole candidate scan, not once per candidate. A common
+    // method name reaches hundreds of candidates and a query each would be a real
+    // cost — see impact-perf.test.ts, which exists because a per-candidate query
+    // has bitten this file before. Lazy, so a graph with no candidate at all — and
+    // every Go, Python and C++ graph, none of which holds an `#implements:` row —
+    // never runs these queries.
+    let declaredBy = null;   // "<Class>" or "<file>|<Class>" -> Set of declared names
+    let aliasTarget = null;  // alias name -> the one name it points at, or null
+    let ifaceInfo = null;    // interface name -> what it extends, and whether that could be read
+    const readDeclarations = () => {
+      declaredBy = new Map();
+      aliasTarget = new Map();
+      const MARK = '#implements:';
+      for (const r of db.prepare(
+        `SELECT key, type FROM field_types WHERE key LIKE '%${MARK}%' OR key LIKE '#alias:%'`)
+        .all()) {
+        if (r.key.startsWith('#alias:')) {
+          // Two aliases of one name pointing different ways cancel out, the same
+          // rule every other field_types reader in this file follows.
+          const name = r.key.slice('#alias:'.length);
+          if (!aliasTarget.has(name)) aliasTarget.set(name, r.type);
+          else if (aliasTarget.get(name) !== r.type) aliasTarget.set(name, null);
+          continue;
+        }
+        const at = r.key.indexOf(MARK);
+        const scope = r.key.slice(0, at);
+        if (!declaredBy.has(scope)) declaredBy.set(scope, new Set());
+        declaredBy.get(scope).add(r.key.slice(at + MARK.length));
+      }
+      ifaceInfo = new Map();
+      for (const n of db.prepare(
+        `SELECT name, signature FROM nodes
+          WHERE kind = 'interface' AND lang IN ('ts','js')`).all()) {
+        let info = ifaceInfo.get(n.name);
+        if (!info) ifaceInfo.set(n.name, info = { readable: true, bases: new Set() });
+        // Two interfaces of one name: a class naming it could mean either, so it
+        // is held to both, and one unreadable heritage makes the pair unreadable.
+        const bases = heritageOf(n.signature);
+        if (!bases) info.readable = false;
+        else for (const b of bases) info.bases.add(b);
+      }
+    };
+    // The interface a declared name really names, or null when the graph cannot
+    // say. Matched on the NAME, not the qname: a TypeScript qname carries no
+    // module path, and the recorded value is the clause's last segment already.
+    // One alias hop, and only one — the same hop resolveTsFieldTypes follows for
+    // `type ProducerSerializer = Serializer<…>`, which is how nest writes it.
+    const declaredIface = (name) => {
+      if (ifaceInfo.has(name)) return name;
+      const hop = aliasTarget.get(name)?.split('.').pop();
+      return hop && ifaceInfo.has(hop) ? hop : null;
+    };
+    // Everything one declared name commits a class to: the interface itself and
+    // every interface it extends, walked to the end. Null means "the graph cannot
+    // read this far", and then the old rule decides.
+    //
+    // The walk is the difference between removing false rows and losing true ones.
+    // Measured on nest: `ExecutionContextHost` declares `implements
+    // ExecutionContext`, and `interface ExecutionContext extends ArgumentsHost`, so
+    // it really does implement ArgumentsHost. Stopping at the declared name alone
+    // dropped all 5 true `ArgumentsHost.*` rows — `getArgs`, `getArgByIndex`,
+    // `switchToHttp`, `switchToRpc`, `switchToWs`.
+    const commitmentOf = (name) => {
+      const first = declaredIface(name);
+      if (!first) return null;
+      const seen = new Set();
+      const queue = [first];
+      while (queue.length) {
+        const cur = queue.pop();
+        if (seen.has(cur)) continue; // also what stops a cycle
+        seen.add(cur);
+        const info = ifaceInfo.get(cur);
+        if (!info?.readable) return null;
+        for (const b of info.bases) {
+          const hit = declaredIface(b);
+          if (!hit) return null; // a base outside the graph: read no further
+          queue.push(hit);
+        }
+      }
+      return seen;
+    };
+    // Every interface the owner declares, walked out — or null meaning "no
+    // opinion, let the old rule decide". Cached per owner, because two methods of
+    // one class can both be candidates.
+    const declaredCache = new Map();
+    const declaredIfacesOf = (owner) => {
+      if (declaredCache.has(owner.id)) return declaredCache.get(owner.id);
+      // The FILE-SCOPED key only, and no fall back to the class-wide one. The
+      // extractor writes both keys in the same loop, so for a class the graph holds
+      // at all, "no file-scoped row" means "this class writes no clause" — and the
+      // class-wide key would then hand it a DIFFERENT class's clause and refuse a
+      // row that class never disclaimed.
+      //
+      // This is where the check differs from resolveTsFieldTypes, which does fall
+      // back, and the difference is real rather than an oversight: its key comes
+      // from the CALL SITE's file, which is usually not the file the class is
+      // declared in, so its file-scoped key misses all the time and the class-wide
+      // one is the only thing that can answer. Here the file is the class's own.
+      //
+      // Measured on nest: 13 class names live in several files where only some of
+      // those files declare a clause — `TestModule` in 20 files, 2 of them
+      // declaring — and every plain one would have been judged by a clause written
+      // somewhere else.
+      const written = declaredBy.get(`${owner.file}|${owner.name}`);
+      let out = null;
+      if (written) {
+        out = new Set();
+        for (const name of written) {
+          const hits = commitmentOf(name);
+          if (!hits) { out = null; break; } // one unreadable name and the clause says nothing
+          for (const h of hits) out.add(h);
+        }
+      }
+      declaredCache.set(owner.id, out);
+      return out;
+    };
     const out = [];
     // ORDER BY qname: candidates decide which row wins a dedup key shared with
     // another candidate's row on the same file:line (see addOnce), and that
@@ -2160,6 +2335,35 @@ function attachReadHelpers(store, db, hasFts) {
       .all(node.name, node.lang, node.id)) {
       const owner = ownerOf(cand);
       if (!owner || owner.kind === 'interface') continue;
+      // A class implements what it SAYS it implements. Everything below this is a
+      // guess from shape, and for a single-method interface the name-set gate right
+      // after reduces to "the owner has a method of this name" — nest declares 312
+      // interfaces and many of them declare one method. Measured on nest:
+      // `callers Serializer.serialize` reported 13 call sites on
+      // `ClassSerializerInterceptor.serialize`, a class in a different package that
+      // declares `implements NestInterceptor` and shares nothing with `Serializer`
+      // but a method named `serialize`. Those 13 rows per run were the ONLY source
+      // of invented rows in the whole four-language study — TypeScript 39, Go 0,
+      // Python 0, C++ 0.
+      //
+      // Only a clause the graph can read WHOLE is allowed to refuse, and the clause
+      // includes what each named interface itself extends. `implements X` where
+      // `interface X extends Serializer` IS an implementation of `Serializer`, so
+      // the check walks that chain (commitmentOf). Measured on nest, and not a
+      // corner case: `ExecutionContextHost` declares `implements ExecutionContext`,
+      // `interface ExecutionContext extends ArgumentsHost`, and comparing the
+      // declared name alone dropped all 5 true `ArgumentsHost.*` rows.
+      //
+      // When any link resolves to nothing the graph knows, the old rule still
+      // decides. A half-read picture must not lose a true row.
+      //
+      // A type that declares nothing is untouched — every Go type (Go has no
+      // `implements` keyword at all: a type's method set IS the rule, so name-and-
+      // shape is correct there and is the only thing available), every JavaScript
+      // class, and every structurally typed TypeScript class.
+      if (!declaredBy) readDeclarations();
+      const declares = declaredIfacesOf(owner);
+      if (declares && !declares.has(iface.name)) continue;
       const ownNames = new Set(owner.names);
       if (!need.every((n) => ownNames.has(n))) continue;
       // See shapeSatisfies above interfaceReach for the Go/TypeScript split
