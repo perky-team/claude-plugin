@@ -1039,6 +1039,202 @@ export function runGood(g: Good) { return g.serialize(1); }
     store.close();
   }, 30000);
 
+
+  // A link in the base chain written in JavaScript. `js.scm` has no heritage
+  // pattern at all — the JavaScript grammar has `class_heritage` but no
+  // `extends_clause` node, so `ts.scm`'s line cannot be copied across (compiled
+  // against the real grammar: `Bad node name 'extends_clause'`, and a pattern that
+  // fails to compile takes every capture in the file with it). So a `.js` class
+  // records neither `#extends` nor the `#extendsUnknown` marker, and "no row" used
+  // to read as "extends nothing" and end the walk one link early.
+  //
+  // `C` really is a `Serializer`: the prototype chain runs through `TsBase`, which
+  // declares it. Reproduced through the real indexer — base 1a2f00d answered
+  // `["C.serialize"]`, head 711a2cc answered `[]`. Swap `lib/mid.js` for a
+  // `lib/mid.ts` with the same text and the row was kept, so the `.js` link was the
+  // whole cause.
+  it('keeps a class whose base chain runs through a JavaScript class', async () => {
+    write('lib/i.ts', `export interface Serializer {
+  serialize(value: unknown): string;
+}
+export interface Other {
+  other(): void;
+}
+`);
+    write('lib/base.ts', `import { Serializer } from './i';
+export class TsBase implements Serializer {
+  serialize(value: unknown) { return String(value); }
+}
+`);
+    write('lib/mid.js', `import { TsBase } from './base';
+export class JsMid extends TsBase { }
+`);
+    write('app/c.ts', `import { JsMid } from '../lib/mid';
+import { Other } from '../lib/i';
+export class C extends JsMid implements Other {
+  other() { }
+  serialize(value: unknown) { return String(value); }
+}
+export function run(c: C) { return c.serialize(1); }
+`);
+    const store = await indexed();
+
+    expect(implementationVia(store, 'Serializer.serialize')).toEqual(['C.serialize']);
+    store.close();
+  }, 30000);
+
+  // Declaration merging. TypeScript puts a same-file `interface C` on to
+  // `class C`'s instance type, so `interface C extends Serializer` says `C`
+  // implements `Serializer` just as plainly as a clause on the class would. The
+  // graph held both halves already — two nodes named `C` in one file, and the
+  // interface's own `extends` — and read only the class half, so the declared names
+  // came back as `{Other}`, everything resolved, and the row was refused.
+  //
+  // Reproduced through the real indexer: base 1a2f00d answered `["C.serialize"]`,
+  // head 711a2cc answered `[]`.
+  it('reads a same-file interface that merges into the class', async () => {
+    write('src/i.ts', `export interface Serializer {
+  serialize(value: unknown): string;
+}
+export interface Other {
+  other(): void;
+}
+`);
+    write('src/c.ts', `import { Serializer } from './i';
+import { Other } from './i';
+export class C implements Other {
+  other() { }
+  serialize(value: unknown) { return String(value); }
+}
+export interface C extends Serializer {}
+export function run(c: C) { return c.serialize(1); }
+`);
+    const store = await indexed();
+
+    expect(implementationVia(store, 'Serializer.serialize')).toEqual(['C.serialize']);
+    store.close();
+  }, 30000);
+
+  // A renaming re-export. `export { RealBase as Base } from './real'` hands the
+  // name `Base` to every file that imports it, and those files write a plain
+  // `import { Base }` with no rename of their own — so the per-file
+  // `#importRenamed:` row is written in the BARREL, not where the base name is
+  // used, and the walk matched `Base` against the unrelated `class Base` and read
+  // its empty clause.
+  //
+  // A renaming export is therefore read repo-wide, unlike an import rename: it
+  // binds the name in files the extractor cannot enumerate. Measured by scanning
+  // the sources: nest has 1 renaming export in 1728 files, axios 2, got 4 — so
+  // reading it repo-wide costs almost nothing.
+  //
+  // Reproduced through the real indexer: base 1a2f00d answered `["C.serialize"]`,
+  // head 711a2cc answered `[]`.
+  it('keeps a class whose base name comes from a renamed re-export', async () => {
+    write('src/i.ts', `export interface Serializer {
+  serialize(value: unknown): string;
+}
+export interface Other {
+  other(): void;
+}
+`);
+    write('src/real.ts', `import { Serializer } from './i';
+export class RealBase implements Serializer {
+  serialize(value: unknown) { return String(value); }
+}
+`);
+    write('src/reexport.ts', `export { RealBase as Base } from './real';
+`);
+    write('src/unrelated.ts', `export class Base {
+  unrelated() { }
+}
+`);
+    write('src/c.ts', `import { Base } from './reexport';
+import { Other } from './i';
+export class C extends Base implements Other {
+  other() { }
+  serialize(value: unknown) { return 'c'; }
+}
+export function run(c: C) { return c.serialize(1); }
+`);
+    const store = await indexed();
+
+    expect(implementationVia(store, 'Serializer.serialize')).toEqual(['C.serialize']);
+    store.close();
+  }, 30000);
+
+  // `import Base = require('./eq')` against `export = RealEq`. The importing file
+  // picks the name, exactly as a default import does, but the statement holds an
+  // `import_require_clause` rather than an `import_clause`, so the capture that
+  // reads import bindings never saw it and no rename was recorded.
+  //
+  // Reproduced through the real indexer: base 1a2f00d answered `["C.serialize"]`,
+  // head 711a2cc answered `[]`.
+  it('keeps a class whose base name comes from an import-equals require', async () => {
+    write('src/i.ts', `export interface Serializer {
+  serialize(value: unknown): string;
+}
+export interface Other {
+  other(): void;
+}
+`);
+    write('src/eq.ts', `import { Serializer } from './i';
+class RealEq implements Serializer {
+  serialize(value: unknown) { return String(value); }
+}
+export = RealEq;
+`);
+    write('src/unrelated.ts', `export class Base {
+  unrelated() { }
+}
+`);
+    write('src/c.ts', `import Base = require('./eq');
+import { Other } from './i';
+export class C extends Base implements Other {
+  other() { }
+  serialize(value: unknown) { return 'c'; }
+}
+export function run(c: C) { return c.serialize(1); }
+`);
+    const store = await indexed();
+
+    expect(implementationVia(store, 'Serializer.serialize')).toEqual(['C.serialize']);
+    store.close();
+  }, 30000);
+
+  // The same rename hazard on the DECLARED name, not on the base class. A clause
+  // name is matched against the interfaces of the repo by name, so
+  // `import { RealBase as Base }` plus an unrelated `interface Base` elsewhere made
+  // the graph read the wrong interface's `extends` chain — and that chain does not
+  // reach `Serializer`, so the row was refused. `C` really does implement
+  // `Serializer`: `Base` here IS `RealBase`, and `RealBase extends Serializer`.
+  //
+  // Found while probing for a sixth shape of the same confusion, not reported by a
+  // review. Reproduced through the real indexer: base 1a2f00d answered
+  // `["C.serialize"]`, head 711a2cc answered `[]`.
+  it('keeps a class whose declared name comes from a renamed import', async () => {
+    write('src/i.ts', `export interface Serializer {
+  serialize(value: unknown): string;
+}
+`);
+    write('src/real.ts', `import { Serializer } from './i';
+export interface RealBase extends Serializer {}
+`);
+    write('src/unrelated.ts', `export interface Base {
+  serialize(value: unknown): string;
+}
+`);
+    write('src/c.ts', `import { RealBase as Base } from './real';
+export class C implements Base {
+  serialize(value: unknown) { return 'c'; }
+}
+export function run(c: C) { return c.serialize(1); }
+`);
+    const store = await indexed();
+
+    expect(implementationVia(store, 'Serializer.serialize')).toEqual(['C.serialize']);
+    store.close();
+  }, 30000);
+
   // The language gate, pinned on its own. Go's rows are protected TWICE: the gate
   // reads a clause for `ts` and `js` only, and no Go `#implements:` row is ever
   // written anyway — Go has no `implements` keyword for `ts.scm` to capture. Either

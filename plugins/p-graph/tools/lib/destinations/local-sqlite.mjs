@@ -95,9 +95,12 @@ function loadDatabaseSync() {
 // that apart from "no extends clause" — the second one ends the base-chain walk
 // and the first one must not. A third row, `#importRenamed:<name>`, says a file's
 // import binds that name to a class the exporting module called something else, so
-// the written base name cannot be matched against the classes in the repo. Stored
-// rows change for every repo with an implements clause or a renamed import, so the
-// graph is rebuilt.
+// the written base name cannot be matched against the classes in the repo; it now
+// covers `import Base = require('./eq')` and `import Alias = Ns.Inner` as well as
+// the two clause forms. A fourth, `#exportRenamed:<name>`, says a renaming
+// re-export hands that name out, which makes the name unusable in every file
+// rather than in one. Stored rows change for every repo with an implements clause,
+// a renamed import or a renaming export, so the graph is rebuilt.
 export const SCHEMA_VERSION = 15;
 
 // `ts` and `js` are one language for resolution. A repository that ships
@@ -2137,21 +2140,36 @@ function attachReadHelpers(store, db, hasFts) {
     let baseOf = null;       // "<file>|<Class>" -> the class it extends, or null
     let baseUnknown = null;  // "<file>|<Class>" -> it HAS a base that could not be named
     let renamedIn = null;    // "<file>|<name>" -> that file's import binds the name anew
+    let reboundAnywhere = null; // name -> a renaming re-export hands this name out, repo-wide
     let classFiles = null;   // class name -> every file that declares a class of that name
+    let classLang = null;    // "<file>|<Class>" -> the language the class is written in
+    let ifaceInFile = null;  // "<file>|<Iface>" -> what it extends, and whether it read whole
     const readDeclarations = () => {
       declaredBy = new Map();
       aliasTarget = new Map();
       baseOf = new Map();
       baseUnknown = new Set();
       renamedIn = new Set();
+      reboundAnywhere = new Set();
       const MARK = '#implements:';
       const UNKNOWN = '#extendsUnknown';
       const RENAMED = '#importRenamed:';
+      const EXPORTED = '#exportRenamed:';
       for (const r of db.prepare(
         `SELECT key, type, file FROM field_types
           WHERE key LIKE '%${MARK}%' OR key LIKE '#alias:%' OR key LIKE '%#extends'
-             OR key LIKE '%${UNKNOWN}' OR key LIKE '${RENAMED}%'`)
+             OR key LIKE '%${UNKNOWN}' OR key LIKE '${RENAMED}%'
+             OR key LIKE '${EXPORTED}%'`)
         .all()) {
+        if (r.key.startsWith(EXPORTED)) {
+          // A renaming re-export, and the row's `file` column is NOT part of the
+          // fact: `export { RealBase as Base } from './real'` hands `Base` to every
+          // file that imports it, and those files rename nothing themselves. So the
+          // name is unusable everywhere, not only in the barrel. See driver.mjs for
+          // the row this lost and for how little the repo-wide reading costs.
+          reboundAnywhere.add(r.key.slice(EXPORTED.length));
+          continue;
+        }
         if (r.key.startsWith(RENAMED)) {
           // One file's own choice of name for something it imported, so the row's
           // `file` column is part of the fact. See driver.mjs for why the binding
@@ -2198,9 +2216,11 @@ function attachReadHelpers(store, db, hasFts) {
         declaredBy.get(scope).add(r.key.slice(at + MARK.length));
       }
       ifaceInfo = new Map();
+      ifaceInFile = new Map();
       classFiles = new Map();
+      classLang = new Map();
       for (const n of db.prepare(
-        `SELECT name, signature, file, kind FROM nodes
+        `SELECT name, signature, file, kind, lang FROM nodes
           WHERE kind IN ('class','interface') AND lang IN ('ts','js')`).all()) {
         if (n.kind === 'class') {
           // Which file declares the class of a given name. One file means the base
@@ -2208,15 +2228,41 @@ function attachReadHelpers(store, db, hasFts) {
           // means the graph cannot say, and then the old rule decides.
           if (!classFiles.has(n.name)) classFiles.set(n.name, []);
           classFiles.get(n.name).push(n.file);
+          // The language it is written in. Only a language whose heritage the
+          // extractor READS may be said to have no base class — see heritageStep.
+          classLang.set(`${n.file}|${n.name}`, n.lang);
           continue;
         }
         let info = ifaceInfo.get(n.name);
         if (!info) ifaceInfo.set(n.name, info = { readable: true, bases: new Set() });
+        // The same interface filed a second time, under the FILE that declares it.
+        // TypeScript merges a `class C` with an `interface C` in the same file: the
+        // interface's `extends` puts its members on the class's instance type, so
+        // `interface C extends Serializer` says the class implements `Serializer`
+        // as plainly as a clause on the class would. Reading the class half alone
+        // was a half-read fact that refused a true row — reproduced through the
+        // real indexer, base 1a2f00d answered `["C.serialize"]` and head 711a2cc
+        // answered `[]`. Two interfaces of one name in one file really do merge,
+        // so accumulating them under one key is the right reading here.
+        const fileKey = `${n.file}|${n.name}`;
+        let inFile = ifaceInFile.get(fileKey);
+        if (!inFile) ifaceInFile.set(fileKey, inFile = { readable: true, bases: new Set() });
         // Two interfaces of one name: a class naming it could mean either, so it
         // is held to both, and one unreadable heritage makes the pair unreadable.
         const bases = heritageOf(n.signature);
-        if (!bases) info.readable = false;
-        else for (const b of bases) info.bases.add(b);
+        if (!bases) { info.readable = false; inFile.readable = false; continue; }
+        for (const b of bases) {
+          // A base name this file imports under a new name says nothing about which
+          // interface it is — the same hazard the base-class walk has, one level up.
+          // The file is known here, so the per-file rename is read here.
+          if (renamedIn.has(`${n.file}|${b}`)) {
+            info.readable = false;
+            inFile.readable = false;
+            continue;
+          }
+          info.bases.add(b);
+          inFile.bases.add(b);
+        }
       }
     };
     // The interface a declared name really names, or null when the graph cannot
@@ -2232,6 +2278,12 @@ function attachReadHelpers(store, db, hasFts) {
     // gets no answer here, and no answer means "keep the row". Preferring the
     // interface would refuse a row that is true under the alias reading.
     const declaredIface = (name) => {
+      // A renaming re-export hands this name out to files that rename nothing
+      // themselves, so the name says nothing about which interface it is. Read
+      // repo-wide, unlike an import rename — see driver.mjs for why the two differ.
+      // Every name→interface lookup in this reader goes through here, so the check
+      // covers a clause name and an interface's own `extends` name alike.
+      if (reboundAnywhere.has(name)) return null;
       const alias = aliasTarget.has(name) ? aliasTarget.get(name) : undefined;
       const hop = alias ? alias.split('.').pop() : alias; // null and undefined pass through
       if (ifaceInfo.has(name)) return hop === undefined || hop === name ? name : null;
@@ -2266,9 +2318,75 @@ function attachReadHelpers(store, db, hasFts) {
       }
       return seen;
     };
-    // Every interface name the owner writes down, its own clause together with the
-    // clause of every class up its base chain. Null means "no opinion" — either the
-    // class writes no clause at all, or the chain cannot be read whole.
+    // One step of a class's heritage, READ rather than guessed. Returns the class
+    // the `extends` names, the string `'none'` when the class provably has no base
+    // at all, or null meaning "the graph cannot say".
+    //
+    // The one rule this function exists to enforce: a missing row is not a fact.
+    // Five review rounds on this branch found the same confusion in five shapes,
+    // every one of them the reader treating "the graph stored nothing" as "the
+    // source says nothing" — and every one of them lost a TRUE row, which is
+    // silent, where a false row is visible on screen. So `'none'` is only ever
+    // returned for a class whose heritage the extractor really read.
+    //
+    // What proves it read: the LANGUAGE. `ts.scm` holds the only heritage patterns
+    // in the project; `js.scm` holds none, and its line cannot simply be copied
+    // over — the JavaScript grammar has `class_heritage` but no `extends_clause`
+    // node, so the pattern fails to compile (`Bad node name 'extends_clause'`) and
+    // a failing pattern takes every capture in the file with it. A `.js` class
+    // therefore records neither `#extends` nor `#extendsUnknown`, and reading that
+    // silence as "extends nothing" ended the walk one link early: measured through
+    // the real indexer on `class C extends JsMid implements Other`, where the `.js`
+    // class extends a `.ts` class that declares `Serializer`, base 1a2f00d answered
+    // `["C.serialize"]` and head 711a2cc answered `[]`. The same file rewritten as
+    // `.ts` kept the row, so the `.js` link was the whole cause.
+    //
+    // Written as an allowlist on purpose. A language added later with no heritage
+    // pattern of its own then reads as "cannot say" and keeps the row, which is the
+    // safe direction; a denylist would have to be remembered.
+    const heritageStep = (cls) => {
+      if (classLang.get(`${cls.file}|${cls.name}`) !== 'ts') return null;
+      // A base the extractor could not name — `extends Mix()`, `extends (Base as
+      // any)`. There IS a base, so the chain does not end here and its clause
+      // cannot be read. Reading this as "extends nothing" lost the row: measured
+      // through the real indexer, `class C extends Mix() implements Other` where
+      // the mixin's class implements `Serializer` answered `["C.serialize"]` before
+      // this branch and `[]` without this check.
+      if (baseUnknown.has(`${cls.file}|${cls.name}`)) return null;
+      const base = baseOf.get(`${cls.file}|${cls.name}`);
+      if (base === undefined) return 'none'; // a `ts` class with no extends clause
+      if (base === null) return null; // two rows disagree about the base
+      const bare = base.split('.').pop();
+      // The written name is not always the name the exporting module gave the
+      // class. `import { RealBase as Base }`, a default import, and
+      // `import Base = require('./eq')` all bind the written name to a class called
+      // something else, so matching it against the classes in the repo can land on
+      // an unrelated `class Base` in another file and read ITS clause. Reproduced
+      // through the real indexer: each of those fixtures answered `["C.serialize"]`
+      // before this branch and `[]` while the binding went unread.
+      if (renamedIn.has(`${cls.file}|${bare}`)) return null;
+      // And the same fact told by an export. A renaming re-export is read
+      // repo-wide, because the file that WRITES the base name renames nothing
+      // itself — see driver.mjs.
+      if (reboundAnywhere.has(bare)) return null;
+      const files = classFiles.get(bare) ?? [];
+      // A base the graph does not hold — a library class such as node's
+      // `Writable` — or a name several files declare. Either way its clause cannot
+      // be read, so the picture is half-read and the old rule decides.
+      if (files.length !== 1) return null;
+      return { file: files[0], name: bare };
+    };
+    // Every interface name the owner writes down: its own clause, the same-file
+    // interface that merges into it, and both of those again for every class up its
+    // base chain. Null means "no opinion" — either the class writes no clause at
+    // all, or some part of the picture could not be read.
+    //
+    // Null is returned for anything short of a whole reading, and that asymmetry is
+    // the point. A false row shows up in the answer and a reader can check it; a
+    // true row that was dropped shows up nowhere. So the walk refuses to have an
+    // opinion unless every link of the heritage was read: the language records
+    // heritage at all, the base is nameable, the name resolves to exactly one class,
+    // and no binding rebinds that name.
     //
     // The base chain matters and the loss it caused was silent. `class C extends
     // BaseSerializer implements Other`, where `BaseSerializer implements
@@ -2276,8 +2394,8 @@ function attachReadHelpers(store, db, hasFts) {
     // base — and reading only C's own clause dropped that true row. Reproduced
     // through the real indexer: the code before this branch answered
     // `["C.serialize"]`, the own-clause-only reading answered `[]`. nest could not
-    // show it: it holds exactly ONE `class … extends … implements …` under
-    // `packages/`, and that one's base is a Node library class.
+    // show it: it holds exactly ONE `class … extends … implements …` on one line
+    // under `packages/`, and that one's base is a Node library class.
     //
     // The chain is only walked for a class that writes a clause ITSELF. A class
     // with no clause of its own keeps rule 2 exactly as it was, so this walk can
@@ -2291,41 +2409,36 @@ function attachReadHelpers(store, db, hasFts) {
       // The same hazard the class-wide key has, one scope down.
       const twins = classFiles.get(owner.name) ?? [];
       if (twins.filter((f) => f === owner.file).length > 1) return null;
-      const own = declaredBy.get(`${owner.file}|${owner.name}`);
-      if (!own) return null; // writes no clause: rule 2, the old rule decides
-      const names = new Set(own);
+      if (!declaredBy.get(`${owner.file}|${owner.name}`)) return null; // rule 2
+      const names = new Set();
       const seen = new Set([owner.name]); // stops a cycle, and needs no hop cap
-      for (let cur = owner; ;) {
-        // A base the extractor could not name — `extends Mix()`, `extends (Base as
-        // any)`. There IS a base, so the chain does not end here and its clause
-        // cannot be read: the picture is half-read and the old rule decides.
-        // Reading this as "extends nothing" lost the row: measured through the real
-        // indexer, `class C extends Mix() implements Other` where the mixin's class
-        // implements `Serializer` answered `["C.serialize"]` before this branch and
-        // `[]` without this check.
-        if (baseUnknown.has(`${cur.file}|${cur.name}`)) return null;
-        const base = baseOf.get(`${cur.file}|${cur.name}`);
-        if (base === undefined) return names; // extends nothing: the chain ends here
-        if (base === null) return null; // two rows disagree about the base
-        const bare = base.split('.').pop();
-        // The written name is not always the name the exporting module gave the
-        // class. `import { RealBase as Base }` — and a default import, where the
-        // importing file picks the name — bind the written name to a class called
-        // something else, so matching it against the classes in the repo can land
-        // on an unrelated `class Base` in another file and read ITS clause.
-        // Reproduced through the real indexer: that fixture answered
-        // `["C.serialize"]` before this branch and `[]` while the rename went
-        // unread. No opinion, so the old rule decides.
-        if (renamedIn.has(`${cur.file}|${bare}`)) return null;
-        if (seen.has(bare)) return names;
-        seen.add(bare);
-        const files = classFiles.get(bare) ?? [];
-        // A base the graph does not hold — a library class such as node's
-        // `Writable` — or a name several files declare. Either way its clause
-        // cannot be read, so the picture is half-read and the old rule decides.
-        if (files.length !== 1) return null;
-        for (const n of declaredBy.get(`${files[0]}|${bare}`) ?? []) names.add(n);
-        cur = { file: files[0], name: bare };
+      for (let cur = { file: owner.file, name: owner.name }; ;) {
+        const at = `${cur.file}|${cur.name}`;
+        for (const n of declaredBy.get(at) ?? []) {
+          // A clause name the file imports under a new name is not a name the graph
+          // can match against its interfaces. The class's own file is known here,
+          // so the per-file rename is read here; the repo-wide one is read in
+          // declaredIface, which every such lookup goes through.
+          if (renamedIn.has(`${cur.file}|${n}`)) return null;
+          names.add(n);
+        }
+        // Declaration merging: a same-file `interface <same name>` is part of this
+        // class's instance type, so what that interface extends is part of what the
+        // class implements. See the nodes scan above for the measured row.
+        const merged = ifaceInFile.get(at);
+        if (merged) {
+          if (!merged.readable) return null;
+          for (const b of merged.bases) {
+            if (renamedIn.has(`${cur.file}|${b}`)) return null;
+            names.add(b);
+          }
+        }
+        const next = heritageStep(cur);
+        if (next === null) return null; // cannot say: the old rule decides
+        if (next === 'none') return names; // no base class: the chain ends here
+        if (seen.has(next.name)) return names; // a cycle, and everything is read
+        seen.add(next.name);
+        cur = next;
       }
     };
     // Every interface the owner declares, walked out — or null meaning "no
