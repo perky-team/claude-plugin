@@ -910,4 +910,130 @@ export function run(c: C) { return c.serialize(1); }
     expect(implementationVia(store, 'Serializer.serialize')).toEqual(['C.serialize']);
     store.close();
   }, 30000);
+
+  // The base chain resolves a base by the NAME the source wrote, and that name is
+  // not always the name the exporting module gave the class. `import { RealBase as
+  // Base }` binds `Base` to `RealBase`, so resolving `Base` against every class in
+  // the repo can land on an unrelated `class Base` in another file and read ITS
+  // clause — which says nothing about the real base and loses a true row.
+  //
+  // Reproduced through the real indexer: this fixture answered `["C.serialize"]`
+  // before this branch and `[]` while the rename went unread. So the walk now
+  // stops at a base name the file binds through a rename: no opinion, and the old
+  // name-and-shape rule decides.
+  it('keeps a class whose base name comes from a renamed import', async () => {
+    write('src/i.ts', `export interface Serializer {
+  serialize(value: unknown): string;
+}
+export interface Other {
+  other(): void;
+}
+`);
+    write('src/real.ts', `import { Serializer } from './i';
+export class RealBase implements Serializer {
+  serialize(value: unknown) { return String(value); }
+}
+`);
+    // The trap: one class in the repo carries the written name, so the walk used to
+    // accept it as the base and read its empty clause.
+    write('src/unrelated.ts', `export class Base {
+  unrelated() { }
+}
+`);
+    write('src/c.ts', `import { RealBase as Base } from './real';
+import { Other } from './i';
+export class C extends Base implements Other {
+  serialize(value: unknown) { return 'c'; }
+  other() { }
+}
+export function run(c: C) { return c.serialize(1); }
+`);
+    const store = await indexed();
+
+    expect(implementationVia(store, 'Serializer.serialize')).toEqual(['C.serialize']);
+    store.close();
+  }, 30000);
+
+  // A default import is the same hazard: the importing file picks the local name,
+  // so `import Base from './real'` says nothing about what the exported class is
+  // called. `export default class RealBase` under an unrelated `class Base` reads
+  // the wrong clause exactly as a rename does.
+  it('keeps a class whose base name comes from a default import', async () => {
+    write('src/i.ts', `export interface Serializer {
+  serialize(value: unknown): string;
+}
+export interface Other {
+  other(): void;
+}
+`);
+    write('src/real.ts', `import { Serializer } from './i';
+export default class RealBase implements Serializer {
+  serialize(value: unknown) { return String(value); }
+}
+`);
+    write('src/unrelated.ts', `export class Base {
+  unrelated() { }
+}
+`);
+    write('src/c.ts', `import Base from './real';
+import { Other } from './i';
+export class C extends Base implements Other {
+  serialize(value: unknown) { return 'c'; }
+  other() { }
+}
+export function run(c: C) { return c.serialize(1); }
+`);
+    const store = await indexed();
+
+    expect(implementationVia(store, 'Serializer.serialize')).toEqual(['C.serialize']);
+    store.close();
+  }, 30000);
+
+  // A rename is read in the file that WRITES the base name and nowhere else. Read
+  // repo-wide it would switch the base-chain walk off for every class whose base
+  // name any file happens to rename — `Base`, `Logger`, `Module` are renamed
+  // somewhere in most repos. Here `src/other.ts` renames `Plain` and `src/c.ts`
+  // does not, so `C` is still judged by its base's clause and still refused, while
+  // `Good` — which declares the interface — stays.
+  //
+  // This passes before the rename check as well as after it. It is here to pin the
+  // SCOPE of the check, which nothing else would notice going wrong.
+  it('reads an import rename only in the file that writes the base name', async () => {
+    write('src/i.ts', `export interface Serializer {
+  serialize(value: unknown): string;
+}
+export interface Other {
+  other(): void;
+}
+`);
+    write('src/thing.ts', `export class Thing {
+  thing() { }
+}
+`);
+    write('src/other.ts', `import { Thing as Plain } from './thing';
+export function use(p: Plain) { return p.thing(); }
+`);
+    write('src/plain.ts', `export class Plain {
+  plain() { }
+}
+`);
+    write('src/c.ts', `import { Plain } from './plain';
+import { Other } from './i';
+export class C extends Plain implements Other {
+  serialize(value: unknown) { return 'c'; }
+  other() { }
+}
+export function run(c: C) { return c.serialize(1); }
+`);
+    write('src/good.ts', `import { Serializer } from './i';
+export class Good implements Serializer {
+  serialize(value: unknown) { return String(value); }
+}
+export function runGood(g: Good) { return g.serialize(1); }
+`);
+    const store = await indexed();
+
+    expect(implementationVia(store, 'Serializer.serialize')).toEqual(['Good.serialize']);
+    store.close();
+  }, 30000);
 });

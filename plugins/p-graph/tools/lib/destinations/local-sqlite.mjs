@@ -93,8 +93,11 @@ function loadDatabaseSync() {
 // `<Class>#extendsUnknown` marker when it HAS a base class the extractor could not
 // name (`extends Mix()`, `extends (Base as any)`), because the reader must tell
 // that apart from "no extends clause" — the second one ends the base-chain walk
-// and the first one must not. Stored rows change for every repo with an implements
-// clause, so the graph is rebuilt.
+// and the first one must not. A third row, `#importRenamed:<name>`, says a file's
+// import binds that name to a class the exporting module called something else, so
+// the written base name cannot be matched against the classes in the repo. Stored
+// rows change for every repo with an implements clause or a renamed import, so the
+// graph is rebuilt.
 export const SCHEMA_VERSION = 15;
 
 // `ts` and `js` are one language for resolution. A repository that ships
@@ -2133,19 +2136,30 @@ function attachReadHelpers(store, db, hasFts) {
     let ifaceInfo = null;    // interface name -> what it extends, and whether that could be read
     let baseOf = null;       // "<file>|<Class>" -> the class it extends, or null
     let baseUnknown = null;  // "<file>|<Class>" -> it HAS a base that could not be named
+    let renamedIn = null;    // "<file>|<name>" -> that file's import binds the name anew
     let classFiles = null;   // class name -> every file that declares a class of that name
     const readDeclarations = () => {
       declaredBy = new Map();
       aliasTarget = new Map();
       baseOf = new Map();
       baseUnknown = new Set();
+      renamedIn = new Set();
       const MARK = '#implements:';
       const UNKNOWN = '#extendsUnknown';
+      const RENAMED = '#importRenamed:';
       for (const r of db.prepare(
         `SELECT key, type, file FROM field_types
           WHERE key LIKE '%${MARK}%' OR key LIKE '#alias:%' OR key LIKE '%#extends'
-             OR key LIKE '%${UNKNOWN}'`)
+             OR key LIKE '%${UNKNOWN}' OR key LIKE '${RENAMED}%'`)
         .all()) {
+        if (r.key.startsWith(RENAMED)) {
+          // One file's own choice of name for something it imported, so the row's
+          // `file` column is part of the fact. See driver.mjs for why the binding
+          // makes the written name unusable, and why reading it repo-wide would
+          // switch the base-chain walk off almost everywhere.
+          renamedIn.add(`${r.file}|${r.key.slice(RENAMED.length)}`);
+          continue;
+        }
         if (r.key.endsWith(UNKNOWN)) {
           // "This class extends something the extractor could not name" — a mixin
           // call, a cast. Read as "extends nothing" it ends the base-chain walk
@@ -2294,6 +2308,15 @@ function attachReadHelpers(store, db, hasFts) {
         if (base === undefined) return names; // extends nothing: the chain ends here
         if (base === null) return null; // two rows disagree about the base
         const bare = base.split('.').pop();
+        // The written name is not always the name the exporting module gave the
+        // class. `import { RealBase as Base }` — and a default import, where the
+        // importing file picks the name — bind the written name to a class called
+        // something else, so matching it against the classes in the repo can land
+        // on an unrelated `class Base` in another file and read ITS clause.
+        // Reproduced through the real indexer: that fixture answered
+        // `["C.serialize"]` before this branch and `[]` while the rename went
+        // unread. No opinion, so the old rule decides.
+        if (renamedIn.has(`${cur.file}|${bare}`)) return null;
         if (seen.has(bare)) return names;
         seen.add(bare);
         const files = classFiles.get(bare) ?? [];

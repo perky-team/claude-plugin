@@ -1932,14 +1932,28 @@ export async function extract({ file, lang, langId, scm, source, pyRepoModules =
   // fell through to the bare-name fallback and was guessed at whatever single
   // repo symbol shared the method name. 264 such calls in nest.
   const tsImported = new Set();
+  // A name whose binding says nothing about what the imported class is CALLED.
+  // `import { RealBase as Base }` and `import Base from './real'` both bind `Base`
+  // to a class the exporting module named something else, so `class C extends Base`
+  // cannot be resolved by matching `Base` against the classes in the repo — and
+  // matching it landed on an unrelated `class Base` in another file and read its
+  // clause. Recorded per file, because it is one file's choice of name: read
+  // repo-wide it would switch the base-chain walk off for every class whose base
+  // name any file happens to rename. Only the presence of the row is read, so the
+  // value is a marker, the same as `#implements:`.
+  const pushImportRenamed = (name) => {
+    fieldTypes.push({ key: `#importRenamed:${name}`, type: '1', file });
+  };
   if (lang === 'ts' || lang === 'js') {
     for (const c of caps) {
       if (c.name !== 'import.binding') continue;
       for (let i = 0; i < (c.node.namedChildCount ?? 0); i++) {
         const part = c.node.namedChild(i);
         if (!part) continue;
-        if (part.type === 'identifier') tsImported.add(part.text); // `import x from …`
-        else if (part.type === 'namespace_import') {              // `import * as ns from …`
+        if (part.type === 'identifier') {                         // `import x from …`
+          tsImported.add(part.text);
+          pushImportRenamed(part.text);
+        } else if (part.type === 'namespace_import') {            // `import * as ns from …`
           const id = part.namedChild(0);
           if (id?.type === 'identifier') tsImported.add(id.text);
         } else if (part.type === 'named_imports') {
@@ -1947,8 +1961,10 @@ export async function extract({ file, lang, langId, scm, source, pyRepoModules =
             const spec = part.namedChild(j);
             if (spec?.type !== 'import_specifier') continue;
             // `{ Thing as Test }` binds Test, not Thing.
-            const bound = spec.childForFieldName?.('alias') ?? spec.childForFieldName?.('name');
+            const alias = spec.childForFieldName?.('alias');
+            const bound = alias ?? spec.childForFieldName?.('name');
             if (bound?.text) tsImported.add(bound.text);
+            if (alias?.text) pushImportRenamed(alias.text);
           }
         }
       }
