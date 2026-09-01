@@ -1038,4 +1038,51 @@ export function runGood(g: Good) { return g.serialize(1); }
     expect(implementationVia(store, 'Serializer.serialize')).toEqual(['Good.serialize']);
     store.close();
   }, 30000);
+
+  // The language gate, pinned on its own. Go's rows are protected TWICE: the gate
+  // reads a clause for `ts` and `js` only, and no Go `#implements:` row is ever
+  // written anyway — Go has no `implements` keyword for `ts.scm` to capture. Either
+  // half alone keeps Go correct, which is why the source-level Go test above stays
+  // green when the gate is deleted. Measured by mutation on this branch: removing
+  // the gate alone left all 49 tests of the three reach files passing, and breaking
+  // rule 2 alone turned 6 TypeScript and JavaScript cases red and left Go green.
+  //
+  // So the row is planted by hand. That is the only way to tell the two halves
+  // apart, and it makes the gate a tripwire instead of a comment. The TypeScript
+  // `interface Other` has to be there too: declared names are resolved against the
+  // interfaces of `ts` and `js` only, so without it the name would resolve to
+  // nothing and the row would survive for the wrong reason.
+  it('never reads a clause for a Go candidate, even when a row exists', async () => {
+    write('store/handler.go', `package store
+type Handler interface {
+	ServeHTTP(w string) error
+}
+`);
+    write('store/one.go', `package store
+type One struct{}
+func (o *One) ServeHTTP(w string) error { return nil }
+`);
+    write('store/two.go', `package store
+type Two struct{}
+func (t *Two) ServeHTTP(w string) error { return nil }
+`);
+    write('api/api.go', `package api
+import "x/store"
+func Serve(o *store.One, t *store.Two) error {
+	o.ServeHTTP("w")
+	return t.ServeHTTP("w")
+}
+`);
+    write('src/other.ts', `export interface Other {
+  other(): void;
+}
+`);
+    const store = await indexed();
+    store.db.prepare('INSERT INTO field_types (key,type,file) VALUES (?,?,?)')
+      .run('store/one.go|One#implements:Other', '1', 'store/one.go');
+
+    expect(implementationVia(store, 'store.Handler.ServeHTTP'))
+      .toEqual(['store.One.ServeHTTP', 'store.Two.ServeHTTP']);
+    store.close();
+  }, 30000);
 });
