@@ -361,6 +361,32 @@ export function run(w: W) { return w.serialize(1); }
     store.close();
   }, 30000);
 
+  // `extends` in a declaration line does not always name a base: `interface
+  // Wide<T extends Serializer>` only constrains a type parameter, and a class
+  // implementing `Wide` does NOT implement `Serializer`. The reader cannot tell the
+  // two apart safely, so it calls the line unreadable and the old rule decides —
+  // the row stays. Over-cautious on purpose: the precise answer here would be to
+  // skip, and choosing to keep costs precision instead of recall.
+  //
+  // nest writes this shape (`interface RequestContext<TData = any, TContext extends
+  // BaseRpcContext = any>`), which is why it is pinned.
+  it('keeps a class when the declared interface only constrains a type parameter', async () => {
+    write('src/a.ts', `export interface Serializer {
+  serialize(value: unknown): string;
+}
+export interface Wide<T extends Serializer> { reset(): void; }
+export class W implements Wide<any> {
+  serialize(value: unknown) { return String(value); }
+  reset() { }
+}
+export function run(w: W) { return w.serialize(1); }
+`);
+    const store = await indexed();
+
+    expect(implementationVia(store, 'Serializer.serialize')).toEqual(['W.serialize']);
+    store.close();
+  }, 30000);
+
   // Rule 5, the boundary. Two declared names, the repo defines both as interfaces,
   // and neither is the one asked about. Every name resolved, so the clause is a
   // complete answer to "what does this class implement", and the answer is "not

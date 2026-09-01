@@ -2018,6 +2018,14 @@ function attachReadHelpers(store, db, hasFts) {
   // bases". Anything else it cannot parse cleanly — a `{` inside type arguments, a
   // function type in them, unbalanced angle brackets — also comes back null rather
   // than half-read.
+  //
+  // `extends` also appears where it names no base at all: `interface X<T extends
+  // Bar>` constrains a type parameter. That is caught by the angle-bracket count,
+  // not by luck — the `<` of the parameter list opens BEFORE the matched `extends`,
+  // so its closing `>` drives the depth below zero and the whole line comes back
+  // null. Do not "fix" that negative-depth check without replacing it: nest writes
+  // this shape (`interface RequestContext<TData = any, TContext extends
+  // BaseRpcContext = any>`), and reading `Bar` as a base would be a false refusal.
   const heritageOf = (signature) => {
     if (typeof signature !== 'string') return null;
     const brace = signature.indexOf('{');
