@@ -2188,9 +2188,17 @@ function attachReadHelpers(store, db, hasFts) {
     // module path, and the recorded value is the clause's last segment already.
     // One alias hop, and only one — the same hop resolveTsFieldTypes follows for
     // `type ProducerSerializer = Serializer<…>`, which is how nest writes it.
+    //
+    // An interface of that name AND an alias of that name are a disagreement, and
+    // this file cancels on a disagreement everywhere else — the alias fold above
+    // does exactly that when two aliases of one name point different ways. So a
+    // repo holding `interface X` in one module and `type X = Serializer` in another
+    // gets no answer here, and no answer means "keep the row". Preferring the
+    // interface would refuse a row that is true under the alias reading.
     const declaredIface = (name) => {
-      if (ifaceInfo.has(name)) return name;
-      const hop = aliasTarget.get(name)?.split('.').pop();
+      const alias = aliasTarget.has(name) ? aliasTarget.get(name) : undefined;
+      const hop = alias ? alias.split('.').pop() : alias; // null and undefined pass through
+      if (ifaceInfo.has(name)) return hop === undefined || hop === name ? name : null;
       return hop && ifaceInfo.has(hop) ? hop : null;
     };
     // Everything one declared name commits a class to: the interface itself and
@@ -2240,6 +2248,13 @@ function attachReadHelpers(store, db, hasFts) {
     // only ADD names and therefore only turn a skip into a keep. That is the safe
     // direction: a false row is visible, a lost true row is not.
     const declaredNamesOf = (owner) => {
+      // Two classes of ONE name in ONE file write into the same file-scoped key, so
+      // their clauses are unioned and a twin that declares nothing would be judged
+      // by the other one's clause. Nothing in the graph tells the two apart — the
+      // key is all there is — so the reader says nothing and the old rule decides.
+      // The same hazard the class-wide key has, one scope down.
+      const twins = classFiles.get(owner.name) ?? [];
+      if (twins.filter((f) => f === owner.file).length > 1) return null;
       const own = declaredBy.get(`${owner.file}|${owner.name}`);
       if (!own) return null; // writes no clause: rule 2, the old rule decides
       const names = new Set(own);

@@ -652,4 +652,127 @@ export function runIface(s: Serializer) { return s.serialize(1); }
       .toEqual(['Serializer.serialize']);
     store.close();
   }, 30000);
+
+  // An alias of an alias. `type Mid = Serializer; type Outer = Mid;` and a class
+  // writing `implements Outer`. The check follows ONE hop — the same single hop
+  // resolveTsFieldTypes follows — so `Outer` lands on `Mid`, which is no interface,
+  // and the declared name resolves to nothing. Rule 4 then keeps the row.
+  //
+  // That is the safe direction and it is already what happens; this pins it as
+  // intent rather than luck, so a later reader cannot turn it into a skip without
+  // a test going red.
+  it('keeps a class that names the interface through two alias hops', async () => {
+    write('src/i.ts', `export interface Serializer {
+  serialize(value: unknown): string;
+}
+`);
+    write('src/b.ts', `import { Serializer } from './i';
+export type Mid = Serializer;
+export type Outer = Mid;
+export class C implements Outer {
+  serialize(value: unknown) { return String(value); }
+}
+export function run(c: C) { return c.serialize(1); }
+`);
+    const store = await indexed();
+
+    expect(implementationVia(store, 'Serializer.serialize')).toEqual(['C.serialize']);
+    store.close();
+  }, 30000);
+
+  // One name declared twice, once as an interface and once as an alias of another
+  // interface. The clause could mean either, and this file cancels on a
+  // disagreement everywhere else — the alias fold does exactly that when two
+  // aliases of one name point different ways. Cancelling here means "keep the
+  // row", which is the safe direction: preferring the interface would refuse a row
+  // that is true under the alias reading.
+  it('keeps a class when the declared name is both an interface and an alias', async () => {
+    write('src/i.ts', `export interface Serializer {
+  serialize(value: unknown): string;
+}
+export interface Handler {
+  handle(): void;
+}
+`);
+    write('src/alias.ts', `import { Serializer } from './i';
+export type Handler = Serializer;
+`);
+    write('src/c.ts', `export class C implements Handler {
+  serialize(value: unknown) { return String(value); }
+  handle() { }
+}
+export function run(c: C) { return c.serialize(1); }
+`);
+    const store = await indexed();
+
+    expect(implementationVia(store, 'Serializer.serialize')).toEqual(['C.serialize']);
+    store.close();
+  }, 30000);
+
+  // Two classes of ONE name in ONE file. They write into the same file-scoped
+  // clause key, so their clauses are unioned and a twin that declares nothing
+  // would be judged by the other one's clause. Nothing in the graph tells the two
+  // apart — the key is all there is — so the reader says nothing and the old rule
+  // decides. Both rows stay, which costs precision and never a true row.
+  //
+  // Built by hand, like the file-scoped precedence case above and for the same
+  // reason: two classes of one name in real source means no call on either
+  // resolves, so a source fixture would pass whatever the reader did.
+  it('says nothing about two classes of one name in one file (store-level)', () => {
+    const store = openStore(':memory:');
+    const ifaces = [
+      { id: 'iface1', name: 'Serializer', qname: 'Serializer', kind: 'interface', lang: 'ts',
+        file: 'src/i.ts', start_line: 1, end_line: 3,
+        signature: 'export interface Serializer {', doc: '', container_id: null },
+      { id: 'm1', name: 'serialize', qname: 'Serializer.serialize', kind: 'method', lang: 'ts',
+        file: 'src/i.ts', start_line: 2, end_line: 2,
+        signature: 'serialize(value: unknown): string;', doc: '', container_id: 'iface1' },
+      { id: 'iface2', name: 'Other', qname: 'Other', kind: 'interface', lang: 'ts',
+        file: 'src/i.ts', start_line: 4, end_line: 6,
+        signature: 'export interface Other {', doc: '', container_id: null },
+      { id: 'm2', name: 'other', qname: 'Other.other', kind: 'method', lang: 'ts',
+        file: 'src/i.ts', start_line: 5, end_line: 5, signature: 'other(): void;',
+        doc: '', container_id: 'iface2' },
+    ];
+    store.replaceFileSymbols('src/i.ts', ifaces, []);
+    // The first `Dup` declares `implements Other`; the second declares nothing. Both
+    // write into `src/dup.ts|Dup`, so the second would be refused by a clause it
+    // never wrote.
+    const nodes = [
+      { id: 'd1', name: 'Dup', qname: 'Dup', kind: 'class', lang: 'ts', file: 'src/dup.ts',
+        start_line: 1, end_line: 3, signature: 'export class Dup implements Other {',
+        doc: '', container_id: null },
+      { id: 'd1m', name: 'serialize', qname: 'Dup.serialize', kind: 'method', lang: 'ts',
+        file: 'src/dup.ts', start_line: 2, end_line: 2,
+        signature: 'serialize(value: unknown) { return String(value); }', doc: '',
+        container_id: 'd1' },
+      { id: 'd2', name: 'Dup', qname: 'Dup', kind: 'class', lang: 'ts', file: 'src/dup.ts',
+        start_line: 5, end_line: 7, signature: 'export class Dup {', doc: '',
+        container_id: null },
+      { id: 'd2m', name: 'serialize', qname: 'Dup.serialize', kind: 'method', lang: 'ts',
+        file: 'src/dup.ts', start_line: 6, end_line: 6,
+        signature: 'serialize(value: unknown) { return String(value); }', doc: '',
+        container_id: 'd2' },
+      { id: 'fn', name: 'run', qname: 'run', kind: 'function', lang: 'ts', file: 'src/dup.ts',
+        start_line: 9, end_line: 12, signature: 'export function run(a: Dup, b: Dup) {',
+        doc: '', container_id: null },
+    ];
+    const edges = [
+      { src_id: 'fn', dst_id: 'd1m', dst_name: 'serialize', kind: 'call', file: 'src/dup.ts',
+        line: 10, field_key: null, method: 'serialize', dst_bare: 'serialize', lang: 'ts',
+        external: 0, member: 1 },
+      { src_id: 'fn', dst_id: 'd2m', dst_name: 'serialize', kind: 'call', file: 'src/dup.ts',
+        line: 11, field_key: null, method: 'serialize', dst_bare: 'serialize', lang: 'ts',
+        external: 0, member: 1 },
+    ];
+    store.replaceFileSymbols('src/dup.ts', nodes, edges, [
+      { key: 'Dup#implements:Other', type: '1', file: 'src/dup.ts' },
+      { key: 'src/dup.ts|Dup#implements:Other', type: '1', file: 'src/dup.ts' },
+    ]);
+
+    const rows = store.gapsFor('Serializer.serialize')
+      .filter((r) => r.reason === 'implementation');
+    expect(rows.map((r) => `${r.file}:${r.line}`)).toEqual(['src/dup.ts:10', 'src/dup.ts:11']);
+    store.close();
+  }, 30000);
 });

@@ -133,9 +133,20 @@ Each symbol carries a bare `name` (used for search) and a qualified `qname`. A c
 
   The other direction works too: ask about the interface method itself, and `callers` also reports
   the calls that run a type which implements it — `ℹ N call sites of this method — on
-  config.Postgres.Set, which implements it:`, one such line per implementing type. "Implements" takes two checks,
-  not one: the type must carry a method of every name the interface declares, and — for the one
-  method asked about — that method's shape must match the interface's (`sigShape` in
+  config.Postgres.Set, which implements it:`, one such line per implementing type. In TypeScript
+  "implements" takes THREE checks, not two, and the new one can remove a row: what the class writes
+  down beats what its shape suggests. `class C implements Other` is not an implementation of
+  `Serializer`, however well its `serialize` fits. Measured on nestjs/nest:
+  `ClassSerializerInterceptor` declares `implements NestInterceptor`, sits in another package, and
+  used to be reported on 13 call sites of `Serializer.serialize` — the only invented rows in the
+  whole four-language study. The clause is read together with what each interface it names extends
+  and what each base class of its own declares, and only a clause the graph can read WHOLE may
+  refuse anything: a declared name it cannot resolve, or a base class it does not hold, leaves the
+  row alone. The check does not apply to Go or JavaScript, which have no `implements` keyword at
+  all, nor to a TypeScript class that declares nothing — TypeScript is structurally typed, so such a
+  class really can implement an interface without saying so, and there the other two checks decide
+  on their own. Those two: the type must carry a method of every name the interface declares, and —
+  for the one method asked about — that method's shape must match the interface's (`sigShape` in
   `tools/lib/sig-shape.mjs`). The shape rule is not the same for every language: Go needs an exact
   match, same parameter count and same "does it return something", because that is what Go's own
   compiler demands. TypeScript only needs the implementation to take no more parameters than the
