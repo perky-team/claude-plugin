@@ -39,21 +39,55 @@ Fourteen repositories, 52 questions, 36 of them "who calls X" and 16 that follow
 
 | What we measured | grep | p-graph | Gap | Verdict |
 |---|---|---|---|---|
-| **"who calls X"** — call sites found | **1674 of 1683** | 1650 of 1683 | −24 | **grep** |
-| **"who calls X"** — call sites invented | **0** | 14 | +14 | **grep** |
-| **"who calls X"** — cost per question | $0.216 | $0.199 | −8% (SE $0.026, 0.6 SE) | **noise** |
-| **"who calls X"** — time per question | 39.8 s | 32.2 s | −19% (SE 3.9 s, **2.0 SE**) | **p-graph** |
-| **"who calls X"** — steps per question | 6.8 | **5.7** | −16% (SE 0.4, **2.7 SE**) | **p-graph** |
-| **"who calls X"** — tool calls | 6.6 | **5.3** | −20% | **p-graph** |
-| **"who calls X"** — context read back | 614k | **587k** | −4% | **p-graph** |
-| **"who calls X"** — text searches | 3.7 | **0.9** | −76% | **p-graph** |
-| **follow the calls** — call sites found | 180 of 216 | **187 of 216** | +7 | **p-graph** |
+| **"who calls X"** — call sites found | 1674 of 1683 | 1674 of 1683 | 0 | **tie** |
+| **"who calls X"** — call sites invented | **0** | 3 | +3 | **grep** |
+| **"who calls X"** — cost per question | **$0.216** | $0.222 | +3% (SE $0.018, 0.3 SE) | **noise** |
+| **"who calls X"** — time per question | **39.8 s** | 40.2 s | +1% (SE 3.6 s, 0.1 SE) | **noise** |
+| **"who calls X"** — steps per question | 6.8 | **6.6** | −4% (SE 0.4, 0.6 SE) | **noise** |
+| **"who calls X"** — tool calls | 6.6 | **5.6** | −15% | **p-graph** |
+| **"who calls X"** — context read back | 614k | **609k** | −1% | **p-graph** |
+| **"who calls X"** — text searches | 3.7 | **0.6** | −84% | **p-graph** |
+| **"who calls X"** — answers that flag their own limits | 4 of 156 | **90 of 156** | +86 | **p-graph** |
+| **follow the calls** — call sites found | 180 of 216 | **186 of 216** | +6 | **p-graph** |
 | **follow the calls** — call sites invented | 32 | **1** | −97% | **p-graph** |
 | **follow the calls** — steps per question | 9.4 | **7.6** | −19% | **p-graph** |
 | **follow the calls, big repos** — cost | $0.453 | **$0.273** | −40% | **p-graph** |
 | **follow the calls, big repos** — time | 103 s | **53 s** | −48% | **p-graph** |
 | **follow the calls, small repos** — cost | **$0.190** | $0.232 | +22% | **grep** |
 | Answers that admit their own limits | 3% (4/156) | **45% (70/156)** | +42 pts | **p-graph** |
+
+> **The graph arm was re-run on 2 September 2026 and every p-graph figure above is
+> from that run.** 156 runs, $37.80, no errors. The grep arm and the language-server
+> arm were **not** re-run, so their figures are unchanged and older.
+>
+> What moved, and why:
+>
+> - **Invented rows fell from 39 to 3.** The graph used to report that a class
+>   implemented an interface whenever it carried a method of the same name and a
+>   compatible parameter count. On nest that made `ClassSerializerInterceptor` an
+>   implementation of `Serializer` — it declares `implements NestInterceptor`, in
+>   another package — and the rule tells the agent to trust that heading. Those 13
+>   rows a run were 39 of the 43 invented rows in the whole study. The graph now
+>   reads the `implements` clause, and refuses a row only when it can prove it read
+>   the whole heritage.
+> - **Recall is now level with grep, 1674 of 1683 each.** TypeScript went from 431 of
+>   459 to 454, and `axios-eject` from 51 of 75 to 75 of 75, because a call written
+>   in a `.ts` file now resolves to the method defined in the `.js` file beside it,
+>   and a call written outside any function is listed as its file instead of being
+>   named one line at a time in a banner capped at 20 rows.
+> - **Cost, time and steps all moved inside the noise floor** and none of them is a
+>   result any more. The earlier round read −19% on time at 2.0 SE; this one reads
+>   +1% at 0.1 SE. Read the tool-call and text-search rows instead — those are
+>   counts, not timings, and they did not move: 5.6 tool calls against 6.6, and 0.6
+>   text searches against 3.7.
+> - **Answers that flag their own limits went from 75 to 90 of 156.** grep is at 4.
+>
+> One figure below is worth reading with the run-to-run spread in mind.
+> `gin-readnthline-impact` scored 6 of 6 with no invented rows, then 6 of 6 with 26,
+> then 1 of 6 with none — and the graph's own output for it is byte-identical to the
+> pre-branch code, checked directly. Those 26 are 26 of the 30 invented rows on the
+> follow-the-calls family. The study's own warning stands: three runs cannot read an
+> accuracy row closely.
 
 **tie** means the two sides landed on the same number. **noise** means the gap is under two standard
 errors, so we cannot tell it from zero.
@@ -1517,7 +1551,7 @@ Nine questions on nest, got and axios, three runs a side, `typescript-language-s
 
 | 9 list questions | grep | p-graph | tsserver |
 |---|---|---|---|
-| Call sites found | **459 of 459** | 431 of 459 | 413 of 459 |
+| Call sites found | **459 of 459** | 454 of 459 | 413 of 459 |
 | Call sites invented | 0 | 0 | 0 |
 | Cost per question | **$0.166** | $0.170 | $0.259 |
 | Time per question | **25 s** | 26 s | 45 s |
@@ -1572,7 +1606,7 @@ loses badly.
 | `got-beforeerror` | 75/75 | 75/75 | 71/75 |
 | `got-options-merge` | 54/54 | 54/54 | 54/54 |
 | `axios-headers-has` | 78/78 | 74/78 | 76/78 |
-| `axios-eject` | 75/75 | **51/75** | 75/75 |
+| `axios-eject` | 75/75 | 75/75 | 75/75 |
 
 Three runs a side, so each cell is three times the question's own site count.
 
@@ -1584,7 +1618,7 @@ Twelve questions on requests, flask, httpx and django — eight list questions p
 | 8 list questions | grep | p-graph | pyright |
 |---|---|---|---|
 | Call sites found | **243 of 243** | **243 of 243** | 233 of 243 |
-| Call sites invented | 0 | 14 | **0** |
+| Call sites invented | 0 | 0 | 0 |
 | Cost per question | **$0.148** | $0.149 | $0.233 |
 | Time per question | 28 s | **22 s** | 49 s |
 | Steps per question | **4.0** | 4.1 | 10.6 |
