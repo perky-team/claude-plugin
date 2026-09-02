@@ -41,6 +41,56 @@ describe('markdownToAdf', () => {
     });
   });
 
+  it('wrapped list item joins its continuation lines', () => {
+    const r = markdownToAdf('- **Head.** first line,\n  second line,\n  third line.');
+    expect(r.content[0]).toMatchObject({
+      type: 'bulletList',
+      content: [
+        { type: 'listItem', content: [{ type: 'paragraph', content: [
+          { type: 'text', text: 'Head.', marks: [{ type: 'strong' }] },
+          { type: 'text', text: ' first line, second line, third line.' },
+        ] }] },
+      ],
+    });
+  });
+
+  it('wrapped list item keeps a nested list after it', () => {
+    const r = markdownToAdf('- head,\n  wrapped tail.\n  - nested one\n  - nested two');
+    const list = r.content[0];
+    expect(list.type).toBe('bulletList');
+    expect(list.content).toHaveLength(1);
+    const item = list.content[0];
+    expect(item.content[0]).toEqual({
+      type: 'paragraph',
+      content: [{ type: 'text', text: 'head, wrapped tail.' }],
+    });
+    const nested = item.content.find((c: { type: string }) => c.type === 'bulletList');
+    expect(nested).toBeDefined();
+    expect(nested.content).toHaveLength(2);
+  });
+
+  it('nested list right after an unwrapped item is not swallowed into the text', () => {
+    const r = markdownToAdf('- head\n  - nested one\n  - nested two');
+    const item = r.content[0].content[0];
+    expect(item.content[0]).toEqual({
+      type: 'paragraph',
+      content: [{ type: 'text', text: 'head' }],
+    });
+    const nested = item.content.find((c: { type: string }) => c.type === 'bulletList');
+    expect(nested.content).toHaveLength(2);
+  });
+
+  it('ordered list item joins its continuation lines', () => {
+    const r = markdownToAdf('1. first,\n   wrapped.\n2. second');
+    expect(r.content[0]).toMatchObject({
+      type: 'orderedList',
+      content: [
+        { type: 'listItem', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'first, wrapped.' }] }] },
+        { type: 'listItem', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'second' }] }] },
+      ],
+    });
+  });
+
   it('fenced code block with language', () => {
     const r = markdownToAdf('```js\nconst x=1;\n```');
     expect(r.content[0]).toEqual({
@@ -82,6 +132,11 @@ describe('adfToMarkdown', () => {
   it('link inline reconstructs', () => {
     const md = 'See [docs](https://x).';
     expect(adfToMarkdown(markdownToAdf(md))).toBe(md);
+  });
+
+  it('wrapped list item renders on one line', () => {
+    const adf = markdownToAdf('- head,\n  wrapped tail.\n- second');
+    expect(adfToMarkdown(adf)).toBe('- head, wrapped tail.\n- second');
   });
 
   it('nested ordered list under bullet item round-trips', () => {

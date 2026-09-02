@@ -66,17 +66,28 @@ function parseList(lines, start) {
     const isItem = (ordered ? /^\s*\d+\. / : /^\s*[-*] /).test(line) && ind === firstIndent;
     if (!isItem && ind === firstIndent) break;
     if (isItem) {
-      const text = line.replace(/^\s*(?:\d+\.|[-*]) /, '');
+      let text = line.replace(/^\s*(?:\d+\.|[-*]) /, '');
+      // Continuation lines of a wrapped item: indented deeper than the marker, not blank,
+      // and not a list marker themselves (a marker means a nested list). Joined with one
+      // space, the same way parseBlocks joins a wrapped paragraph.
+      let k = i + 1;
+      while (k < lines.length && !/^\s*$/.test(lines[k])
+             && lines[k].match(/^(\s*)/)[1].length > firstIndent
+             && !/^\s*(?:[-*]|\d+\.)\s/.test(lines[k])) {
+        text += ' ' + lines[k].trim();
+        k++;
+      }
       const content = [{ type: 'paragraph', content: parseInline(text) }];
-      // nested list (lookahead) — accepts both bullet (`- ` / `* `) and ordered (`1. `) sublists
-      let j = i + 1;
+      // nested list (lookahead) — accepts both bullet (`- ` / `* `) and ordered (`1. `) sublists.
+      // Starts after the continuation lines, so a sublist under a wrapped item is still found.
+      let j = k;
       const nestedStart = j;
       while (j < lines.length && /^\s*(?:[-*]|\d+\.)\s/.test(lines[j]) && lines[j].match(/^(\s*)/)[1].length > firstIndent) j++;
       if (j > nestedStart) {
         const { node } = parseList(lines, nestedStart);
         content.push(node);
         i = j;
-      } else { i++; }
+      } else { i = k; }
       items.push({ type: 'listItem', content });
     } else { i++; }
   }
