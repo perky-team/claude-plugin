@@ -261,7 +261,7 @@ process.stdin.on("end", () => {
     const vlen = s => s.replace(/\x1b\[[0-9;]*m/g, "").length;
 
     // Line 1: context / limits / git joined by " | ".
-    // Line 2: model + effort, then the project path, then RAM.
+    // Line 2: model + effort, the project path, the session name, then RAM.
     const modelEffort = [];
     if (model)  modelEffort.push(`\x1b[90m${model}${C.reset}`);
     if (effort) modelEffort.push(`\x1b[90m${effort}${C.reset}`);
@@ -299,21 +299,29 @@ process.stdin.on("end", () => {
     const line2 = [];
     if (modelSeg)    line2.push(modelSeg);
     if (dirDisplay)  line2.push(`${C.dir}${dirDisplay}${C.reset}`);
-    if (ramSeg)      line2.push(ramSeg);
-    if (line2.length) out += "\n" + line2.join(SEP);
 
-    // Line 3: the session name — the one set with --name or /rename, or else
-    // the title Claude Code writes from the first prompt. The field is absent
-    // at session start until that title exists, and again right after /clear;
-    // print a dim "-" then, so the bar keeps three rows instead of flipping
-    // between two and three. Trim to the terminal width, which arrives in
-    // COLUMNS — Claude Code captures our stdout, so the script cannot measure
-    // the terminal itself.
+    // Then the session name — the one set with --name or /rename, or else the
+    // title Claude Code writes from the first prompt. The field is absent at
+    // session start until that title exists, and again right after /clear;
+    // print a dim "-" then, so the segment never vanishes and RAM keeps its
+    // column. Trim the name to whatever room is left on the line: the width
+    // arrives in COLUMNS — Claude Code captures our stdout, so the script
+    // cannot measure the terminal itself. With no room left the name is
+    // dropped rather than wrapping line 2 onto a second row.
     const sessionName = typeof j.session_name === "string" ? j.session_name.trim() : "";
     const cols = parseInt(process.env.COLUMNS, 10) || 0;
-    let line3 = sessionName || "-";
-    if (cols > 1 && line3.length > cols) line3 = line3.slice(0, cols - 1) + "…";
-    out += "\n" + C.sep + line3 + C.reset;
+    let nameSeg = sessionName || "-";
+    if (cols > 0) {
+      // Everything but the name: the segments already queued, RAM (which
+      // follows the name), and one SEP for each of them.
+      const others = line2.length + (ramSeg ? 1 : 0);
+      const used = line2.reduce((n, seg) => n + vlen(seg), 0) + vlen(ramSeg) + others * vlen(SEP);
+      const room = cols - used;
+      if (room < nameSeg.length) nameSeg = room > 1 ? nameSeg.slice(0, room - 1) + "…" : "";
+    }
+    if (nameSeg) line2.push(`${C.sep}${nameSeg}${C.reset}`);
+    if (ramSeg)  line2.push(ramSeg);
+    if (line2.length) out += "\n" + line2.join(SEP);
 
     process.stdout.write(out);
   } catch (e) {}

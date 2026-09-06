@@ -7,7 +7,7 @@ import { join, resolve } from 'node:path';
 const SCRIPT = resolve(__dirname, '..', 'plugins', 'p-statusline', 'statusline', 'statusline.cjs');
 
 // Run statusline.cjs with `input` piped to stdin; return stdout.
-// COLUMNS is dropped from the inherited environment: the script trims line 3
+// COLUMNS is dropped from the inherited environment: the script trims line 2
 // to it, and a value set by whatever launched the test run would truncate the
 // session name in tests that are not about width. Tests that care pass it in.
 function run(input: object, env?: Record<string, string>): string {
@@ -234,35 +234,48 @@ describe('p-statusline statusline.cjs', () => {
     expect(block).toHaveLength(30);
   });
 
-  it('renders the session name on line 3', () => {
+  it('renders the session name on line 2, between the path and RAM', () => {
     const out = plain(run({
       session_name: 'auth-refactor',
       workspace: { current_dir: nonGit, project_dir: nonGit },
     }));
-    expect(out.split('\n')[2]).toBe('auth-refactor');
+    expect(out.split('\n')[1]).toMatch(/ \| auth-refactor \| RAM \d+%$/);
   });
 
   // session_name is absent at session start until Claude Code has written a
-  // title, and again right after /clear. Printing "-" keeps the bar three rows
-  // tall instead of flipping between two and three.
-  it('renders "-" on line 3 when session_name is absent', () => {
+  // title, and again right after /clear. Printing "-" keeps the segment on the
+  // line instead of shifting RAM left and back as the name comes and goes.
+  it('renders "-" as the session name when session_name is absent', () => {
     const out = plain(run({ workspace: { current_dir: nonGit, project_dir: nonGit } }));
-    expect(out.split('\n')[2]).toBe('-');
+    expect(out.split('\n')[1]).toMatch(/ \| - \| RAM \d+%$/);
   });
 
-  it('always prints exactly three lines', () => {
+  it('always prints exactly two lines', () => {
     const out = plain(run({ workspace: { current_dir: nonGit, project_dir: nonGit } }));
-    expect(out.split('\n')).toHaveLength(3);
+    expect(out.split('\n')).toHaveLength(2);
   });
 
-  it('trims a long session name to the terminal width given in COLUMNS', () => {
+  it('trims a long session name so line 2 fits the width given in COLUMNS', () => {
+    const out = plain(run(
+      { session_name: 'x'.repeat(80), workspace: { current_dir: nonGit, project_dir: nonGit } },
+      { COLUMNS: '60' },
+    ));
+    const line2 = out.split('\n')[1];
+    expect(line2).toHaveLength(60);
+    expect(line2).toMatch(/x… \| RAM \d+%$/);
+  });
+
+  // The path and RAM segments alone are wider than 20 columns, so there is no
+  // room for a name at all: dropping it keeps line 2 on one row rather than
+  // letting the terminal wrap it.
+  it('drops the session name when no room is left on line 2', () => {
     const out = plain(run(
       { session_name: 'x'.repeat(80), workspace: { current_dir: nonGit, project_dir: nonGit } },
       { COLUMNS: '20' },
     ));
-    const line3 = out.split('\n')[2];
-    expect(line3).toHaveLength(20);
-    expect(line3.endsWith('…')).toBe(true);
+    const line2 = out.split('\n')[1];
+    expect(line2).not.toContain('x');
+    expect(line2).toMatch(/ \| RAM \d+%$/);
   });
 
   // The status line re-renders ~every 300ms; a hung git must not freeze it.

@@ -47,7 +47,7 @@ Line 1 — context, limits, git (joined by " | ")
                        ↓1    commits behind upstream (green when non-zero)
                      Renders "⎇ no git" (dim) when the directory is not a repo.
 
-Line 2 — model, directory, RAM (joined by " | ")
+Line 2 — model, directory, session name, RAM (joined by " | ")
 
   claude-opus-4-8 high   Model name + effort level (any "(… context)" suffix
                          on the model name is stripped).
@@ -56,14 +56,14 @@ Line 2 — model, directory, RAM (joined by " | ")
                          Truncated from the start with a "..." prefix when long,
                          so the folder name stays visible.
 
+  auth-refactor          Session name (dim) — the name set with --name or
+                         /rename. With no name set, the title Claude Code
+                         writes from your first prompt. Shows "-" until that
+                         title exists, and again right after /clear. Cut to
+                         whatever room is left on the line, and dropped when
+                         the terminal is too narrow for any of it.
+
   RAM 59%                System physical-memory usage (green→red as it fills).
-
-Line 3 — session name
-
-  auth-refactor          The name set with --name or /rename. With no name set,
-                         the title Claude Code writes from your first prompt.
-                         Shows "-" until that title exists, and again right
-                         after /clear. Long names are cut to the terminal width.
 
 The leading segment of each line is padded so the first " | " separator lines
 up vertically across both lines.

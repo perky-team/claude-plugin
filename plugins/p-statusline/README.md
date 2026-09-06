@@ -1,12 +1,11 @@
 # p-statusline
 
-A custom status line for Claude Code — the three-line bar at the bottom of the
+A custom status line for Claude Code — the two-line bar at the bottom of the
 terminal. At a glance it shows:
 
 ```
 40% 80k c99% | 5h  23%[ 4h4m] 7d  41%[ 3d17h] | ⎇ wt:feature-x* ↑1↓0
-Opus high    | ...ts/perky.team/claude-plugin | RAM 41%
-Изучить statusline плагин и Claude code CLI
+Opus high    | ...ts/perky.team/claude-plugin | Изучить statusline | RAM 41%
 ```
 
 **Line 1**
@@ -28,12 +27,11 @@ Opus high    | ...ts/perky.team/claude-plugin | RAM 41%
 **Line 2**
 - Model and effort level.
 - The project directory.
-- System RAM usage.
-
-**Line 3**
 - The session name — the one set with `--name` or `/rename`, or else the title
   Claude Code writes from your first prompt. Shows `-` until that title exists,
-  and again right after `/clear`. Long names are cut to the terminal width.
+  and again right after `/clear`. It is cut to whatever room is left on the
+  line, and dropped entirely when the terminal is too narrow for any of it.
+- System RAM usage.
 
 The leading segments of lines 1 and 2 are padded to equal width so the first
 `|` separator lines up vertically.
